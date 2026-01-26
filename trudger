@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# trudger: loop over trudgeable bd tasks and run Codex solve+review prompts.
+
+PROMPT_TRUDGE="${HOME}/.codex/prompts/trudge"
+PROMPT_REVIEW="${HOME}/.codex/prompts/trudge_review"
+
+usage() {
+  cat <<'EOF'
+Usage: ./trudger
+
+Loop over ready bd tasks labeled trudgeable and run Codex solve+review prompts.
+EOF
+}
+
+require_prompt() {
+  local path="$1"
+  if [[ ! -f "$path" ]]; then
+    printf 'Missing prompt file: %s\n' "$path" >&2
+    exit 1
+  fi
+}
+
+get_next_task_id() {
+  local raw
+  raw="$(bd ready --json --label trudgeable --sort priority --limit 1)"
+  python3 - <<'PY' "$raw"
+import json
+import sys
+
+raw = sys.argv[1]
+try:
+    data = json.loads(raw) if raw else []
+except json.JSONDecodeError:
+    data = []
+
+if isinstance(data, list) and data:
+    print(data[0].get("id", ""))
+else:
+    print("")
+PY
+}
+
+load_task_state() {
+  local task_id="$1"
+  local raw
+  raw="$(bd show "$task_id" --json)"
+  python3 - <<'PY' "$raw"
+import json
+import sys
+
+raw = sys.argv[1]
+try:
+    data = json.loads(raw) if raw else []
+except json.JSONDecodeError:
+    data = []
+
+item = None
+if isinstance(data, list) and data:
+    item = data[0]
+elif isinstance(data, dict):
+    item = data
+
+status = ""
+labels = []
+if item:
+    status = item.get("status", "")
+    labels = item.get("labels") or []
+
+print(status)
+print(" ".join(labels))
+PY
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+require_prompt "$PROMPT_TRUDGE"
+require_prompt "$PROMPT_REVIEW"
+
+while true; do
+  task_id="$(get_next_task_id)"
+  if [[ -z "$task_id" ]]; then
+    exit 0
+  fi
+
+  codex exec "/prompt:trudge ${task_id}"
+  codex exec resume --last "/prompt:trudge_review ${task_id}"
+
+  mapfile -t task_state < <(load_task_state "$task_id")
+  status="${task_state[0]:-}"
+  labels="${task_state[1]:-}"
+
+  if [[ "$status" == "closed" ]]; then
+    if printf '%s' "$labels" | grep -q -- 'trudgeable'; then
+      bd label remove "$task_id" trudgeable
+    fi
+    continue
+  fi
+
+  if printf '%s' "$labels" | grep -q -- 'requires-human'; then
+    comment="${TRUDGER_REQUIRES_HUMAN_COMMENT:-Requires human input; see Codex review for details.}"
+    notes="${TRUDGER_REQUIRES_HUMAN_NOTES:-Requires human input; see Codex review for details.}"
+    bd comments add "$task_id" "$comment"
+    bd update "$task_id" --notes "$notes"
+    if printf '%s' "$labels" | grep -q -- 'trudgeable'; then
+      bd label remove "$task_id" trudgeable
+    fi
+    bd label add "$task_id" requires-human
+    continue
+  fi
+
+  printf 'Task %s not closed and not requires-human after review.\n' "$task_id" >&2
+  exit 1
+done
