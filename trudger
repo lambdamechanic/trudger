@@ -3,8 +3,8 @@ set -euo pipefail
 
 # trudger: loop over trudgeable bd tasks and run Codex solve+review prompts.
 
-PROMPT_TRUDGE="${HOME}/.codex/prompts/trudge"
-PROMPT_REVIEW="${HOME}/.codex/prompts/trudge_review"
+PROMPT_TRUDGE="${HOME}/.codex/prompts/trudge.md"
+PROMPT_REVIEW="${HOME}/.codex/prompts/trudge_review.md"
 
 usage() {
   cat <<'EOF'

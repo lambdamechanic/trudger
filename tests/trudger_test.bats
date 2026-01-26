@@ -30,7 +30,7 @@ should_run_codex_tests() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/no-tasks"
   mkdir -p "${temp_dir}/.codex/prompts"
-  touch "${temp_dir}/.codex/prompts/trudge" "${temp_dir}/.codex/prompts/trudge_review"
+  touch "${temp_dir}/.codex/prompts/trudge.md" "${temp_dir}/.codex/prompts/trudge_review.md"
 
   local bd_log="${temp_dir}/bd.log"
   local codex_log="${temp_dir}/codex.log"
@@ -53,7 +53,7 @@ should_run_codex_tests() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/closed-task"
   mkdir -p "${temp_dir}/.codex/prompts"
-  touch "${temp_dir}/.codex/prompts/trudge" "${temp_dir}/.codex/prompts/trudge_review"
+  touch "${temp_dir}/.codex/prompts/trudge.md" "${temp_dir}/.codex/prompts/trudge_review.md"
 
   local bd_log="${temp_dir}/bd.log"
   local codex_log="${temp_dir}/codex.log"
@@ -84,7 +84,7 @@ should_run_codex_tests() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/requires-human"
   mkdir -p "${temp_dir}/.codex/prompts"
-  touch "${temp_dir}/.codex/prompts/trudge" "${temp_dir}/.codex/prompts/trudge_review"
+  touch "${temp_dir}/.codex/prompts/trudge.md" "${temp_dir}/.codex/prompts/trudge_review.md"
 
   local bd_log="${temp_dir}/bd.log"
   local ready_queue="${temp_dir}/ready.queue"
@@ -111,7 +111,7 @@ should_run_codex_tests() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/no-close"
   mkdir -p "${temp_dir}/.codex/prompts"
-  touch "${temp_dir}/.codex/prompts/trudge" "${temp_dir}/.codex/prompts/trudge_review"
+  touch "${temp_dir}/.codex/prompts/trudge.md" "${temp_dir}/.codex/prompts/trudge_review.md"
 
   local ready_queue="${temp_dir}/ready.queue"
   printf '%s\n' '[{"id":"tr-3"}]' '[]' > "$ready_queue"
@@ -133,7 +133,7 @@ should_run_codex_tests() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/codex-fail"
   mkdir -p "${temp_dir}/.codex/prompts"
-  touch "${temp_dir}/.codex/prompts/trudge" "${temp_dir}/.codex/prompts/trudge_review"
+  touch "${temp_dir}/.codex/prompts/trudge.md" "${temp_dir}/.codex/prompts/trudge_review.md"
 
   local ready_queue="${temp_dir}/ready.queue"
   printf '%s\n' '[{"id":"tr-4"}]' '[]' > "$ready_queue"
