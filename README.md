@@ -51,15 +51,6 @@ trudger --help
   - Removes `trudgeable`
   - Adds/keeps `requires-human`
 
-## Configuration
-
-Customize the requires-human messaging with environment variables:
-
-```bash
-export TRUDGER_REQUIRES_HUMAN_COMMENT="Requires human input; see Codex review for details."
-export TRUDGER_REQUIRES_HUMAN_NOTES="Requires human input; see Codex review for details."
-```
-
 ## Exit behavior
 
 - Exits `0` when there are no matching tasks left.
