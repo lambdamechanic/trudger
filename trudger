@@ -55,7 +55,11 @@ render_prompt() {
   local task_id="$2"
   local content
 
-  content="$(cat "$prompt_path")"
+  content="$(awk '
+    NR == 1 && $0 == "---" { in_frontmatter = 1; next }
+    in_frontmatter && $0 == "---" { in_frontmatter = 0; next }
+    !in_frontmatter { print }
+  ' "$prompt_path")"
   printf '%s' "${content//\$ARGUMENTS/$task_id}"
 }
 
