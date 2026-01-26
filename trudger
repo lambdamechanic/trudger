@@ -65,6 +65,7 @@ while true; do
     exit 0
   fi
 
+  bd update "$task_id" --status in_progress
   codex exec "/prompt:trudge ${task_id}"
   codex exec resume --last "/prompt:trudge_review ${task_id}"
 

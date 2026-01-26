@@ -68,6 +68,8 @@ should_run_codex_tests() {
     run_trudger
 
   [ "$status" -eq 0 ]
+  run grep -q -- "update tr-1 --status in_progress" "$bd_log"
+  [ "$status" -eq 0 ]
   run grep -q -- "label remove tr-1 trudgeable" "$bd_log"
   [ "$status" -eq 0 ]
   run grep -q -- "codex exec /prompt:trudge tr-1" "$codex_log"
@@ -96,6 +98,8 @@ should_run_codex_tests() {
     BD_MOCK_LOG="$bd_log" \
     run_trudger
 
+  [ "$status" -eq 0 ]
+  run grep -q -- "update tr-2 --status in_progress" "$bd_log"
   [ "$status" -eq 0 ]
   run grep -q -- "label remove tr-2 trudgeable" "$bd_log"
   [ "$status" -eq 0 ]

@@ -10,6 +10,7 @@ It is slower and more serial, but if you have a large number of smaller projects
 ## What it does
 
 - Finds the next `bd` task labeled `trudgeable` (highest priority first).
+- Marks the task `in_progress`.
 - Runs Codex solve + review prompts for that task.
 - On success, removes the `trudgeable` label and moves on.
 - If the task needs a human, it labels it `requires-human`.
