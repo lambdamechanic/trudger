@@ -25,52 +25,22 @@ require_prompt() {
 get_next_task_id() {
   local raw
   raw="$(bd ready --json --label trudgeable --sort priority --limit 1)"
-  python3 - <<'PY' "$raw"
-import json
-import sys
-
-raw = sys.argv[1]
-try:
-    data = json.loads(raw) if raw else []
-except json.JSONDecodeError:
-    data = []
-
-if isinstance(data, list) and data:
-    print(data[0].get("id", ""))
-else:
-    print("")
-PY
+  printf '%s' "$raw" | jq -r 'if type == "array" and length > 0 then .[0].id // "" else "" end' 2>/dev/null || true
 }
 
 load_task_state() {
   local task_id="$1"
   local raw
   raw="$(bd show "$task_id" --json)"
-  python3 - <<'PY' "$raw"
-import json
-import sys
-
-raw = sys.argv[1]
-try:
-    data = json.loads(raw) if raw else []
-except json.JSONDecodeError:
-    data = []
-
-item = None
-if isinstance(data, list) and data:
-    item = data[0]
-elif isinstance(data, dict):
-    item = data
-
-status = ""
-labels = []
-if item:
-    status = item.get("status", "")
-    labels = item.get("labels") or []
-
-print(status)
-print(" ".join(labels))
-PY
+  printf '%s' "$raw" | jq -r '
+    def item: if type == "array" then .[0] else . end;
+    if (type == "array" and length == 0) or type == "null" then
+      ["", ""]
+    else
+      item | [(.status // ""), ((.labels // []) | join(" "))]
+    end
+    | .[]
+  ' 2>/dev/null || true
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then

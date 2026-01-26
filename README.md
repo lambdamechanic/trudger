@@ -18,6 +18,7 @@ It is slower and more serial, but if you have a large number of smaller projects
 
 - `bd` CLI on your PATH
 - `codex` CLI on your PATH
+- `jq` on your PATH
 - Prompt files installed under `~/.codex/prompts/` (see below)
 
 ## Usage
