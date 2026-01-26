@@ -79,8 +79,8 @@ while true; do
   fi
 
   bd update "$task_id" --status in_progress
-  codex exec "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"
-  codex exec resume --last "$(render_prompt "$PROMPT_REVIEW" "$task_id")"
+  codex --yolo exec "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"
+  codex --yolo exec resume --last "$(render_prompt "$PROMPT_REVIEW" "$task_id")"
 
   mapfile -t task_state < <(load_task_state "$task_id")
   status="${task_state[0]:-}"
