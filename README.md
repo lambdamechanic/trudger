@@ -1,6 +1,11 @@
 # trudger
 
-"trudger slowly and unimaginatively trudges through your bd tasks"
+trudger slowly and unimaginatively trudges through your bd tasks.
+
+## Why
+
+Trudger is more or less a direct response to the experience of trying to build something in Gastown.
+It is slower and more serial, but if you have a large number of smaller projects like me, I'm betting you can quite easily just have a constant, slow, serial trudge through all of them, and interact with them mainly through openspec and beads.
 
 ## What it does
 
@@ -20,13 +25,21 @@
 ## Usage
 
 ```bash
-./trudger
+trudger
+```
+
+## Install
+
+Assuming you want `trudger` on your PATH via `~/.local/bin`:
+
+```bash
+install -m 0755 ./trudger ~/.local/bin/trudger
 ```
 
 To see help:
 
 ```bash
-./trudger --help
+trudger --help
 ```
 
 ## Behavior details
