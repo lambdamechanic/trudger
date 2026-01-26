@@ -12,15 +12,13 @@ It is slower and more serial, but if you have a large number of smaller projects
 - Finds the next `bd` task labeled `trudgeable` (highest priority first).
 - Runs Codex solve + review prompts for that task.
 - On success, removes the `trudgeable` label and moves on.
-- If the task needs a human, it labels it `requires-human` and adds a note.
+- If the task needs a human, it labels it `requires-human`.
 
 ## Requirements
 
 - `bd` CLI on your PATH
 - `codex` CLI on your PATH
-- Prompt files:
-  - `~/.codex/prompts/trudge`
-  - `~/.codex/prompts/trudge_review`
+- Prompt files installed under `~/.codex/prompts/` (see below)
 
 ## Usage
 
@@ -42,12 +40,20 @@ To see help:
 trudger --help
 ```
 
+## Prompts
+
+The prompt sources live in `prompts/`. Install them into Codex:
+
+```bash
+install -m 0644 prompts/trudge ~/.codex/prompts/trudge
+install -m 0644 prompts/trudge_review ~/.codex/prompts/trudge_review
+```
+
 ## Behavior details
 
 - Only tasks labeled `trudgeable` are processed.
 - If a task is closed after review, `trudgeable` is removed automatically.
 - If a task is labeled `requires-human` after review, the tool:
-  - Adds a comment and notes (customizable below)
   - Removes `trudgeable`
   - Adds/keeps `requires-human`
 

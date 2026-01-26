@@ -76,7 +76,7 @@ should_run_codex_tests() {
   [ "$status" -eq 0 ]
 }
 
-@test "requires-human updates labels and notes" {
+@test "requires-human updates labels" {
   if ! should_run_codex_tests; then
     skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
   fi
@@ -94,14 +94,8 @@ should_run_codex_tests() {
     BD_MOCK_READY_QUEUE="$ready_queue" \
     BD_MOCK_SHOW_JSON='[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
     BD_MOCK_LOG="$bd_log" \
-    TRUDGER_REQUIRES_HUMAN_COMMENT="Needs human input" \
-    TRUDGER_REQUIRES_HUMAN_NOTES="Awaiting guidance" \
     run_trudger
 
-  [ "$status" -eq 0 ]
-  run grep -q -- "comments add tr-2" "$bd_log"
-  [ "$status" -eq 0 ]
-  run grep -q -- "update tr-2 --notes" "$bd_log"
   [ "$status" -eq 0 ]
   run grep -q -- "label remove tr-2 trudgeable" "$bd_log"
   [ "$status" -eq 0 ]

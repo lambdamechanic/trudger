@@ -102,10 +102,6 @@ while true; do
   fi
 
   if printf '%s' "$labels" | grep -q -- 'requires-human'; then
-    comment="${TRUDGER_REQUIRES_HUMAN_COMMENT:-Requires human input; see Codex review for details.}"
-    notes="${TRUDGER_REQUIRES_HUMAN_NOTES:-Requires human input; see Codex review for details.}"
-    bd comments add "$task_id" "$comment"
-    bd update "$task_id" --notes "$notes"
     if printf '%s' "$labels" | grep -q -- 'trudgeable'; then
       bd label remove "$task_id" trudgeable
     fi
