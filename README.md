@@ -38,6 +38,12 @@ Assuming you want `trudger` on your PATH via `~/.local/bin`:
 ./install.sh
 ```
 
+To overwrite existing prompts:
+
+```bash
+./install.sh --force
+```
+
 To see help:
 
 ```bash

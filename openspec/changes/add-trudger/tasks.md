@@ -7,8 +7,8 @@
 - [ ] 2.2 Exit 0 when no trudgeable tasks remain.
 
 ## 3. Codex orchestration
-- [ ] 3.1 Start a new Codex exec session with `/prompt:trudge <id>`.
-- [ ] 3.2 Resume the same session with `/prompt:trudge_review <id>`.
+- [ ] 3.1 Start a new Codex exec session using the rendered trudge prompt (replace `$ARGUMENTS` with the id).
+- [ ] 3.2 Resume the same session using the rendered review prompt.
 
 ## 4. bd state updates
 - [ ] 4.1 On success, close the task and remove the `trudgeable` label.

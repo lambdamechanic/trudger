@@ -50,6 +50,15 @@ load_task_state() {
   ' 2>/dev/null || true
 }
 
+render_prompt() {
+  local prompt_path="$1"
+  local task_id="$2"
+  local content
+
+  content="$(cat "$prompt_path")"
+  printf '%s' "${content//\$ARGUMENTS/$task_id}"
+}
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
@@ -66,8 +75,8 @@ while true; do
   fi
 
   bd update "$task_id" --status in_progress
-  codex exec "/prompt:trudge ${task_id}"
-  codex exec resume --last "/prompt:trudge_review ${task_id}"
+  codex exec "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"
+  codex exec resume --last "$(render_prompt "$PROMPT_REVIEW" "$task_id")"
 
   mapfile -t task_state < <(load_task_state "$task_id")
   status="${task_state[0]:-}"

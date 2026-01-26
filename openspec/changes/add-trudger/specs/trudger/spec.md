@@ -22,12 +22,12 @@ The script SHALL select the lowest-priority ready bd task that has the `trudgeab
 - **THEN** the script exits with status 0
 
 ### Requirement: Codex prompt execution
-For each selected task, the script SHALL start a Codex exec session with `/prompt:trudge <bd-id>` and then resume the same session with `/prompt:trudge_review <bd-id>`.
+For each selected task, the script SHALL start a Codex exec session using the contents of `~/.codex/prompts/trudge.md` with `$ARGUMENTS` replaced by the bd id, then resume the same session with `~/.codex/prompts/trudge_review.md` with `$ARGUMENTS` replaced by the bd id.
 
 #### Scenario: Codex solve + review
 - **WHEN** a task is selected
-- **THEN** the script invokes `codex exec` with `/prompt:trudge <bd-id>`
-- **AND** the script invokes `codex exec resume --last` with `/prompt:trudge_review <bd-id>`
+- **THEN** the script invokes `codex exec` with the rendered trudge prompt
+- **AND** the script invokes `codex exec resume --last` with the rendered review prompt
 
 ### Requirement: Task closure on success
 When the review prompt indicates the task meets acceptance criteria, the script SHALL close the bd task and remove the `trudgeable` label.

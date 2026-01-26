@@ -30,7 +30,8 @@ should_run_codex_tests() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/no-tasks"
   mkdir -p "${temp_dir}/.codex/prompts"
-  touch "${temp_dir}/.codex/prompts/trudge.md" "${temp_dir}/.codex/prompts/trudge_review.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge_review.md"
 
   local bd_log="${temp_dir}/bd.log"
   local codex_log="${temp_dir}/codex.log"
@@ -53,7 +54,8 @@ should_run_codex_tests() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/closed-task"
   mkdir -p "${temp_dir}/.codex/prompts"
-  touch "${temp_dir}/.codex/prompts/trudge.md" "${temp_dir}/.codex/prompts/trudge_review.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge_review.md"
 
   local bd_log="${temp_dir}/bd.log"
   local codex_log="${temp_dir}/codex.log"
@@ -72,9 +74,11 @@ should_run_codex_tests() {
   [ "$status" -eq 0 ]
   run grep -q -- "label remove tr-1 trudgeable" "$bd_log"
   [ "$status" -eq 0 ]
-  run grep -q -- "codex exec /prompt:trudge tr-1" "$codex_log"
+  run grep -q -- "codex exec " "$codex_log"
   [ "$status" -eq 0 ]
-  run grep -q -- "codex exec resume --last /prompt:trudge_review tr-1" "$codex_log"
+  run grep -q -- "codex exec resume --last " "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -q -- "tr-1" "$codex_log"
   [ "$status" -eq 0 ]
 }
 
@@ -86,7 +90,8 @@ should_run_codex_tests() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/requires-human"
   mkdir -p "${temp_dir}/.codex/prompts"
-  touch "${temp_dir}/.codex/prompts/trudge.md" "${temp_dir}/.codex/prompts/trudge_review.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge_review.md"
 
   local bd_log="${temp_dir}/bd.log"
   local ready_queue="${temp_dir}/ready.queue"
@@ -115,7 +120,8 @@ should_run_codex_tests() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/no-close"
   mkdir -p "${temp_dir}/.codex/prompts"
-  touch "${temp_dir}/.codex/prompts/trudge.md" "${temp_dir}/.codex/prompts/trudge_review.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge_review.md"
 
   local ready_queue="${temp_dir}/ready.queue"
   printf '%s\n' '[{"id":"tr-3"}]' '[]' > "$ready_queue"
@@ -137,7 +143,8 @@ should_run_codex_tests() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/codex-fail"
   mkdir -p "${temp_dir}/.codex/prompts"
-  touch "${temp_dir}/.codex/prompts/trudge.md" "${temp_dir}/.codex/prompts/trudge_review.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge_review.md"
 
   local ready_queue="${temp_dir}/ready.queue"
   printf '%s\n' '[{"id":"tr-4"}]' '[]' > "$ready_queue"

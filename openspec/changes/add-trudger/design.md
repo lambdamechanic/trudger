@@ -20,7 +20,7 @@ We want a minimal shell script that automates a bd + Codex loop for tasks labele
   - Use bd readiness and priority to select the lowest-priority ready task with label `trudgeable`.
 - Codex session handling:
   - Use `codex exec` for the initial call and `codex exec resume --last` for subsequent calls.
-  - Pass the bd id via `/prompt:trudge <id>` and `/prompt:trudge_review <id>`.
+  - Render the prompt content from `~/.codex/prompts/trudge.md` and `~/.codex/prompts/trudge_review.md`, substituting the bd id into `$ARGUMENTS`.
 - Error handling:
   - Treat missing prompt files as a startup error with a clear message.
   - Treat missing bd updates after review (no close, no requires-human) as a task failure.
