@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "**"
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+
+      - name: ShellCheck scripts
+        run: |
+          shellcheck trudger \
+            tests/trudger_test.bats \
+            tests/fixtures/bin/bd \
+            tests/fixtures/bin/codex
+
+      - name: Run tests
+        run: bats tests/trudger_test.bats
