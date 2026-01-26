@@ -7,7 +7,7 @@ The system SHALL provide a root-level executable script named `./trudger` that o
 - **THEN** the script starts without requiring an explicit shell invocation
 
 ### Requirement: Prompt file presence
-The script SHALL verify that `~/.codex/prompts/trudge` and `~/.codex/prompts/trudge_review` exist before starting work and exit with a clear error message if either is missing.
+The script SHALL verify that `~/.codex/prompts/trudge.md` and `~/.codex/prompts/trudge_review.md` exist before starting work and exit with a clear error message if either is missing.
 
 #### Scenario: Prompt file missing
 - **GIVEN** one or both prompt files do not exist
@@ -37,7 +37,7 @@ When the review prompt indicates the task meets acceptance criteria, the script 
 - **THEN** the bd task is closed and the `trudgeable` label is removed
 
 ### Requirement: Requires-human escalation
-When the review prompt indicates human input is required, the script SHALL add a bd comment, update task notes as specified by the prompt, remove `trudgeable`, and add `requires-human`.
+When the review prompt indicates human input is required, the script SHALL remove `trudgeable` and add `requires-human`.
 
 #### Scenario: Requires-human handling
 - **WHEN** Codex review reports that human input is required

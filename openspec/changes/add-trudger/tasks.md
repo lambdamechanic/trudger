@@ -12,7 +12,7 @@
 
 ## 4. bd state updates
 - [ ] 4.1 On success, close the task and remove the `trudgeable` label.
-- [ ] 4.2 On requires-human, add a comment, update notes, remove `trudgeable`, and add `requires-human`.
+- [ ] 4.2 On requires-human, remove `trudgeable` and add `requires-human`.
 - [ ] 4.3 Treat lack of close or requires-human as an error and exit non-zero.
 
 ## 5. Validation

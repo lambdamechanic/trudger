@@ -5,7 +5,7 @@ We want a minimal shell script that automates a bd + Codex loop for tasks labele
 - Goals:
   - Provide a single executable `./trudger` entrypoint.
   - Process the lowest-priority ready `trudgeable` bd task each cycle.
-  - Use Codex prompts stored in `~/.codex/prompts/trudge` and `~/.codex/prompts/trudge_review`.
+  - Use Codex prompts stored in `~/.codex/prompts/trudge.md` and `~/.codex/prompts/trudge_review.md`.
   - Update bd state based on Codex review (close, or mark requires-human).
   - Fail fast when Codex does not close or escalate a task after review.
 - Non-Goals:
