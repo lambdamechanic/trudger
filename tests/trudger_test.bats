@@ -3,6 +3,9 @@
 setup() {
   ROOT_DIR="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
   PATH="${ROOT_DIR}/tests/fixtures/bin:${PATH}"
+  if [[ -z "${BATS_TEST_TMPDIR:-}" ]]; then
+    BATS_TEST_TMPDIR="$(mktemp -d)"
+  fi
 }
 
 run_trudger() {
@@ -74,9 +77,9 @@ should_run_codex_tests() {
   [ "$status" -eq 0 ]
   run grep -q -- "label remove tr-1 trudgeable" "$bd_log"
   [ "$status" -eq 0 ]
-  run grep -q -- "codex exec " "$codex_log"
+  run grep -q -- "codex --yolo exec " "$codex_log"
   [ "$status" -eq 0 ]
-  run grep -q -- "codex exec resume --last " "$codex_log"
+  run grep -q -- "codex --yolo exec resume --last " "$codex_log"
   [ "$status" -eq 0 ]
   run grep -q -- "tr-1" "$codex_log"
   [ "$status" -eq 0 ]
@@ -155,4 +158,28 @@ should_run_codex_tests() {
     run_trudger
 
   [ "$status" -ne 0 ]
+}
+
+@test "review loop limit stops repeated reviews" {
+  if ! should_run_codex_tests; then
+    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
+  fi
+
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/review-limit"
+  mkdir -p "${temp_dir}/.codex/prompts"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge_review.md"
+
+  local ready_queue="${temp_dir}/ready.queue"
+  printf '%s\n' '[{"id":"tr-5"}]' '[]' > "$ready_queue"
+
+  HOME="$temp_dir" \
+    TRUDGER_REVIEW_LOOPS=1 \
+    BD_MOCK_READY_QUEUE="$ready_queue" \
+    BD_MOCK_SHOW_JSON='[{"id":"tr-5","status":"open","labels":["trudgeable"]}]' \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"after 1 review loops"* ]]
 }

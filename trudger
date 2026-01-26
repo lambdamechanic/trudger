@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set -o errtrace
 
 # trudger: loop over trudgeable bd tasks and run Codex solve+review prompts.
 
@@ -8,9 +9,10 @@ PROMPT_REVIEW="${HOME}/.codex/prompts/trudge_review.md"
 
 usage() {
   cat <<'EOF'
-Usage: ./trudger
+Usage: ./trudger [task_id ...]
 
 Loop over ready bd tasks labeled trudgeable and run Codex solve+review prompts.
+If task IDs are provided, they run first (in order) before bd ready tasks.
 EOF
 }
 
@@ -27,6 +29,87 @@ require_jq() {
     printf 'Missing dependency: jq\n' >&2
     exit 1
   fi
+}
+
+is_tmux_session() {
+  [[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1
+}
+
+default_tmux_base_name() {
+  local host folder command
+  host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf 'host')"
+  folder="$(basename "$PWD")"
+  command="$(basename "$0")"
+  printf '(%s) %s: %s' "$host" "$folder" "$command"
+}
+
+init_tmux_base_name() {
+  if ! is_tmux_session; then
+    return 0
+  fi
+
+  tmux_base_name="$(tmux display-message -p '#S' 2>/dev/null || true)"
+  if [[ -z "${tmux_base_name}" ]]; then
+    tmux_base_name="$(default_tmux_base_name)"
+  fi
+}
+
+format_task_list() {
+  local label="$1"
+  shift
+  local joined=""
+  if (($# > 0)); then
+    local IFS=", "
+    joined="$*"
+  fi
+  printf '%s [%s]' "$label" "$joined"
+}
+
+build_tmux_name() {
+  local phase="$1"
+  local task_id="$2"
+  local base="${tmux_base_name}"
+  if [[ -z "$base" ]]; then
+    base="$(default_tmux_base_name)"
+  fi
+
+  local activity=""
+  case "$phase" in
+    SOLVING)
+      activity="SOLVING $task_id"
+      ;;
+    REVIEWING)
+      activity="REVIEWING $task_id"
+      ;;
+    ERROR)
+      activity="HALTED ON ERROR $task_id"
+      ;;
+    *)
+      ;;
+  esac
+
+  local parts=()
+  parts+=("$base")
+  parts+=("$(format_task_list "COMPLETED" "${completed_tasks[@]:-}")")
+  parts+=("$(format_task_list "NEEDS_HUMAN" "${needs_human_tasks[@]:-}")")
+  if [[ -n "$activity" ]]; then
+    parts+=("$activity")
+  fi
+
+  local IFS=" "
+  printf '%s' "${parts[*]}"
+}
+
+update_tmux_name() {
+  local phase="$1"
+  local task_id="$2"
+  if ! is_tmux_session; then
+    return 0
+  fi
+
+  local name
+  name="$(build_tmux_name "$phase" "$task_id")"
+  tmux rename-session -- "$name" >/dev/null 2>&1 || true
 }
 
 get_next_task_id() {
@@ -50,6 +133,23 @@ load_task_state() {
   ' 2>/dev/null || true
 }
 
+ensure_task_ready() {
+  local task_id="$1"
+  local task_state status labels
+  mapfile -t task_state < <(load_task_state "$task_id")
+  status="${task_state[0]:-}"
+  labels="${task_state[1]:-}"
+
+  if [[ "$status" != "ready" ]]; then
+    printf 'Task %s is not ready (status: %s).\n' "$task_id" "${status:-unknown}" >&2
+    exit 1
+  fi
+  if ! printf '%s' "$labels" | grep -q -- 'trudgeable'; then
+    printf 'Task %s is not trudgeable.\n' "$task_id" >&2
+    exit 1
+  fi
+}
+
 render_prompt() {
   local prompt_path="$1"
   local task_id="$2"
@@ -63,44 +163,109 @@ render_prompt() {
   printf '%s' "${content//\$ARGUMENTS/$task_id}"
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
+manual_tasks=()
+while (($#)); do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      manual_tasks+=("$@")
+      break
+      ;;
+    -*)
+      printf 'Unknown option: %s\n' "$1" >&2
+      usage
+      exit 1
+      ;;
+    *)
+      manual_tasks+=("$1")
+      ;;
+  esac
+  shift
+done
 
 require_jq
 require_prompt "$PROMPT_TRUDGE"
 require_prompt "$PROMPT_REVIEW"
+init_tmux_base_name
+
+completed_tasks=()
+needs_human_tasks=()
+current_task_id=""
+current_phase=""
+review_loop_limit="${TRUDGER_REVIEW_LOOPS:-5}"
+
+if ! [[ "$review_loop_limit" =~ ^[0-9]+$ ]] || ((review_loop_limit < 1)); then
+  printf 'TRUDGER_REVIEW_LOOPS must be a positive integer (got %s).\n' "$review_loop_limit" >&2
+  exit 1
+fi
+
+handle_error() {
+  if [[ -n "${current_task_id}" ]]; then
+    update_tmux_name "ERROR" "$current_task_id"
+  fi
+}
+
+trap handle_error ERR
+
+if ((${#manual_tasks[@]} > 0)); then
+  for task_id in "${manual_tasks[@]}"; do
+    ensure_task_ready "$task_id"
+  done
+fi
 
 while true; do
-  task_id="$(get_next_task_id)"
+  if ((${#manual_tasks[@]} > 0)); then
+    task_id="${manual_tasks[0]}"
+    manual_tasks=("${manual_tasks[@]:1}")
+  else
+    task_id="$(get_next_task_id)"
+  fi
   if [[ -z "$task_id" ]]; then
     exit 0
   fi
 
-  bd update "$task_id" --status in_progress
-  codex --yolo exec "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"
-  codex --yolo exec resume --last "$(render_prompt "$PROMPT_REVIEW" "$task_id")"
+  review_loops=0
+  while true; do
+    current_task_id="$task_id"
+    current_phase="SOLVING"
+    update_tmux_name "$current_phase" "$task_id"
 
-  mapfile -t task_state < <(load_task_state "$task_id")
-  status="${task_state[0]:-}"
-  labels="${task_state[1]:-}"
+    bd update "$task_id" --status in_progress
+    codex --yolo exec "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"
+    current_phase="REVIEWING"
+    update_tmux_name "$current_phase" "$task_id"
+    codex --yolo exec resume --last "$(render_prompt "$PROMPT_REVIEW" "$task_id")"
 
-  if [[ "$status" == "closed" ]]; then
-    if printf '%s' "$labels" | grep -q -- 'trudgeable'; then
-      bd label remove "$task_id" trudgeable
+    mapfile -t task_state < <(load_task_state "$task_id")
+    status="${task_state[0]:-}"
+    labels="${task_state[1]:-}"
+
+    if [[ "$status" == "closed" ]]; then
+      completed_tasks+=("$task_id")
+      if printf '%s' "$labels" | grep -q -- 'trudgeable'; then
+        bd label remove "$task_id" trudgeable
+      fi
+      break
     fi
-    continue
-  fi
 
-  if printf '%s' "$labels" | grep -q -- 'requires-human'; then
-    if printf '%s' "$labels" | grep -q -- 'trudgeable'; then
-      bd label remove "$task_id" trudgeable
+    if printf '%s' "$labels" | grep -q -- 'requires-human'; then
+      needs_human_tasks+=("$task_id")
+      if printf '%s' "$labels" | grep -q -- 'trudgeable'; then
+        bd label remove "$task_id" trudgeable
+      fi
+      bd label add "$task_id" requires-human
+      break
     fi
-    bd label add "$task_id" requires-human
-    continue
-  fi
 
-  printf 'Task %s not closed and not requires-human after review.\n' "$task_id" >&2
-  exit 1
+    review_loops=$((review_loops + 1))
+    if ((review_loops >= review_loop_limit)); then
+      update_tmux_name "ERROR" "$task_id"
+      printf 'Task %s not closed and not requires-human after %s review loops.\n' "$task_id" "$review_loop_limit" >&2
+      exit 1
+    fi
+  done
 done
