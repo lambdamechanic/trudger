@@ -32,7 +32,7 @@ trudger
 Assuming you want `trudger` on your PATH via `~/.local/bin`:
 
 ```bash
-install -m 0755 ./trudger ~/.local/bin/trudger
+./install.sh
 ```
 
 To see help:
@@ -43,12 +43,7 @@ trudger --help
 
 ## Prompts
 
-The prompt sources live in `prompts/`. Install them into Codex:
-
-```bash
-install -m 0644 prompts/trudge ~/.codex/prompts/trudge
-install -m 0644 prompts/trudge_review ~/.codex/prompts/trudge_review
-```
+The prompt sources live in `prompts/` and are installed by `./install.sh`.
 
 ## Behavior details
 
