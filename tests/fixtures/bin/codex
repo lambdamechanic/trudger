@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_path="${CODEX_MOCK_LOG:-}"
+if [[ -n "${log_path}" ]]; then
+  printf 'codex %s\n' "$*" >> "${log_path}"
+fi
+
+fail_on="${CODEX_MOCK_FAIL_ON:-}"
+case "${fail_on}" in
+  exec)
+    if [[ "${1:-}" == "exec" && "${2:-}" != "resume" ]]; then
+      exit 1
+    fi
+    ;;
+  resume)
+    if [[ "${1:-}" == "exec" && "${2:-}" == "resume" ]]; then
+      exit 1
+    fi
+    ;;
+  *)
+    ;;
+esac
+
+exit 0
