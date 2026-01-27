@@ -1,7 +1,7 @@
 # trudger Specification
 
 ## Purpose
-TBD - created by archiving change add-trudger. Update Purpose after archive.
+Trudger serially loops over ready bd tasks labeled `trudgeable`, runs Codex solve + review prompts for each task, and verifies the task is either closed or escalated for human input.
 ## Requirements
 ### Requirement: Trudger entrypoint
 The system SHALL provide a root-level executable script named `./trudger` that orchestrates bd task selection and Codex execution.
@@ -55,4 +55,3 @@ After the review step, the script SHALL verify that the task was either closed o
 #### Scenario: Missing update is an error
 - **WHEN** the review step completes without closing the task or applying requires-human escalation
 - **THEN** the script exits with a non-zero status
-
