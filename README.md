@@ -30,6 +30,33 @@ It is slower and more serial, but if you have a large number of smaller projects
 trudger
 ```
 
+## Configuration
+
+Trudger reads `~/.config/trudger.yml` on startup. If the file is missing, it prints a warning and uses defaults.
+
+Example:
+
+```yaml
+codex_command: "codex --yolo exec"
+next_task_command: ""
+review_loop_limit: 5
+log_path: "./.trudger.log"
+
+hooks:
+  on_completed: ""
+  on_requires_human: ""
+
+labels:
+  trudgeable: "trudgeable"
+  requires_human: "requires-human"
+```
+
+Notes:
+- `codex_command` is used for solve; review uses the same command with `resume --last` appended.
+- `next_task_command` runs in a shell and the first whitespace-delimited token of stdout is used as the task id.
+- When hooks are configured, label updates are skipped. When hooks are not configured, labels are used if present.
+- Set label values to empty strings to disable label behavior.
+
 ## Install
 
 Assuming you want `trudger` on your PATH via `~/.local/bin`:
@@ -56,11 +83,9 @@ The prompt sources live in `prompts/` and are installed by `./install.sh`.
 
 ## Behavior details
 
-- Only tasks labeled `trudgeable` are processed.
-- If a task is closed after review, `trudgeable` is removed automatically.
-- If a task is labeled `requires-human` after review, the tool:
-  - Removes `trudgeable`
-  - Adds/keeps `requires-human`
+- Task selection uses `next_task_command` when configured, otherwise `bd ready` with optional label filtering.
+- If a task is closed after review, Trudger either runs `on_completed` or removes the trudgeable label (when configured).
+- If a task is marked requires-human after review, Trudger either runs `on_requires_human` or updates labels (when configured).
 
 ## Exit behavior
 

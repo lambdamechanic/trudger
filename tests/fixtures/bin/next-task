@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -n "${NEXT_TASK_OUTPUT_FILE:-}" && -f "${NEXT_TASK_OUTPUT_FILE}" ]]; then
+  cat "${NEXT_TASK_OUTPUT_FILE}"
+  exit 0
+fi
+
+printf '%s' "${NEXT_TASK_OUTPUT:-}"

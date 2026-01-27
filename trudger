@@ -2,20 +2,19 @@
 set -euo pipefail
 set -o errtrace
 
-# trudger: loop over trudgeable bd tasks and run Codex solve+review prompts.
+# trudger: loop over bd tasks and run Codex solve+review prompts.
 
 PROMPT_TRUDGE="${HOME}/.codex/prompts/trudge.md"
 PROMPT_REVIEW="${HOME}/.codex/prompts/trudge_review.md"
-TRUDGER_LOG="${TRUDGER_LOG:-./.trudger.log}"
-TRUDGER_NEXT_CMD="${TRUDGER_NEXT_CMD:-}"
+CONFIG_PATH="${HOME}/.config/trudger.yml"
 
 usage() {
   cat <<'EOF'
 Usage: ./trudger [task_id ...]
 
-Loop over ready bd tasks labeled trudgeable and run Codex solve+review prompts.
+Loop over ready bd tasks and run Codex solve+review prompts.
 If task IDs are provided, they run first (in order) before bd ready tasks.
-Set TRUDGER_NEXT_CMD to override task selection with a command that prints an id.
+Configuration is loaded from ~/.config/trudger.yml.
 EOF
 }
 
@@ -38,7 +37,7 @@ log_transition() {
   local message="$1"
   local ts
   ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  printf '%s %s\n' "$ts" "$message" >> "$TRUDGER_LOG" 2>/dev/null || true
+  printf '%s %s\n' "$ts" "$message" >> "$trudger_log_path" 2>/dev/null || true
 }
 
 is_tmux_session() {
@@ -153,14 +152,154 @@ update_tmux_name() {
   tmux select-pane -T "$name" >/dev/null 2>&1 || true
 }
 
+trim_value() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+normalize_value() {
+  local value
+  value="$(trim_value "$1")"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+  case "$value" in
+    null|NULL|Null|"~")
+      value=""
+      ;;
+  esac
+  printf '%s' "$value"
+}
+
+load_config() {
+  if [[ ! -f "$CONFIG_PATH" ]]; then
+    printf 'Warning: missing config file %s; using defaults.\n' "$CONFIG_PATH" >&2
+    return 0
+  fi
+
+  local section=""
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line%"${line##*[![:space:]]}"}"
+    if [[ -z "${line//[[:space:]]/}" ]]; then
+      continue
+    fi
+
+    if [[ "$line" =~ ^([A-Za-z0-9_]+):[[:space:]]*(.*)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      value="$(normalize_value "${BASH_REMATCH[2]}")"
+      case "$key" in
+        labels|hooks)
+          if [[ -z "$value" ]]; then
+            section="$key"
+            continue
+          fi
+          ;;
+        *)
+          section=""
+          ;;
+      esac
+      case "$key" in
+        codex_command)
+          codex_command="$value"
+          ;;
+        next_task_command)
+          next_task_command="$value"
+          ;;
+        review_loop_limit)
+          review_loop_limit="$value"
+          ;;
+        log_path)
+          trudger_log_path="$value"
+          ;;
+        *)
+          ;;
+      esac
+      continue
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]+([A-Za-z0-9_]+):[[:space:]]*(.*)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      value="$(normalize_value "${BASH_REMATCH[2]}")"
+      case "$section" in
+        labels)
+          case "$key" in
+            trudgeable)
+              label_trudgeable="$value"
+              ;;
+            requires_human)
+              label_requires_human="$value"
+              ;;
+            *)
+              ;;
+          esac
+          ;;
+        hooks)
+          case "$key" in
+            on_completed)
+              hook_on_completed="$value"
+              ;;
+            on_requires_human)
+              hook_on_requires_human="$value"
+              ;;
+            *)
+              ;;
+          esac
+          ;;
+        *)
+          ;;
+      esac
+      continue
+    fi
+  done < "$CONFIG_PATH"
+}
+
+parse_command() {
+  local input="$1"
+  local -n out="$2"
+  out=()
+  if [[ -n "$input" ]]; then
+    read -r -a out <<<"$input"
+  fi
+}
+
+run_hook() {
+  local hook_command="$1"
+  local task_id="$2"
+  local hook_parts=()
+  parse_command "$hook_command" hook_parts
+  if ((${#hook_parts[@]} == 0)); then
+    return 0
+  fi
+  "${hook_parts[0]}" "$task_id" "${hook_parts[@]:1}"
+}
+
+has_label() {
+  local labels="$1"
+  local label="$2"
+  if [[ -z "$label" ]]; then
+    return 1
+  fi
+  printf '%s' "$labels" | grep -q -- "$label"
+}
+
 get_next_task_id() {
   local raw
-  if [[ -n "${TRUDGER_NEXT_CMD}" ]]; then
-    raw="$(bash -lc "${TRUDGER_NEXT_CMD}" 2>/dev/null || true)"
+  if [[ -n "${next_task_command}" ]]; then
+    raw="$(bash -lc "${next_task_command}" 2>/dev/null || true)"
     printf '%s' "$raw" | awk 'NF { print $1; exit }'
     return 0
   fi
-  raw="$(bd ready --json --label trudgeable --sort priority --limit 1)"
+  if [[ -n "$label_trudgeable" ]]; then
+    raw="$(bd ready --json --label "$label_trudgeable" --sort priority --limit 1)"
+  else
+    raw="$(bd ready --json --sort priority --limit 1)"
+  fi
   printf '%s' "$raw" | jq -r 'if type == "array" and length > 0 then .[0].id // "" else "" end' 2>/dev/null || true
 }
 
@@ -190,9 +329,11 @@ ensure_task_ready() {
     printf 'Task %s is not ready (status: %s).\n' "$task_id" "${status:-unknown}" >&2
     exit 1
   fi
-  if ! printf '%s' "$labels" | grep -q -- 'trudgeable'; then
-    printf 'Task %s is not trudgeable.\n' "$task_id" >&2
-    exit 1
+  if [[ -n "$label_trudgeable" ]]; then
+    if ! printf '%s' "$labels" | grep -q -- "$label_trudgeable"; then
+      printf 'Task %s is not %s.\n' "$task_id" "$label_trudgeable" >&2
+      exit 1
+    fi
   fi
 }
 
@@ -245,6 +386,21 @@ while (($#)); do
   shift
 done
 
+codex_command="codex --yolo exec"
+next_task_command=""
+review_loop_limit="5"
+trudger_log_path="./.trudger.log"
+label_trudgeable="trudgeable"
+label_requires_human="requires-human"
+hook_on_completed=""
+hook_on_requires_human=""
+
+load_config
+
+if [[ -z "$trudger_log_path" ]]; then
+  trudger_log_path="./.trudger.log"
+fi
+
 require_jq
 require_prompt "$PROMPT_TRUDGE"
 require_prompt "$PROMPT_REVIEW"
@@ -260,12 +416,19 @@ if [[ -n "${TRUDGER_NEEDS_HUMAN:-}" ]]; then
 fi
 current_task_id=""
 current_phase=""
-review_loop_limit="${TRUDGER_REVIEW_LOOPS:-5}"
 
 if ! [[ "$review_loop_limit" =~ ^[0-9]+$ ]] || ((review_loop_limit < 1)); then
-  printf 'TRUDGER_REVIEW_LOOPS must be a positive integer (got %s).\n' "$review_loop_limit" >&2
+  printf 'review_loop_limit must be a positive integer (got %s).\n' "$review_loop_limit" >&2
   exit 1
 fi
+
+codex_cmd=()
+parse_command "$codex_command" codex_cmd
+if ((${#codex_cmd[@]} == 0)); then
+  printf 'codex_command must not be empty.\n' >&2
+  exit 1
+fi
+review_cmd=("${codex_cmd[@]}" resume --last)
 
 handle_error() {
   if [[ -n "${current_task_id}" ]]; then
@@ -309,9 +472,9 @@ if ((${#manual_tasks[@]} > 0)); then
   done
 fi
 
-if [[ -n "${TRUDGER_NEXT_CMD}" ]]; then
+if [[ -n "${next_task_command}" ]]; then
   if ((${#manual_tasks[@]} > 0)); then
-    printf 'Cannot combine manual task IDs with TRUDGER_NEXT_CMD.\n' >&2
+    printf 'Cannot combine manual task IDs with next_task_command.\n' >&2
     exit 1
   fi
 fi
@@ -327,10 +490,12 @@ if [[ -z "$task_id" ]]; then
   exit 0
 fi
 
-if [[ -n "${TRUDGER_NEXT_CMD}" ]]; then
+if [[ -n "${next_task_command}" ]]; then
   ensure_task_ready_unlabeled "$task_id"
-  if ! bd label list "$task_id" 2>/dev/null | grep -q -- 'trudgeable'; then
-    bd label add "$task_id" trudgeable
+  if [[ -n "$label_trudgeable" ]]; then
+    if ! bd label list "$task_id" 2>/dev/null | grep -q -- "$label_trudgeable"; then
+      bd label add "$task_id" "$label_trudgeable"
+    fi
   fi
 fi
 
@@ -342,7 +507,7 @@ while true; do
   log_transition "state=SOLVING task=${task_id} loop=${review_loops}"
 
   bd update "$task_id" --status in_progress
-  if ! codex --yolo exec "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"; then
+  if ! "${codex_cmd[@]}" "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "solve_failed task=${task_id}"
     printf 'Codex solve failed for task %s.\n' "$task_id" >&2
@@ -351,7 +516,7 @@ while true; do
   current_phase="REVIEWING"
   update_tmux_name "$current_phase" "$task_id"
   log_transition "state=REVIEWING task=${task_id} loop=${review_loops}"
-  if ! codex --yolo exec resume --last "$(render_prompt "$PROMPT_REVIEW" "$task_id")"; then
+  if ! "${review_cmd[@]}" "$(render_prompt "$PROMPT_REVIEW" "$task_id")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "review_failed task=${task_id}"
     printf 'Codex review failed for task %s.\n' "$task_id" >&2
@@ -366,19 +531,36 @@ while true; do
   if [[ "$status" == "closed" ]]; then
     completed_tasks+=("$task_id")
     log_transition "completed task=${task_id}"
-    if printf '%s' "$labels" | grep -q -- 'trudgeable'; then
-      bd label remove "$task_id" trudgeable
+    if [[ -n "$hook_on_completed" ]]; then
+      run_hook "$hook_on_completed" "$task_id"
+    elif has_label "$labels" "$label_trudgeable"; then
+      bd label remove "$task_id" "$label_trudgeable"
     fi
     break
   fi
 
-  if printf '%s' "$labels" | grep -q -- 'requires-human'; then
+  requires_human=false
+  if [[ -n "$label_requires_human" ]]; then
+    if has_label "$labels" "$label_requires_human"; then
+      requires_human=true
+    fi
+  else
+    requires_human=true
+  fi
+
+  if [[ "$requires_human" == "true" ]]; then
     needs_human_tasks+=("$task_id")
     log_transition "needs_human task=${task_id}"
-    if printf '%s' "$labels" | grep -q -- 'trudgeable'; then
-      bd label remove "$task_id" trudgeable
+    if [[ -n "$hook_on_requires_human" ]]; then
+      run_hook "$hook_on_requires_human" "$task_id"
+    else
+      if has_label "$labels" "$label_trudgeable"; then
+        bd label remove "$task_id" "$label_trudgeable"
+      fi
+      if [[ -n "$label_requires_human" ]]; then
+        bd label add "$task_id" "$label_requires_human"
+      fi
     fi
-    bd label add "$task_id" requires-human
     break
   fi
 
