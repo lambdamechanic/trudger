@@ -54,7 +54,7 @@ labels:
 CONFIG
 
   HOME="$temp_dir" \
-    BD_MOCK_READY_JSON='[]' \
+    BR_MOCK_READY_JSON='[]' \
     run_trudger
 
   [ "$status" -ne 0 ]
@@ -68,7 +68,7 @@ CONFIG
   create_prompts "$temp_dir"
 
   HOME="$temp_dir" \
-    BD_MOCK_READY_JSON='[]' \
+    BR_MOCK_READY_JSON='[]' \
     run_trudger
 
   [ "$status" -ne 0 ]
@@ -160,17 +160,52 @@ labels:
   requires_human: requires-human
 CONFIG
 
-  local bd_log="${temp_dir}/bd.log"
+  local br_log="${temp_dir}/br.log"
   local codex_log="${temp_dir}/codex.log"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT='' \
-    BD_MOCK_LOG="$bd_log" \
+    BR_MOCK_LOG="$br_log" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger
 
   [ "$status" -eq 0 ]
   [ ! -s "$codex_log" ]
+}
+
+@test "open task is treated as ready" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/open-task"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+next_task_command: "next-task"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
+CONFIG
+
+  local codex_log="${temp_dir}/codex.log"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  printf '%s\n' 'tr-42' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-42","status":"open","labels":[]}]' \
+    '[{"id":"tr-42","status":"closed","labels":[]}]' \
+    > "$show_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger
+
+  [ "$status" -eq 0 ]
+  run grep -q -- "tr-42" "$codex_log"
+  [ "$status" -eq 0 ]
 }
 
 @test "closed task removes trudgeable label" {
@@ -184,26 +219,57 @@ CONFIG
   create_prompts "$temp_dir"
   copy_sample_config "$temp_dir" "trudgeable-with-hooks"
 
-  local bd_log="${temp_dir}/bd.log"
+  local br_log="${temp_dir}/br.log"
   local codex_log="${temp_dir}/codex.log"
   local ready_queue="${temp_dir}/ready.queue"
   printf '%s\n' '[{"id":"tr-1"}]' '[]' > "$ready_queue"
 
   HOME="$temp_dir" \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
-    BD_MOCK_SHOW_JSON='[{"id":"tr-1","status":"closed","labels":["trudgeable"]}]' \
-    BD_MOCK_LOG="$bd_log" \
+    BR_MOCK_READY_QUEUE="$ready_queue" \
+    BR_MOCK_SHOW_JSON='[{"id":"tr-1","status":"closed","labels":["trudgeable"]}]' \
+    BR_MOCK_LOG="$br_log" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger
 
   [ "$status" -eq 0 ]
-  run grep -q -- "label remove tr-1 trudgeable" "$bd_log"
+  run grep -q -- "label remove tr-1 trudgeable" "$br_log"
   [ "$status" -eq 0 ]
   run grep -q -- "codex --yolo exec " "$codex_log"
   [ "$status" -eq 0 ]
   run grep -q -- "codex --yolo exec resume --last " "$codex_log"
   [ "$status" -eq 0 ]
   run grep -q -- "tr-1" "$codex_log"
+  [ "$status" -eq 0 ]
+}
+
+@test "robot-triage sample config selects task via bv" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/robot-triage"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  copy_sample_config "$temp_dir" "robot-triage"
+
+  local br_log="${temp_dir}/br.log"
+  local codex_log="${temp_dir}/codex.log"
+  local robot_queue="${temp_dir}/robot.queue"
+  local show_queue="${temp_dir}/show.queue"
+  printf '%s\n' '{"id":"tr-77"}' '' > "$robot_queue"
+  printf '%s\n' \
+    '[{"id":"tr-77","status":"ready","labels":[]}]' \
+    '[{"id":"tr-77","status":"closed","labels":[]}]' \
+    > "$show_queue"
+
+  HOME="$temp_dir" \
+    BV_MOCK_ROBOT_NEXT_QUEUE="$robot_queue" \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    BR_MOCK_LOG="$br_log" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger
+
+  [ "$status" -eq 0 ]
+  run grep -q -- "update tr-77 --status in_progress" "$br_log"
+  [ "$status" -eq 0 ]
+  run grep -q -- "codex --yolo exec " "$codex_log"
   [ "$status" -eq 0 ]
 }
 
@@ -237,7 +303,7 @@ CONFIG
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BD_MOCK_SHOW_QUEUE="$show_queue" \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger
 
@@ -259,20 +325,20 @@ CONFIG
   create_prompts "$temp_dir"
   copy_sample_config "$temp_dir" "trudgeable-with-hooks"
 
-  local bd_log="${temp_dir}/bd.log"
+  local br_log="${temp_dir}/br.log"
   local ready_queue="${temp_dir}/ready.queue"
   printf '%s\n' '[{"id":"tr-2"}]' '[]' > "$ready_queue"
 
   HOME="$temp_dir" \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
-    BD_MOCK_SHOW_JSON='[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
-    BD_MOCK_LOG="$bd_log" \
+    BR_MOCK_READY_QUEUE="$ready_queue" \
+    BR_MOCK_SHOW_JSON='[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
+    BR_MOCK_LOG="$br_log" \
     run_trudger
 
   [ "$status" -eq 0 ]
-  run grep -q -- "label remove tr-2 trudgeable" "$bd_log"
+  run grep -q -- "label remove tr-2 trudgeable" "$br_log"
   [ "$status" -eq 0 ]
-  run grep -q -- "label add tr-2 human-required" "$bd_log"
+  run grep -q -- "label add tr-2 human-required" "$br_log"
   [ "$status" -eq 0 ]
 }
 
@@ -295,7 +361,7 @@ hooks:
   on_requires_human: "hook --needs-human"
 CONFIG
 
-  local bd_log="${temp_dir}/bd.log"
+  local br_log="${temp_dir}/br.log"
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
   printf '%s\n' 'tr-20 extra' '' > "$next_task_queue"
@@ -306,8 +372,8 @@ CONFIG
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BD_MOCK_SHOW_QUEUE="$show_queue" \
-    BD_MOCK_LOG="$bd_log" \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    BR_MOCK_LOG="$br_log" \
     run_trudger
 
   [ "$status" -eq 0 ]
@@ -354,7 +420,7 @@ hooks:
   on_requires_human: "hook --needs-human"
 CONFIG
 
-  local bd_log="${temp_dir}/bd.log"
+  local br_log="${temp_dir}/br.log"
   local show_queue="${temp_dir}/show.queue"
   local next_task_queue="${temp_dir}/next-task.queue"
   printf '%s\n' \
@@ -367,8 +433,8 @@ CONFIG
     TRUDGER_NEXT_CMD='next-task' \
     TRUDGER_REVIEW_LOOPS=0 \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BD_MOCK_SHOW_QUEUE="$show_queue" \
-    BD_MOCK_LOG="$bd_log" \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    BR_MOCK_LOG="$br_log" \
     run_trudger
 
   [ "$status" -eq 0 ]
@@ -403,7 +469,7 @@ CONFIG
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BD_MOCK_SHOW_QUEUE="$show_queue" \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
     CODEX_MOCK_FAIL_ON=exec \
     run_trudger
 

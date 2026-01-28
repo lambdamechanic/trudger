@@ -14,7 +14,7 @@ The system SHALL read configuration from `~/.config/trudger.yml` on startup to d
 
 ## MODIFIED Requirements
 ### Requirement: Task selection
-The script SHALL select the next task by running the configured next-task command and using the first whitespace-delimited token of its output as the task id. If no next-task command is configured, the script SHALL default to `bd ready --json --sort priority --limit 1`, filtering by the configured trudgeable label when one is set.
+The script SHALL select the next task by running the configured next-task command and using the first whitespace-delimited token of its output as the task id. If no next-task command is configured, the script SHALL default to `br ready --json --sort priority --limit 1`, filtering by the configured trudgeable label when one is set.
 
 #### Scenario: Custom next-task command
 - **GIVEN** a configured next-task command
@@ -22,7 +22,7 @@ The script SHALL select the next task by running the configured next-task comman
 - **THEN** the script selects that id as the next task
 
 ### Requirement: Codex prompt execution
-For each selected task, the script SHALL start a Codex exec session using the contents of `~/.codex/prompts/trudge.md` with `$ARGUMENTS` replaced by the bd id, then resume the same session with `~/.codex/prompts/trudge_review.md` with `$ARGUMENTS` replaced by the bd id, using the configured Codex command line for invocation.
+For each selected task, the script SHALL start a Codex exec session using the contents of `~/.codex/prompts/trudge.md` with `$ARGUMENTS` replaced by the br id, then resume the same session with `~/.codex/prompts/trudge_review.md` with `$ARGUMENTS` replaced by the br id, using the configured Codex command line for invocation.
 
 #### Scenario: Configured Codex command
 - **GIVEN** a configured Codex command line

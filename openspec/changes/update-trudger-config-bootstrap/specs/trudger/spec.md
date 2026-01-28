@@ -14,19 +14,54 @@ The system SHALL require a configuration file at `~/.config/trudger.yml` before 
 - **WHEN** `./trudger` starts
 - **THEN** it loads settings from the file and continues execution
 
+### Requirement: Configured task commands
+The system SHALL load task command configuration from `~/.config/trudger.yml` and use it for task selection, show, and update operations. The system SHALL NOT invoke `br` directly; any `br` usage must be expressed in configured commands.
+
+#### Scenario: Commands configured
+- **GIVEN** task commands are configured
+- **WHEN** Trudger runs
+- **THEN** it uses the configured commands for selection, show, and update
+
+#### Scenario: Command missing
+- **GIVEN** a required task command is missing
+- **WHEN** Trudger runs
+- **THEN** it exits non-zero with a clear error
+
 ## MODIFIED Requirements
 ### Requirement: Task selection
-The script SHALL select the next task by running the configured next-task command and using the first whitespace-delimited token of its output as the task id. The script SHALL NOT fall back to `bd ready` when no next-task command is configured.
+The script SHALL select the next task by running the configured `commands.next_task` command and using the first whitespace-delimited token of its output as the task id. The task id SHALL be passed as the first argument to other configured commands and hooks.
 
 #### Scenario: Custom next-task command
-- **GIVEN** a configured next-task command
+- **GIVEN** a configured `commands.next_task` command
 - **WHEN** the command outputs a task id
 - **THEN** the script selects that id as the next task
 
-#### Scenario: Missing next-task command is an error
-- **GIVEN** no next-task command is configured
-- **WHEN** `./trudger` starts
+#### Scenario: No tasks available
+- **GIVEN** `commands.next_task` exits with status 1
+- **WHEN** `./trudger` runs
+- **THEN** the script exits with status 0
+
+#### Scenario: Next-task command failure
+- **GIVEN** `commands.next_task` exits with a non-zero status other than 1
+- **WHEN** `./trudger` runs
 - **THEN** the script exits non-zero with a clear error
+
+### Requirement: Task show command
+The script SHALL obtain task state by executing `commands.task_show` with the task id as the first argument. The show command output is treated as free-form text and provided to Codex; Trudger MUST NOT parse or validate it.
+
+#### Scenario: Show command output
+- **GIVEN** `commands.task_show` is configured
+- **WHEN** Trudger needs task state
+- **THEN** it executes the command as `<command> <task_id> <extra args>`
+- **AND** it passes the output to Codex without parsing
+
+### Requirement: Task update command
+Before running the solve prompt, the script SHALL execute `commands.task_update_in_progress` with the task id as the first argument. The update command output is ignored.
+
+#### Scenario: Update command execution
+- **GIVEN** `commands.task_update_in_progress` is configured
+- **WHEN** Trudger begins work on a task
+- **THEN** it executes the command as `<command> <task_id> <extra args>`
 
 ### Requirement: Task closure on success
 When the review step results in the task being closed, the script SHALL invoke the configured completion hook by executing the hook command with the task id as the first argument and the remaining configured tokens as subsequent arguments. The script SHALL NOT perform label updates itself.
@@ -36,11 +71,6 @@ When the review step results in the task being closed, the script SHALL invoke t
 - **WHEN** the task is closed after review
 - **THEN** the hook is executed as `<command> <task_id> <extra args>`
 
-#### Scenario: Completion hook missing
-- **GIVEN** no completion hook is configured
-- **WHEN** the task is closed after review
-- **THEN** the script exits non-zero with a clear error
-
 ### Requirement: Requires-human escalation
 When the review step indicates human input is required, the script SHALL invoke the configured requires-human hook by executing the hook command with the task id as the first argument and the remaining configured tokens as subsequent arguments. The script SHALL NOT perform label updates itself. Human-input requirement is detected when the task remains open after review.
 
@@ -48,8 +78,3 @@ When the review step indicates human input is required, the script SHALL invoke 
 - **GIVEN** a configured requires-human hook command
 - **WHEN** the requires-human condition is detected after review
 - **THEN** the hook is executed as `<command> <task_id> <extra args>`
-
-#### Scenario: Requires-human hook missing
-- **GIVEN** no requires-human hook is configured
-- **WHEN** the requires-human condition is detected after review
-- **THEN** the script exits non-zero with a clear error

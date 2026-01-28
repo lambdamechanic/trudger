@@ -1,11 +1,11 @@
 # trudger
 
-trudger slowly and unimaginatively trudges through your bd tasks.
+trudger slowly and unimaginatively trudges through your br tasks.
 
 ## Why
 
 Trudger is more or less a direct response to the experience of trying to build something in Gastown.
-It is slower and more serial, but if you have a large number of smaller projects like me, I'm betting you can quite easily just have a constant, slow, serial trudge through all of them, and interact with them mainly through openspec and beads.
+It is slower and more serial, but if you have a large number of smaller projects like me, I'm betting you can quite easily just have a constant, slow, serial trudge through all of them, and interact with them mainly through openspec and beads_rust.
 
 ## What it does
 
@@ -17,7 +17,7 @@ It is slower and more serial, but if you have a large number of smaller projects
 
 ## Requirements
 
-- `bd` CLI on your PATH
+- `br` CLI on your PATH
 - `codex` CLI on your PATH
 - `jq` on your PATH
 - Prompt files installed under `~/.codex/prompts/` (see below):
@@ -36,24 +36,24 @@ Trudger requires `~/.config/trudger.yml` on startup. If the file is missing, it 
 
 Sample configs:
 - `sample_configuration/trudgeable-with-hooks.yml`
-  - Selects the next ready bd task labeled `trudgeable`.
+  - Selects the next ready br task labeled `trudgeable`.
   - On completion, removes `trudgeable`.
   - On requires-human, removes `trudgeable` and adds `human-required`.
 - `sample_configuration/robot-triage.yml`
-  - Selects tasks via `bv --robot-triage`.
+  - Selects tasks via `bv --robot-next`.
   - No label changes (hooks are no-ops).
 
 Example:
 
 ```yaml
 codex_command: "codex --yolo exec"
-next_task_command: "bd ready --json --label trudgeable --sort priority --limit 1 | jq -r 'if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end'"
+next_task_command: "br ready --json --label trudgeable --sort priority --limit 1 | jq -r 'if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end'"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
 hooks:
-  on_completed: "bash -lc 'bd label remove \"$1\" \"trudgeable\"'"
-  on_requires_human: "bash -lc 'bd label remove \"$1\" \"trudgeable\"; bd label add \"$1\" \"human-required\"'"
+  on_completed: "bash -lc 'br label remove \"$1\" \"trudgeable\"'"
+  on_requires_human: "bash -lc 'br label remove \"$1\" \"trudgeable\"; br label add \"$1\" \"human-required\"'"
 ```
 
 Notes:

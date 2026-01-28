@@ -1,12 +1,12 @@
 # Trudgeable with hooks
-# - Selects the next ready bd task labeled "trudgeable".
+# - Selects the next ready br task labeled "trudgeable".
 # - On completion, removes the "trudgeable" label.
 # - On requires-human, removes "trudgeable" and adds "human-required".
 codex_command: "codex --yolo exec"
-next_task_command: "bd ready --json --label trudgeable --sort priority --limit 1 | jq -r 'if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end'"
+next_task_command: "br ready --json --label trudgeable --sort priority --limit 1 | jq -r 'if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end'"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
 hooks:
-  on_completed: "bash -lc 'bd label remove \"$1\" \"trudgeable\"'"
-  on_requires_human: "bash -lc 'bd label remove \"$1\" \"trudgeable\"; bd label add \"$1\" \"human-required\"'"
+  on_completed: "bash -lc 'br label remove \"$1\" \"trudgeable\"'"
+  on_requires_human: "bash -lc 'br label remove \"$1\" \"trudgeable\"; br label add \"$1\" \"human-required\"'"
