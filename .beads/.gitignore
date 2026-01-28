@@ -9,7 +9,7 @@
 daemon.lock
 daemon.log
 daemon.pid
-bd.sock
+br.sock
 sync-state.json
 last-touched
 
@@ -18,7 +18,7 @@ last-touched
 
 # Legacy database files
 db.sqlite
-bd.db
+br.db
 
 # Worktree redirect file (contains relative path to main repo's .beads/)
 # Must not be committed as paths would be wrong in other clones

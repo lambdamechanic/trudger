@@ -1,12 +1,14 @@
-# Beads - AI-Native Issue Tracking
+# Beads (beads_rust) - AI-Native Issue Tracking
 
-Welcome to Beads! This repository uses **Beads** for issue tracking - a modern, AI-native tool designed to live directly in your codebase alongside your code.
+Welcome to beads_rust! This repository uses **br** (beads_rust) for issue tracking - a modern, AI-native tool designed to live directly in your codebase alongside your code.
 
-## What is Beads?
+**Note:** `br` is non-invasive and never executes git commands. After `br sync --flush-only`, you must manually run `git add .beads/ && git commit`.
 
-Beads is issue tracking that lives in your repo, making it perfect for AI coding agents and developers who want their issues close to their code. No web UI required - everything works through the CLI and integrates seamlessly with git.
+## What is beads_rust?
 
-**Learn more:** [github.com/steveyegge/beads](https://github.com/steveyegge/beads)
+beads_rust is issue tracking that lives in your repo, making it perfect for AI coding agents and developers who want their issues close to their code. No web UI required - everything works through the CLI and integrates seamlessly with git.
+
+**Learn more:** [github.com/Dicklesworthstone/beads_rust](https://github.com/Dicklesworthstone/beads_rust)
 
 ## Quick Start
 
@@ -14,31 +16,33 @@ Beads is issue tracking that lives in your repo, making it perfect for AI coding
 
 ```bash
 # Create new issues
-bd create "Add user authentication"
+br create "Add user authentication"
 
 # View all issues
-bd list
+br list
 
 # View issue details
-bd show <issue-id>
+br show <issue-id>
 
 # Update issue status
-bd update <issue-id> --status in_progress
-bd update <issue-id> --status done
+br update <issue-id> --status in_progress
+br update <issue-id> --status done
 
 # Sync with git remote
-bd sync
+br sync --flush-only
+git add .beads/
+git commit -m "sync beads"
 ```
 
 ### Working with Issues
 
-Issues in Beads are:
+Issues in beads_rust are:
 - **Git-native**: Stored in `.beads/issues.jsonl` and synced like code
 - **AI-friendly**: CLI-first design works perfectly with AI coding agents
 - **Branch-aware**: Issues can follow your branch workflow
-- **Always in sync**: Auto-syncs with your commits
+- **Always in sync**: Run `br sync --flush-only` and commit `.beads/` with your changes
 
-## Why Beads?
+## Why beads_rust?
 
 ✨ **AI-Native Design**
 - Built specifically for AI-assisted development workflows
@@ -51,31 +55,31 @@ Issues in Beads are:
 - Fast, lightweight, and stays out of your way
 
 🔧 **Git Integration**
-- Automatic sync with git commits
+- Manual sync after `br sync --flush-only`
 - Branch-aware issue tracking
 - Intelligent JSONL merge resolution
 
-## Get Started with Beads
+## Get Started with beads_rust
 
-Try Beads in your own projects:
+Try beads_rust in your own projects:
 
 ```bash
-# Install Beads
-curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+# Install beads_rust
+# Follow the install instructions in the beads_rust repo.
 
 # Initialize in your repo
-bd init
+br init
 
 # Create your first issue
-bd create "Try out Beads"
+br create "Try out beads_rust"
 ```
 
 ## Learn More
 
-- **Documentation**: [github.com/steveyegge/beads/docs](https://github.com/steveyegge/beads/tree/main/docs)
-- **Quick Start Guide**: Run `bd quickstart`
-- **Examples**: [github.com/steveyegge/beads/examples](https://github.com/steveyegge/beads/tree/main/examples)
+- **Documentation**: See [github.com/Dicklesworthstone/beads_rust](https://github.com/Dicklesworthstone/beads_rust)
+- **Quick Start Guide**: Run `br quickstart`
+- **Examples**: See [github.com/Dicklesworthstone/beads_rust](https://github.com/Dicklesworthstone/beads_rust)
 
 ---
 
-*Beads: Issue tracking that moves at the speed of thought* ⚡
+*beads_rust: Issue tracking that moves at the speed of thought* ⚡
