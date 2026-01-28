@@ -33,6 +33,14 @@ write_config() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-prompts"
   mkdir -p "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+labels:
+  trudgeable: trudgeable
+  requires_human: requires-human
+CONFIG
 
   HOME="$temp_dir" \
     BD_MOCK_READY_JSON='[]' \
@@ -42,7 +50,7 @@ write_config() {
   [[ "$output" == *"Missing prompt file"* ]]
 }
 
-@test "missing config warns and uses defaults" {
+@test "missing config prints bootstrap instructions" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-config"
   mkdir -p "$temp_dir"
@@ -52,8 +60,10 @@ write_config() {
     BD_MOCK_READY_JSON='[]' \
     run_trudger
 
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Warning: missing config file"* ]]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Missing config file"* ]]
+  [[ "$output" == *"trudgeable-with-hooks.yml"* ]]
+  [[ "$output" == *"robot-triage.yml"* ]]
 }
 
 @test "no tasks exits zero without codex" {
@@ -64,6 +74,7 @@ write_config() {
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
 review_loop_limit: 5
+log_path: "./.trudger.log"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human
@@ -94,6 +105,7 @@ CONFIG
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
 review_loop_limit: 5
+log_path: "./.trudger.log"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human
@@ -136,6 +148,7 @@ CONFIG
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec --custom"
 review_loop_limit: 5
+log_path: "./.trudger.log"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human
@@ -170,6 +183,7 @@ CONFIG
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
 review_loop_limit: 5
+log_path: "./.trudger.log"
 hooks:
   on_completed: "hook --done extra"
 labels:
@@ -208,6 +222,7 @@ CONFIG
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
 review_loop_limit: 5
+log_path: "./.trudger.log"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human
@@ -244,6 +259,7 @@ CONFIG
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
 review_loop_limit: 5
+log_path: "./.trudger.log"
 hooks:
   on_requires_human: "hook --needs-human extra"
 labels:
@@ -282,6 +298,7 @@ CONFIG
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
 review_loop_limit: 5
+log_path: "./.trudger.log"
 hooks:
   on_requires_human: "hook --needs-human"
 labels:
@@ -322,6 +339,7 @@ CONFIG
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
 review_loop_limit: 5
+log_path: "./.trudger.log"
 labels:
   trudgeable: ""
   requires_human: ""
@@ -354,6 +372,7 @@ CONFIG
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
 review_loop_limit: 5
+log_path: "./.trudger.log"
 next_task_command: "next-task"
 labels:
   trudgeable: trudgeable
@@ -389,6 +408,9 @@ CONFIG
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+review_loop_limit: 5
+log_path: "./.trudger.log"
 next_task_command: "next-task"
 CONFIG
 
@@ -409,6 +431,9 @@ CONFIG
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+review_loop_limit: 5
+log_path: "./.trudger.log"
 labels:
   trudgeable: custom-label
   requires_human: requires-human
@@ -432,6 +457,9 @@ CONFIG
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+review_loop_limit: 5
+log_path: "./.trudger.log"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human
@@ -462,7 +490,9 @@ CONFIG
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
 review_loop_limit: 2
+log_path: "./.trudger.log"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human
@@ -491,7 +521,9 @@ CONFIG
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
 review_loop_limit: 1
+log_path: "./.trudger.log"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human
@@ -519,7 +551,9 @@ CONFIG
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
 review_loop_limit: 5
+log_path: "./.trudger.log"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human

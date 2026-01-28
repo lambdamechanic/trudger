@@ -32,23 +32,22 @@ trudger
 
 ## Configuration
 
-Trudger reads `~/.config/trudger.yml` on startup. If the file is missing, it prints a warning and uses defaults.
+Trudger requires `~/.config/trudger.yml` on startup. If the file is missing, it prints curl commands for sample configs and exits non-zero.
 
-Defaults:
-- `codex_command`: `codex --yolo exec`
-- `next_task_command`: empty (uses `bd ready` selection)
-- `review_loop_limit`: `5`
-- `log_path`: `./.trudger.log`
-- `hooks.on_completed`: empty
-- `hooks.on_requires_human`: empty
-- `labels.trudgeable`: `trudgeable`
-- `labels.requires_human`: `requires-human`
+Sample configs:
+- `sample_configuration/trudgeable-with-hooks.yml`
+  - Selects the next ready bd task labeled `trudgeable`.
+  - On completion, removes `trudgeable`.
+  - On requires-human, removes `trudgeable` and adds `human-required`.
+- `sample_configuration/robot-triage.yml`
+  - Selects tasks via `bv --robot-triage`.
+  - No label changes (hooks and labels disabled).
 
-Example (defaults shown):
+Example:
 
 ```yaml
 codex_command: "codex --yolo exec"
-next_task_command: ""
+next_task_command: "bd ready --json --label trudgeable --sort priority --limit 1 | jq -r 'if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end'"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 

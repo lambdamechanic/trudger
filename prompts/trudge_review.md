@@ -8,6 +8,7 @@ Review the specified bd task after the solve step and update bd state accordingl
 
 **Requirements**
 - Load the task details with `bd show <id> --json`.
+- Agent binaries available: `bd`, `codex`, `jq`, `beads_rust`, `MCPShell`.
 - Verify acceptance criteria against the implemented changes and tests.
 
 **If the task is complete**
