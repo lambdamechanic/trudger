@@ -245,7 +245,7 @@ CONFIG
 codex_command: "codex --yolo exec"
 review_loop_limit: 5
 hooks:
-  on_requires_human: "hook --needs-human"
+  on_requires_human: "hook --needs-human extra"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human
@@ -264,9 +264,49 @@ CONFIG
     run_trudger
 
   [ "$status" -eq 0 ]
-  run grep -q -- "tr-12 --needs-human" "$hook_log"
+  run grep -q -- "tr-12 --needs-human extra" "$hook_log"
   [ "$status" -eq 0 ]
   run grep -q -- "label remove tr-12" "$bd_log"
+  [ "$status" -ne 0 ]
+}
+
+@test "requires-human hook works with labels disabled" {
+  if ! should_run_codex_tests; then
+    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
+  fi
+
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/requires-human-hook-no-labels"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+review_loop_limit: 5
+hooks:
+  on_requires_human: "hook --needs-human"
+labels:
+  trudgeable: ""
+  requires_human: ""
+CONFIG
+
+  local bd_log="${temp_dir}/bd.log"
+  local hook_log="${temp_dir}/hook.log"
+  local ready_queue="${temp_dir}/ready.queue"
+  printf '%s\n' '[{"id":"tr-14"}]' '[]' > "$ready_queue"
+
+  HOME="$temp_dir" \
+    BD_MOCK_READY_QUEUE="$ready_queue" \
+    BD_MOCK_SHOW_JSON='[{"id":"tr-14","status":"open","labels":[]}]' \
+    BD_MOCK_LOG="$bd_log" \
+    HOOK_MOCK_LOG="$hook_log" \
+    run_trudger
+
+  [ "$status" -eq 0 ]
+  run grep -q -- "tr-14 --needs-human" "$hook_log"
+  [ "$status" -eq 0 ]
+  run grep -q -- "label add tr-14" "$bd_log"
+  [ "$status" -ne 0 ]
+  run grep -q -- "label remove tr-14" "$bd_log"
   [ "$status" -ne 0 ]
 }
 
