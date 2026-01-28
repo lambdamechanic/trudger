@@ -34,7 +34,17 @@ trudger
 
 Trudger reads `~/.config/trudger.yml` on startup. If the file is missing, it prints a warning and uses defaults.
 
-Example:
+Defaults:
+- `codex_command`: `codex --yolo exec`
+- `next_task_command`: empty (uses `bd ready` selection)
+- `review_loop_limit`: `5`
+- `log_path`: `./.trudger.log`
+- `hooks.on_completed`: empty
+- `hooks.on_requires_human`: empty
+- `labels.trudgeable`: `trudgeable`
+- `labels.requires_human`: `requires-human`
+
+Example (defaults shown):
 
 ```yaml
 codex_command: "codex --yolo exec"
