@@ -2,7 +2,7 @@
 set -euo pipefail
 set -o errtrace
 
-# trudger: loop over bd tasks and run Codex solve+review prompts.
+# trudger: loop over br tasks and run Codex solve+review prompts.
 
 PROMPT_TRUDGE="${HOME}/.codex/prompts/trudge.md"
 PROMPT_REVIEW="${HOME}/.codex/prompts/trudge_review.md"
@@ -13,8 +13,8 @@ usage() {
   cat <<'EOF'
 Usage: ./trudger [task_id ...]
 
-Loop over ready bd tasks and run Codex solve+review prompts.
-If task IDs are provided, they run first (in order) before bd ready tasks.
+Loop over ready br tasks and run Codex solve+review prompts.
+If task IDs are provided, they run first (in order) before br ready tasks.
 Configuration is loaded from ~/.config/trudger.yml.
 EOF
 }
@@ -188,7 +188,7 @@ Missing config file: ~/.config/trudger.yml
 Sample configurations:
 
 1) Trudgeable with hooks
-   - Selects the next ready bd task labeled "trudgeable".
+   - Selects the next ready br task labeled "trudgeable".
    - On completion, removes the "trudgeable" label.
    - On requires-human, removes "trudgeable" and adds "human-required".
    mkdir -p ~/.config && curl -fsSL https://raw.githubusercontent.com/lambdamechanic/trudger/main/sample_configuration/trudgeable-with-hooks.yml -o ~/.config/trudger.yml
@@ -327,7 +327,7 @@ get_next_task_id() {
 load_task_state() {
   local task_id="$1"
   local raw
-  raw="$(bd show "$task_id" --json)"
+  raw="$(br show "$task_id" --json)"
   printf '%s' "$raw" | jq -r '
     def item: if type == "array" then .[0] else . end;
     if (type == "array" and length == 0) or type == "null" then
@@ -482,7 +482,7 @@ while true; do
   update_tmux_name "$current_phase" "$task_id"
   log_transition "state=SOLVING task=${task_id} loop=${review_loops}"
 
-  bd update "$task_id" --status in_progress
+  br update "$task_id" --status in_progress
   if ! "${codex_cmd[@]}" "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "solve_failed task=${task_id}"

@@ -15,7 +15,7 @@ The system SHALL require a configuration file at `~/.config/trudger.yml` before 
 - **THEN** it loads settings from the file and continues execution
 
 ### Requirement: Configured task commands
-The system SHALL load task command configuration from `~/.config/trudger.yml` and use it for task selection, show, and update operations. The system SHALL NOT invoke `bd` directly; any `bd` usage must be expressed in configured commands.
+The system SHALL load task command configuration from `~/.config/trudger.yml` and use it for task selection, show, and update operations. The system SHALL NOT invoke `br` directly; any `br` usage must be expressed in configured commands.
 
 #### Scenario: Commands configured
 - **GIVEN** task commands are configured

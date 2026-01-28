@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_path="${BR_MOCK_LOG:-}"
+if [[ -n "${log_path}" ]]; then
+  printf 'br %s\n' "$*" >> "${log_path}"
+fi
+
+cmd="${1:-}"
+shift || true
+
+case "${cmd}" in
+  ready)
+    if printf '%s' "$*" | grep -q -- '--json'; then
+      if [[ -n "${BR_MOCK_READY_QUEUE:-}" && -f "${BR_MOCK_READY_QUEUE}" ]]; then
+        if read -r line < "${BR_MOCK_READY_QUEUE}"; then
+          tail -n +2 "${BR_MOCK_READY_QUEUE}" > "${BR_MOCK_READY_QUEUE}.tmp" || true
+          mv "${BR_MOCK_READY_QUEUE}.tmp" "${BR_MOCK_READY_QUEUE}"
+          if [[ -n "${line}" ]]; then
+            printf '%s\n' "${line}"
+          else
+            printf '%s\n' "[]"
+          fi
+        else
+          printf '%s\n' "[]"
+        fi
+      else
+        printf '%s\n' "${BR_MOCK_READY_JSON:-[]}"
+      fi
+    else
+      printf '%s\n' "${BR_MOCK_READY_TEXT:-}" 
+    fi
+    ;;
+  show)
+    if printf '%s' "$*" | grep -q -- '--json'; then
+      if [[ -n "${BR_MOCK_SHOW_QUEUE:-}" && -f "${BR_MOCK_SHOW_QUEUE}" ]]; then
+        if read -r line < "${BR_MOCK_SHOW_QUEUE}"; then
+          tail -n +2 "${BR_MOCK_SHOW_QUEUE}" > "${BR_MOCK_SHOW_QUEUE}.tmp" || true
+          mv "${BR_MOCK_SHOW_QUEUE}.tmp" "${BR_MOCK_SHOW_QUEUE}"
+          if [[ -n "${line}" ]]; then
+            printf '%s\n' "${line}"
+          else
+            printf '%s\n' "[]"
+          fi
+        else
+          printf '%s\n' "[]"
+        fi
+      else
+        printf '%s\n' "${BR_MOCK_SHOW_JSON:-[]}"
+      fi
+    else
+      printf '%s\n' "${BR_MOCK_SHOW_TEXT:-}" 
+    fi
+    ;;
+  label)
+    # add/remove/list commands are just logged
+    ;;
+  comments)
+    # comments add
+    ;;
+  update)
+    # update notes
+    ;;
+  *)
+    printf 'br stub: unsupported command %s\n' "${cmd}" >&2
+    exit 1
+    ;;
+esac

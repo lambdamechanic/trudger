@@ -1,14 +1,14 @@
 ---
-description: Work a bd task in the trudger loop.
-argument-hint: bd-task-id
+description: Work a br task in the trudger loop.
+argument-hint: br-task-id
 ---
 
 $ARGUMENTS
-Work the specified bd task to completion in the current repo.
+Work the specified br task to completion in the current repo.
 
 **Requirements**
-- Load the task details with `bd show <id> --json`.
-- Agent binaries available: `bd`, `codex`, `jq`, `beads_rust`, `MCPShell`.
+- Load the task details with `br show <id> --json`.
+- Agent binaries available: `br`, `codex`, `jq`, `beads_rust`, `MCPShell`.
 - Follow the repo's AGENTS.md workflow and any referenced specs.
 - Keep changes minimal and aligned to the task scope.
 - Run the relevant tests/quality gates.
