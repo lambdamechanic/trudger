@@ -1,15 +1,11 @@
 # Robot triage
 # - Selects tasks via `bv --robot-triage`.
-# - No label changes (hooks and labels disabled).
+# - No label changes (hooks are no-ops).
 codex_command: "codex --yolo exec"
 next_task_command: "bv --robot-triage"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
 hooks:
-  on_completed: ""
-  on_requires_human: ""
-
-labels:
-  trudgeable: ""
-  requires_human: ""
+  on_completed: "true"
+  on_requires_human: "true"

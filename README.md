@@ -9,11 +9,11 @@ It is slower and more serial, but if you have a large number of smaller projects
 
 ## What it does
 
-- Finds the next `bd` task labeled `trudgeable` (highest priority first).
+- Uses the configured `next_task_command` to select the next task.
 - Marks the task `in_progress`.
 - Runs Codex solve + review prompts for that task.
-- On success, removes the `trudgeable` label and moves on.
-- If the task needs a human, it labels it `requires-human`.
+- On success, invokes `hooks.on_completed`.
+- If the task needs a human, invokes `hooks.on_requires_human`.
 
 ## Requirements
 
@@ -41,7 +41,7 @@ Sample configs:
   - On requires-human, removes `trudgeable` and adds `human-required`.
 - `sample_configuration/robot-triage.yml`
   - Selects tasks via `bv --robot-triage`.
-  - No label changes (hooks and labels disabled).
+  - No label changes (hooks are no-ops).
 
 Example:
 
@@ -52,19 +52,14 @@ review_loop_limit: 5
 log_path: "./.trudger.log"
 
 hooks:
-  on_completed: ""
-  on_requires_human: ""
-
-labels:
-  trudgeable: "trudgeable"
-  requires_human: "requires-human"
+  on_completed: "bash -lc 'bd label remove \"$1\" \"trudgeable\"'"
+  on_requires_human: "bash -lc 'bd label remove \"$1\" \"trudgeable\"; bd label add \"$1\" \"human-required\"'"
 ```
 
 Notes:
 - `codex_command` is used for solve; review uses the same command with `resume --last` appended.
 - `next_task_command` runs in a shell and the first whitespace-delimited token of stdout is used as the task id.
-- When hooks are configured, label updates are skipped. When hooks are not configured, labels are used if present.
-- Set label values to empty strings to disable label behavior.
+- `hooks.on_completed` and `hooks.on_requires_human` are required; label updates must happen in hooks if you want them.
 
 ## Install
 
@@ -92,11 +87,11 @@ The prompt sources live in `prompts/` and are installed by `./install.sh`.
 
 ## Behavior details
 
-- Task selection uses `next_task_command` when configured, otherwise `bd ready` with optional label filtering.
-- If a task is closed after review, Trudger either runs `on_completed` or removes the trudgeable label (when configured).
-- If a task is marked requires-human after review, Trudger either runs `on_requires_human` or updates labels (when configured).
+- Task selection uses `next_task_command` and expects the first whitespace-delimited token of stdout to be the task id.
+- If a task is closed after review, Trudger runs `hooks.on_completed`.
+- If a task remains open after review, Trudger runs `hooks.on_requires_human`.
 
 ## Exit behavior
 
-- Exits `0` when there are no matching tasks left.
-- Exits `1` if a task is neither closed nor marked `requires-human` after review.
+- Exits `0` when there are no tasks returned by `next_task_command`.
+- Exits `1` if configuration is missing/invalid or a task lacks status after review.

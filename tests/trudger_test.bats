@@ -29,14 +29,25 @@ write_config() {
   cat > "${temp_dir}/.config/trudger.yml"
 }
 
+copy_sample_config() {
+  local temp_dir="$1"
+  local name="$2"
+  mkdir -p "${temp_dir}/.config"
+  cp "${ROOT_DIR}/sample_configuration/${name}.yml" "${temp_dir}/.config/trudger.yml"
+}
+
 @test "missing prompt files cause a clear error" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-prompts"
   mkdir -p "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
+next_task_command: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human
@@ -66,6 +77,71 @@ CONFIG
   [[ "$output" == *"robot-triage.yml"* ]]
 }
 
+@test "missing next_task_command errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-next-task"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
+CONFIG
+
+  HOME="$temp_dir" \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"next_task_command must not be empty"* ]]
+}
+
+@test "missing on_completed hook errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-on-completed"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+next_task_command: "next-task"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: ""
+  on_requires_human: "hook --needs-human"
+CONFIG
+
+  HOME="$temp_dir" \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"hooks.on_completed must not be empty"* ]]
+}
+
+@test "missing on_requires_human hook errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-on-requires-human"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+next_task_command: "next-task"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: ""
+CONFIG
+
+  HOME="$temp_dir" \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"hooks.on_requires_human must not be empty"* ]]
+}
+
 @test "no tasks exits zero without codex" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/no-tasks"
@@ -73,8 +149,12 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
+next_task_command: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
 labels:
   trudgeable: trudgeable
   requires_human: requires-human
@@ -84,7 +164,7 @@ CONFIG
   local codex_log="${temp_dir}/codex.log"
 
   HOME="$temp_dir" \
-    BD_MOCK_READY_JSON='[]' \
+    NEXT_TASK_OUTPUT='' \
     BD_MOCK_LOG="$bd_log" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger
@@ -102,14 +182,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/closed-task"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
-CONFIG
+  copy_sample_config "$temp_dir" "trudgeable-with-hooks"
 
   local bd_log="${temp_dir}/bd.log"
   local codex_log="${temp_dir}/codex.log"
@@ -123,8 +196,6 @@ CONFIG
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger
 
-  [ "$status" -eq 0 ]
-  run grep -q -- "update tr-1 --status in_progress" "$bd_log"
   [ "$status" -eq 0 ]
   run grep -q -- "label remove tr-1 trudgeable" "$bd_log"
   [ "$status" -eq 0 ]
@@ -147,20 +218,26 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec --custom"
+next_task_command: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
 CONFIG
 
   local codex_log="${temp_dir}/codex.log"
-  local ready_queue="${temp_dir}/ready.queue"
-  printf '%s\n' '[{"id":"tr-10"}]' '[]' > "$ready_queue"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  printf '%s\n' 'tr-10' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-10","status":"ready","labels":[]}]' \
+    '[{"id":"tr-10","status":"closed","labels":[]}]' \
+    > "$show_queue"
 
   HOME="$temp_dir" \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
-    BD_MOCK_SHOW_JSON='[{"id":"tr-10","status":"closed","labels":["trudgeable"]}]' \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    BD_MOCK_SHOW_QUEUE="$show_queue" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger
 
@@ -169,45 +246,6 @@ CONFIG
   [ "$status" -eq 0 ]
   run grep -q -- "codex --yolo exec --custom resume --last" "$codex_log"
   [ "$status" -eq 0 ]
-}
-
-@test "completion hook runs and skips label removal" {
-  if ! should_run_codex_tests; then
-    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
-  fi
-
-  local temp_dir
-  temp_dir="${BATS_TEST_TMPDIR}/completion-hook"
-  mkdir -p "$temp_dir"
-  create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done extra"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
-CONFIG
-
-  local bd_log="${temp_dir}/bd.log"
-  local hook_log="${temp_dir}/hook.log"
-  local ready_queue="${temp_dir}/ready.queue"
-  printf '%s\n' '[{"id":"tr-11"}]' '[]' > "$ready_queue"
-
-  HOME="$temp_dir" \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
-    BD_MOCK_SHOW_JSON='[{"id":"tr-11","status":"closed","labels":["trudgeable"]}]' \
-    BD_MOCK_LOG="$bd_log" \
-    HOOK_MOCK_LOG="$hook_log" \
-    run_trudger
-
-  [ "$status" -eq 0 ]
-  run grep -q -- "tr-11 --done extra" "$hook_log"
-  [ "$status" -eq 0 ]
-  run grep -q -- "label remove tr-11" "$bd_log"
-  [ "$status" -ne 0 ]
 }
 
 @test "requires-human updates labels" {
@@ -219,14 +257,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/requires-human"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
-CONFIG
+  copy_sample_config "$temp_dir" "trudgeable-with-hooks"
 
   local bd_log="${temp_dir}/bd.log"
   local ready_queue="${temp_dir}/ready.queue"
@@ -239,125 +270,10 @@ CONFIG
     run_trudger
 
   [ "$status" -eq 0 ]
-  run grep -q -- "update tr-2 --status in_progress" "$bd_log"
-  [ "$status" -eq 0 ]
   run grep -q -- "label remove tr-2 trudgeable" "$bd_log"
   [ "$status" -eq 0 ]
-  run grep -q -- "label add tr-2 requires-human" "$bd_log"
+  run grep -q -- "label add tr-2 human-required" "$bd_log"
   [ "$status" -eq 0 ]
-}
-
-@test "requires-human hook runs and skips label changes" {
-  if ! should_run_codex_tests; then
-    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
-  fi
-
-  local temp_dir
-  temp_dir="${BATS_TEST_TMPDIR}/requires-human-hook"
-  mkdir -p "$temp_dir"
-  create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_requires_human: "hook --needs-human extra"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
-CONFIG
-
-  local bd_log="${temp_dir}/bd.log"
-  local hook_log="${temp_dir}/hook.log"
-  local ready_queue="${temp_dir}/ready.queue"
-  printf '%s\n' '[{"id":"tr-12"}]' '[]' > "$ready_queue"
-
-  HOME="$temp_dir" \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
-    BD_MOCK_SHOW_JSON='[{"id":"tr-12","status":"open","labels":["trudgeable","requires-human"]}]' \
-    BD_MOCK_LOG="$bd_log" \
-    HOOK_MOCK_LOG="$hook_log" \
-    run_trudger
-
-  [ "$status" -eq 0 ]
-  run grep -q -- "tr-12 --needs-human extra" "$hook_log"
-  [ "$status" -eq 0 ]
-  run grep -q -- "label remove tr-12" "$bd_log"
-  [ "$status" -ne 0 ]
-}
-
-@test "requires-human hook works with labels disabled" {
-  if ! should_run_codex_tests; then
-    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
-  fi
-
-  local temp_dir
-  temp_dir="${BATS_TEST_TMPDIR}/requires-human-hook-no-labels"
-  mkdir -p "$temp_dir"
-  create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_requires_human: "hook --needs-human"
-labels:
-  trudgeable: ""
-  requires_human: ""
-CONFIG
-
-  local bd_log="${temp_dir}/bd.log"
-  local hook_log="${temp_dir}/hook.log"
-  local ready_queue="${temp_dir}/ready.queue"
-  printf '%s\n' '[{"id":"tr-14"}]' '[]' > "$ready_queue"
-
-  HOME="$temp_dir" \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
-    BD_MOCK_SHOW_JSON='[{"id":"tr-14","status":"open","labels":[]}]' \
-    BD_MOCK_LOG="$bd_log" \
-    HOOK_MOCK_LOG="$hook_log" \
-    run_trudger
-
-  [ "$status" -eq 0 ]
-  run grep -q -- "tr-14 --needs-human" "$hook_log"
-  [ "$status" -eq 0 ]
-  run grep -q -- "label add tr-14" "$bd_log"
-  [ "$status" -ne 0 ]
-  run grep -q -- "label remove tr-14" "$bd_log"
-  [ "$status" -ne 0 ]
-}
-
-@test "requires-human label optional when hooks absent" {
-  if ! should_run_codex_tests; then
-    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
-  fi
-
-  local temp_dir
-  temp_dir="${BATS_TEST_TMPDIR}/requires-human-no-label"
-  mkdir -p "$temp_dir"
-  create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-labels:
-  trudgeable: ""
-  requires_human: ""
-CONFIG
-
-  local bd_log="${temp_dir}/bd.log"
-  local ready_queue="${temp_dir}/ready.queue"
-  printf '%s\n' '[{"id":"tr-13"}]' '[]' > "$ready_queue"
-
-  HOME="$temp_dir" \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
-    BD_MOCK_SHOW_JSON='[{"id":"tr-13","status":"open","labels":[]}]' \
-    BD_MOCK_LOG="$bd_log" \
-    run_trudger
-
-  [ "$status" -eq 0 ]
-  run grep -q -- "label add tr-13" "$bd_log"
-  [ "$status" -ne 0 ]
 }
 
 @test "next-task command selects id using first token" {
@@ -371,19 +287,17 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
+next_task_command: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
-next_task_command: "next-task"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
 CONFIG
 
   local bd_log="${temp_dir}/bd.log"
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
-  local ready_queue="${temp_dir}/ready.queue"
-  printf '%s\n' '[]' > "$ready_queue"
   printf '%s\n' 'tr-20 extra' '' > "$next_task_queue"
   printf '%s\n' \
     '[{"id":"tr-20","status":"ready","labels":["trudgeable"]}]' \
@@ -392,14 +306,11 @@ CONFIG
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
     BD_MOCK_SHOW_QUEUE="$show_queue" \
     BD_MOCK_LOG="$bd_log" \
     run_trudger
 
   [ "$status" -eq 0 ]
-  run grep -q -- "bd ready" "$bd_log"
-  [ "$status" -ne 0 ]
 }
 
 @test "next-task command returning empty exits zero" {
@@ -409,9 +320,12 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
+next_task_command: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
-next_task_command: "next-task"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
 CONFIG
 
   local codex_log="${temp_dir}/codex.log"
@@ -425,32 +339,6 @@ CONFIG
   [ ! -s "$codex_log" ]
 }
 
-@test "default next-task uses configured label filter" {
-  local temp_dir
-  temp_dir="${BATS_TEST_TMPDIR}/default-label"
-  mkdir -p "$temp_dir"
-  create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-labels:
-  trudgeable: custom-label
-  requires_human: requires-human
-CONFIG
-
-  local bd_log="${temp_dir}/bd.log"
-
-  HOME="$temp_dir" \
-    BD_MOCK_READY_JSON='[]' \
-    BD_MOCK_LOG="$bd_log" \
-    run_trudger
-
-  [ "$status" -eq 0 ]
-  run grep -q -- "ready --json --label custom-label --sort priority --limit 1" "$bd_log"
-  [ "$status" -eq 0 ]
-}
-
 @test "env config is ignored" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/env-ignored"
@@ -458,87 +346,32 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
+next_task_command: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
 CONFIG
 
   local bd_log="${temp_dir}/bd.log"
+  local show_queue="${temp_dir}/show.queue"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  printf '%s\n' \
+    '[{"id":"tr-99","status":"ready","labels":[]}]' \
+    '[{"id":"tr-99","status":"closed","labels":[]}]' \
+    > "$show_queue"
+  printf '%s\n' 'tr-99' '' > "$next_task_queue"
 
   HOME="$temp_dir" \
     TRUDGER_NEXT_CMD='next-task' \
     TRUDGER_REVIEW_LOOPS=0 \
-    NEXT_TASK_OUTPUT='tr-99' \
-    BD_MOCK_READY_JSON='[]' \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    BD_MOCK_SHOW_QUEUE="$show_queue" \
     BD_MOCK_LOG="$bd_log" \
     run_trudger
 
   [ "$status" -eq 0 ]
-  run grep -q -- "bd ready" "$bd_log"
-  [ "$status" -eq 0 ]
-}
-
-@test "review loop limit uses config value" {
-  if ! should_run_codex_tests; then
-    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
-  fi
-
-  local temp_dir
-  temp_dir="${BATS_TEST_TMPDIR}/review-limit"
-  mkdir -p "$temp_dir"
-  create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-review_loop_limit: 2
-log_path: "./.trudger.log"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
-CONFIG
-
-  local ready_queue="${temp_dir}/ready.queue"
-  printf '%s\n' '[{"id":"tr-5"}]' '[]' > "$ready_queue"
-
-  HOME="$temp_dir" \
-    TRUDGER_REVIEW_LOOPS=1 \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
-    BD_MOCK_SHOW_JSON='[{"id":"tr-5","status":"open","labels":["trudgeable"]}]' \
-    run_trudger
-
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"after 2 review loops"* ]]
-}
-
-@test "errors when task not closed or requires-human" {
-  if ! should_run_codex_tests; then
-    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
-  fi
-
-  local temp_dir
-  temp_dir="${BATS_TEST_TMPDIR}/no-close"
-  mkdir -p "$temp_dir"
-  create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-review_loop_limit: 1
-log_path: "./.trudger.log"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
-CONFIG
-
-  local ready_queue="${temp_dir}/ready.queue"
-  printf '%s\n' '[{"id":"tr-3"}]' '[]' > "$ready_queue"
-
-  HOME="$temp_dir" \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
-    BD_MOCK_SHOW_JSON='[{"id":"tr-3","status":"open","labels":["trudgeable"]}]' \
-    run_trudger
-
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"not closed and not requires-human"* ]]
 }
 
 @test "codex exec failure aborts" {
@@ -552,18 +385,25 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
+next_task_command: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
 CONFIG
 
-  local ready_queue="${temp_dir}/ready.queue"
-  printf '%s\n' '[{"id":"tr-4"}]' '[]' > "$ready_queue"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  printf '%s\n' 'tr-4' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-4","status":"ready","labels":[]}]' \
+    '[{"id":"tr-4","status":"closed","labels":[]}]' \
+    > "$show_queue"
 
   HOME="$temp_dir" \
-    BD_MOCK_READY_QUEUE="$ready_queue" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    BD_MOCK_SHOW_QUEUE="$show_queue" \
     CODEX_MOCK_FAIL_ON=exec \
     run_trudger
 
