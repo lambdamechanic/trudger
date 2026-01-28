@@ -194,7 +194,7 @@ Sample configurations:
    mkdir -p ~/.config && curl -fsSL https://raw.githubusercontent.com/lambdamechanic/trudger/main/sample_configuration/trudgeable-with-hooks.yml -o ~/.config/trudger.yml
 
 2) Robot triage
-   - Selects tasks via `bv --robot-triage`.
+   - Selects tasks via `bv --robot-triage`, using the first top pick when present.
    - No label changes (hooks are no-ops).
    mkdir -p ~/.config && curl -fsSL https://raw.githubusercontent.com/lambdamechanic/trudger/main/sample_configuration/robot-triage.yml -o ~/.config/trudger.yml
 EOF
