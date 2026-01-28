@@ -40,7 +40,7 @@ Sample configs:
   - On completion, removes `trudgeable`.
   - On requires-human, removes `trudgeable` and adds `human-required`.
 - `sample_configuration/robot-triage.yml`
-  - Selects tasks via `bv --robot-triage`, using the first top pick when present.
+  - Selects tasks via `bv --robot-next`.
   - No label changes (hooks are no-ops).
 
 Example:

@@ -1,8 +1,8 @@
 # Robot triage
-# - Selects tasks via `bv --robot-triage`, using the first top pick when present.
+# - Selects tasks via `bv --robot-next`.
 # - No label changes (hooks are no-ops).
 codex_command: "codex --yolo exec"
-next_task_command: "bv --robot-triage --json | jq -r '.triage.quick_ref.top_picks[0].id // empty'"
+next_task_command: "bv --robot-next --json | jq -r '.id // empty'"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
