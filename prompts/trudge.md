@@ -8,6 +8,7 @@ Work the specified bd task to completion in the current repo.
 
 **Requirements**
 - Load the task details with `bd show <id> --json`.
+- Agent binaries available: `bd`, `codex`, `jq`, `beads_rust`, `MCPShell`.
 - Follow the repo's AGENTS.md workflow and any referenced specs.
 - Keep changes minimal and aligned to the task scope.
 - Run the relevant tests/quality gates.
