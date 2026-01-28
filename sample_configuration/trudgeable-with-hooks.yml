@@ -1,5 +1,5 @@
 codex_command: "codex --yolo exec"
-next_task_command: ""
+next_task_command: "bd ready --json --label trudgeable --sort priority --limit 1 | jq -r 'if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end'"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
