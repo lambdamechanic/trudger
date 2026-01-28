@@ -1,0 +1,12 @@
+codex_command: "codex --yolo exec"
+next_task_command: ""
+review_loop_limit: 5
+log_path: "./.trudger.log"
+
+hooks:
+  on_completed: "./sample_configuration/hooks/remove-trudgeable"
+  on_requires_human: "./sample_configuration/hooks/add-human-required"
+
+labels:
+  trudgeable: "trudgeable"
+  requires_human: ""

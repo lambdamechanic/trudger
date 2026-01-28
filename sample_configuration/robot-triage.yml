@@ -1,0 +1,12 @@
+codex_command: "codex --yolo exec"
+next_task_command: "bv --robot-triage"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+
+hooks:
+  on_completed: ""
+  on_requires_human: ""
+
+labels:
+  trudgeable: ""
+  requires_human: ""
