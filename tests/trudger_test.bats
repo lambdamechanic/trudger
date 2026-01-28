@@ -321,13 +321,20 @@ labels:
 CONFIG
 
   local bd_log="${temp_dir}/bd.log"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
   local ready_queue="${temp_dir}/ready.queue"
   printf '%s\n' '[]' > "$ready_queue"
+  printf '%s\n' 'tr-20 extra' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-20","status":"ready","labels":["trudgeable"]}]' \
+    '[{"id":"tr-20","status":"closed","labels":["trudgeable"]}]' \
+    > "$show_queue"
 
   HOME="$temp_dir" \
-    NEXT_TASK_OUTPUT='tr-20 extra' \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     BD_MOCK_READY_QUEUE="$ready_queue" \
-    BD_MOCK_SHOW_JSON='[{"id":"tr-20","status":"closed","labels":["trudgeable"]}]' \
+    BD_MOCK_SHOW_QUEUE="$show_queue" \
     BD_MOCK_LOG="$bd_log" \
     run_trudger
 

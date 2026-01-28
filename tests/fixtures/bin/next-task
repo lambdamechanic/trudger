@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -n "${NEXT_TASK_OUTPUT_QUEUE:-}" && -f "${NEXT_TASK_OUTPUT_QUEUE}" ]]; then
+  if read -r line < "${NEXT_TASK_OUTPUT_QUEUE}"; then
+    tail -n +2 "${NEXT_TASK_OUTPUT_QUEUE}" > "${NEXT_TASK_OUTPUT_QUEUE}.tmp" || true
+    mv "${NEXT_TASK_OUTPUT_QUEUE}.tmp" "${NEXT_TASK_OUTPUT_QUEUE}"
+    printf '%s' "${line}"
+  fi
+  exit 0
+fi
+
 if [[ -n "${NEXT_TASK_OUTPUT_FILE:-}" && -f "${NEXT_TASK_OUTPUT_FILE}" ]]; then
   cat "${NEXT_TASK_OUTPUT_FILE}"
   exit 0

@@ -33,7 +33,21 @@ case "${cmd}" in
     ;;
   show)
     if printf '%s' "$*" | grep -q -- '--json'; then
-      printf '%s\n' "${BD_MOCK_SHOW_JSON:-[]}"
+      if [[ -n "${BD_MOCK_SHOW_QUEUE:-}" && -f "${BD_MOCK_SHOW_QUEUE}" ]]; then
+        if read -r line < "${BD_MOCK_SHOW_QUEUE}"; then
+          tail -n +2 "${BD_MOCK_SHOW_QUEUE}" > "${BD_MOCK_SHOW_QUEUE}.tmp" || true
+          mv "${BD_MOCK_SHOW_QUEUE}.tmp" "${BD_MOCK_SHOW_QUEUE}"
+          if [[ -n "${line}" ]]; then
+            printf '%s\n' "${line}"
+          else
+            printf '%s\n' "[]"
+          fi
+        else
+          printf '%s\n' "[]"
+        fi
+      else
+        printf '%s\n' "${BD_MOCK_SHOW_JSON:-[]}"
+      fi
     else
       printf '%s\n' "${BD_MOCK_SHOW_TEXT:-}" 
     fi
