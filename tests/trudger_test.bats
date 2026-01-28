@@ -19,8 +19,8 @@ should_run_codex_tests() {
 create_prompts() {
   local temp_dir="$1"
   mkdir -p "${temp_dir}/.codex/prompts"
-  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge.md"
-  printf '%s\n' '$ARGUMENTS' > "${temp_dir}/.codex/prompts/trudge_review.md"
+  printf '%s\n' "\$ARGUMENTS" > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' "\$ARGUMENTS" > "${temp_dir}/.codex/prompts/trudge_review.md"
 }
 
 write_config() {

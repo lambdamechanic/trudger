@@ -261,9 +261,11 @@ load_config() {
 
 parse_command() {
   local input="$1"
+  # shellcheck disable=SC2034
   local -n out="$2"
   out=()
   if [[ -n "$input" ]]; then
+    # shellcheck disable=SC2034
     read -r -a out <<<"$input"
   fi
 }
@@ -574,8 +576,10 @@ while true; do
   fi
 done
 
-export TRUDGER_COMPLETED="$(IFS=','; printf '%s' "${completed_tasks[*]:-}")"
-export TRUDGER_NEEDS_HUMAN="$(IFS=','; printf '%s' "${needs_human_tasks[*]:-}")"
+TRUDGER_COMPLETED="$(IFS=','; printf '%s' "${completed_tasks[*]:-}")"
+export TRUDGER_COMPLETED
+TRUDGER_NEEDS_HUMAN="$(IFS=','; printf '%s' "${needs_human_tasks[*]:-}")"
+export TRUDGER_NEEDS_HUMAN
 
 log_transition "reexec next_tasks=${#manual_tasks[@]}"
 exec "$0" "${manual_tasks[@]}"
