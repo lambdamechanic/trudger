@@ -394,6 +394,7 @@ CONFIG
 
   HOME="$temp_dir" \
     TRUDGER_NEXT_CMD='next-task' \
+    TRUDGER_REVIEW_LOOPS=0 \
     NEXT_TASK_OUTPUT='tr-99' \
     BD_MOCK_READY_JSON='[]' \
     BD_MOCK_LOG="$bd_log" \
