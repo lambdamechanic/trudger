@@ -5,7 +5,7 @@ log_path: "./.trudger.log"
 
 hooks:
   on_completed: "bash -lc 'bd label remove \"$1\" \"trudgeable\"'"
-  on_requires_human: "bash -lc 'bd label add \"$1\" \"human-required\"'"
+  on_requires_human: "bash -lc 'bd label remove \"$1\" \"trudgeable\"; bd label add \"$1\" \"human-required\"'"
 
 labels:
   trudgeable: "trudgeable"
