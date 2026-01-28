@@ -173,6 +173,41 @@ CONFIG
   [ ! -s "$codex_log" ]
 }
 
+@test "open task is treated as ready" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/open-task"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+next_task_command: "next-task"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
+CONFIG
+
+  local codex_log="${temp_dir}/codex.log"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  printf '%s\n' 'tr-42' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-42","status":"open","labels":[]}]' \
+    '[{"id":"tr-42","status":"closed","labels":[]}]' \
+    > "$show_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger
+
+  [ "$status" -eq 0 ]
+  run grep -q -- "tr-42" "$codex_log"
+  [ "$status" -eq 0 ]
+}
+
 @test "closed task removes trudgeable label" {
   if ! should_run_codex_tests; then
     skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"

@@ -345,10 +345,15 @@ ensure_task_ready() {
   mapfile -t task_state < <(load_task_state "$task_id")
   status="${task_state[0]:-}"
 
-  if [[ "$status" != "ready" ]]; then
-    printf 'Task %s is not ready (status: %s).\n' "$task_id" "${status:-unknown}" >&2
-    exit 1
-  fi
+  case "$status" in
+    ready|open)
+      return 0
+      ;;
+    *)
+      printf 'Task %s is not ready (status: %s).\n' "$task_id" "${status:-unknown}" >&2
+      exit 1
+      ;;
+  esac
 }
 
 # --- Prompt rendering ---
