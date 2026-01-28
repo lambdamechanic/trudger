@@ -19,6 +19,12 @@ jobs:
       - name: Install bats
         run: sudo apt-get update && sudo apt-get install -y bats
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install br (beads_rust)
+        run: cargo install --git https://github.com/Dicklesworthstone/beads_rust --locked --bin br
+
       - name: ShellCheck scripts
         run: |
           shellcheck trudger \
