@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Reuse the br fixture behavior for bd during tests.
+exec br "$@"
