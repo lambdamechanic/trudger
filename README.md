@@ -9,17 +9,16 @@ It is slower and more serial, but if you have a large number of smaller projects
 
 ## What it does
 
-- Uses the configured `next_task_command` to select the next task.
-- Marks the task `in_progress`.
+- Uses `commands.next_task` to select the next task.
+- Marks the task `in_progress` via `commands.task_update_in_progress`.
 - Runs Codex solve + review prompts for that task.
 - On success, invokes `hooks.on_completed`.
 - If the task needs a human, invokes `hooks.on_requires_human`.
 
 ## Requirements
 
-- `br` CLI on your PATH
 - `codex` CLI on your PATH
-- `jq` on your PATH
+- Any task system CLIs referenced by your configured commands (for example `bd`, `br`, `bv`)
 - Prompt files installed under `~/.codex/prompts/` (see below):
   - `trudge.md`
   - `trudge_review.md`
@@ -47,7 +46,10 @@ Example:
 
 ```yaml
 codex_command: "codex --yolo exec"
-next_task_command: "br ready --json --label trudgeable --sort priority --limit 1 | jq -r 'if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end'"
+commands:
+  next_task: 'task_id=$(bd ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
+  task_show: "bd show"
+  task_update_in_progress: "bd update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
@@ -58,8 +60,11 @@ hooks:
 
 Notes:
 - `codex_command` is used for solve; review uses the same command with `resume --last` appended.
-- `next_task_command` runs in a shell and the first whitespace-delimited token of stdout is used as the task id.
+- `commands.next_task` runs in a shell and the first whitespace-delimited token of stdout is used as the task id.
+- `commands.task_show` output is passed to Codex unparsed.
+- `commands.task_update_in_progress` output is ignored.
 - `hooks.on_completed` and `hooks.on_requires_human` are required; label updates must happen in hooks if you want them.
+- Hook commands honor shell quoting. If a hook contains `$1`/`${1}`, Trudger runs it via `bash -lc` and passes the task id as `$1`; otherwise the task id is prepended as the first argument.
 
 ## Install
 
@@ -87,11 +92,13 @@ The prompt sources live in `prompts/` and are installed by `./install.sh`.
 
 ## Behavior details
 
-- Task selection uses `next_task_command` and expects the first whitespace-delimited token of stdout to be the task id.
+- Task selection uses `commands.next_task` and expects the first whitespace-delimited token of stdout to be the task id.
+- `commands.task_show` output is treated as free-form task details for Codex.
 - If a task is closed after review, Trudger runs `hooks.on_completed`.
 - If a task remains open after review, Trudger runs `hooks.on_requires_human`.
 
 ## Exit behavior
 
-- Exits `0` when there are no tasks returned by `next_task_command`.
+- Exits `0` when `commands.next_task` exits `1` (no tasks).
+- Exits non-zero when `commands.next_task` fails for any other reason.
 - Exits `1` if configuration is missing/invalid or a task lacks status after review.
