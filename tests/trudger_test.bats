@@ -78,6 +78,17 @@ copy_sample_config() {
   cp "${ROOT_DIR}/sample_configuration/${name}.yml" "${temp_dir}/.config/trudger.yml"
 }
 
+make_minimal_path() {
+  local temp_dir="$1"
+  local bin_dir="${temp_dir}/bin"
+  mkdir -p "$bin_dir"
+  local cmd
+  for cmd in bash awk sed date hostname jq cat; do
+    ln -sf "$(command -v "$cmd")" "${bin_dir}/${cmd}"
+  done
+  printf '%s' "$bin_dir"
+}
+
 @test "missing prompt files cause a clear error" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-prompts"
@@ -175,6 +186,93 @@ copy_sample_config() {
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"hooks.on_requires_human must not be empty"* ]]
+}
+
+@test "empty codex_command errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/empty-codex-command"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  BASE_CODEX_COMMAND="" write_base_config "$temp_dir"
+
+  HOME="$temp_dir" \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"codex_command must not be empty"* ]]
+}
+
+@test "empty log_path errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/empty-log-path"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  BASE_LOG_PATH="" write_base_config "$temp_dir"
+
+  HOME="$temp_dir" \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"log_path must not be empty"* ]]
+}
+
+@test "null review_loop_limit errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/null-review-limit"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+
+  write_config "$temp_dir" <<'EOF'
+codex_command: "codex --yolo exec"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
+review_loop_limit: null
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
+EOF
+
+  HOME="$temp_dir" \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"review_loop_limit must be a positive integer"* ]]
+}
+
+@test "unknown config keys warn" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/unknown-config-keys"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  BASE_EXTRA_CONFIG="unknown_key: 'mystery'" write_base_config "$temp_dir"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT='' \
+    run_trudger
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Warning: Unknown config key: unknown_key"* ]]
+}
+
+@test "missing yq prints clear error" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-yq"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_base_config "$temp_dir"
+
+  local minimal_path
+  minimal_path="$(make_minimal_path "$temp_dir")"
+
+  HOME="$temp_dir" \
+    PATH="$minimal_path" \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Missing dependency: yq"* ]]
 }
 
 @test "no tasks exits zero without codex" {
@@ -398,6 +496,39 @@ copy_sample_config() {
   [ "$status" -eq 0 ]
 }
 
+@test "hooks prepend task id when no substitution is present" {
+  if ! should_run_codex_tests; then
+    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
+  fi
+
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/hook-prepend"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  BASE_HOOK_ON_COMPLETED="hook --done" write_base_config "$temp_dir"
+
+  local hook_log="${temp_dir}/hook.log"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  printf '%s\n' 'tr-66' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-66","status":"ready","labels":[]}]' \
+    '[{"id":"tr-66","status":"ready","labels":[]}]' \
+    '[{"id":"tr-66","status":"ready","labels":[]}]' \
+    '[{"id":"tr-66","status":"closed","labels":[]}]' \
+    > "$show_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
+    HOOK_MOCK_LOG="$hook_log" \
+    run_trudger
+
+  [ "$status" -eq 0 ]
+  run grep -q -- "tr-66 --done" "$hook_log"
+  [ "$status" -eq 0 ]
+}
+
 @test "requires-human updates labels" {
   if ! should_run_codex_tests; then
     skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
@@ -424,6 +555,36 @@ copy_sample_config() {
   [ "$status" -eq 0 ]
   run grep -q -- "label add tr-2 human-required" "$br_log"
   [ "$status" -eq 0 ]
+}
+
+@test "missing status after review errors" {
+  if ! should_run_codex_tests; then
+    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
+  fi
+
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-status-after-review"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_base_config "$temp_dir"
+
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  printf '%s\n' 'tr-88' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-88","status":"ready","labels":[]}]' \
+    '[{"id":"tr-88","status":"ready","labels":[]}]' \
+    '[{"id":"tr-88","status":"ready","labels":[]}]' \
+    '[{"id":"tr-88","labels":[]}]' \
+    > "$show_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Task tr-88 missing status after review."* ]]
 }
 
 @test "next-task command selects id using first token" {
