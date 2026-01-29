@@ -261,6 +261,12 @@ EOF
             next_task)
               next_task_command="$value"
               ;;
+            task_show)
+              task_show_command="$value"
+              ;;
+            task_update_in_progress)
+              task_update_in_progress_command="$value"
+              ;;
             *)
               ;;
           esac
@@ -280,6 +286,14 @@ validate_config() {
   fi
   if [[ -z "$next_task_command" ]]; then
     printf 'commands.next_task must not be empty.\n' >&2
+    exit 1
+  fi
+  if [[ -z "$task_show_command" ]]; then
+    printf 'commands.task_show must not be empty.\n' >&2
+    exit 1
+  fi
+  if [[ -z "$task_update_in_progress_command" ]]; then
+    printf 'commands.task_update_in_progress must not be empty.\n' >&2
     exit 1
   fi
   if [[ -z "$hook_on_completed" ]]; then
@@ -307,20 +321,56 @@ parse_command() {
   local -n out="$2"
   out=()
   if [[ -n "$input" ]]; then
-    # shellcheck disable=SC2034
-    read -r -a out <<<"$input"
+    if ! mapfile -d '' -t out < <(bash -c 'set -f; eval "set -- $1"; printf "%s\0" "$@"' -- "$input"); then
+      printf 'Failed to parse command: %s\n' "$input" >&2
+      exit 1
+    fi
   fi
 }
 
 run_hook() {
   local hook_command="$1"
   local task_id="$2"
+  if [[ -z "$hook_command" ]]; then
+    return 0
+  fi
+  if [[ "$hook_command" == *'$1'* || "$hook_command" == *'${1}'* ]]; then
+    bash -lc "$hook_command" hook "$task_id"
+    return 0
+  fi
   local hook_parts=()
   parse_command "$hook_command" hook_parts
   if ((${#hook_parts[@]} == 0)); then
     return 0
   fi
   "${hook_parts[0]}" "$task_id" "${hook_parts[@]:1}"
+}
+
+run_task_command() {
+  local command="$1"
+  local task_id="$2"
+  shift 2
+  local extra_args=("$@")
+
+  if [[ -z "$command" ]]; then
+    return 0
+  fi
+  if [[ "$command" == *'$1'* || "$command" == *'${1}'* ]]; then
+    bash -lc "$command" task "$task_id" "${extra_args[@]}"
+    return $?
+  fi
+  local parts=()
+  parse_command "$command" parts
+  if ((${#parts[@]} == 0)); then
+    return 0
+  fi
+  "${parts[@]}" "$task_id" "${extra_args[@]}"
+}
+
+run_task_show() {
+  local task_id="$1"
+  shift
+  run_task_command "$task_show_command" "$task_id" "$@"
 }
 
 # --- Task selection and state ---
@@ -342,7 +392,7 @@ get_next_task_id() {
 load_task_state() {
   local task_id="$1"
   local raw
-  raw="$(br show "$task_id" --json)"
+  raw="$(run_task_show "$task_id" --json)"
   printf '%s' "$raw" | jq -r '
     def item: if type == "array" then .[0] else . end;
     if (type == "array" and length == 0) or type == "null" then
@@ -374,7 +424,7 @@ ensure_task_ready() {
 # --- Prompt rendering ---
 render_prompt() {
   local prompt_path="$1"
-  local task_id="$2"
+  local task_context="$2"
   local content
 
   content="$(awk '
@@ -382,7 +432,7 @@ render_prompt() {
     in_frontmatter && $0 == "---" { in_frontmatter = 0; next }
     !in_frontmatter { print }
   ' "$prompt_path")"
-  printf '%s' "${content//\$ARGUMENTS/$task_id}"
+  printf '%s' "${content//\$ARGUMENTS/$task_context}"
 }
 
 # --- Main ---
@@ -412,6 +462,8 @@ done
 
 codex_command=""
 next_task_command=""
+task_show_command=""
+task_update_in_progress_command=""
 review_loop_limit=""
 trudger_log_path=""
 hook_on_completed=""
@@ -502,8 +554,9 @@ while true; do
   update_tmux_name "$current_phase" "$task_id"
   log_transition "state=SOLVING task=${task_id} loop=${review_loops}"
 
-  br update "$task_id" --status in_progress
-  if ! "${codex_cmd[@]}" "$task_id" "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"; then
+  run_task_command "$task_update_in_progress_command" "$task_id" --status in_progress
+  task_show_output="$(run_task_show "$task_id" --json)"
+  if ! "${codex_cmd[@]}" "$(render_prompt "$PROMPT_TRUDGE" "$task_show_output")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "solve_failed task=${task_id}"
     printf 'Codex solve failed for task %s.\n' "$task_id" >&2
@@ -512,7 +565,8 @@ while true; do
   current_phase="REVIEWING"
   update_tmux_name "$current_phase" "$task_id"
   log_transition "state=REVIEWING task=${task_id} loop=${review_loops}"
-  if ! "${review_cmd[@]}" "$task_id" "$(render_prompt "$PROMPT_REVIEW" "$task_id")"; then
+  task_show_output="$(run_task_show "$task_id" --json)"
+  if ! "${review_cmd[@]}" "$(render_prompt "$PROMPT_REVIEW" "$task_show_output")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "review_failed task=${task_id}"
     printf 'Codex review failed for task %s.\n' "$task_id" >&2

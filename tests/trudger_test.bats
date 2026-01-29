@@ -44,6 +44,8 @@ copy_sample_config() {
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -85,6 +87,9 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
+commands:
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -99,6 +104,54 @@ CONFIG
   [[ "$output" == *"commands.next_task must not be empty"* ]]
 }
 
+@test "missing commands.task_show errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-task-show"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+commands:
+  next_task: "next-task"
+  task_update_in_progress: "br update"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
+CONFIG
+
+  HOME="$temp_dir" \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"commands.task_show must not be empty"* ]]
+}
+
+@test "missing commands.task_update_in_progress errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-task-update"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+commands:
+  next_task: "next-task"
+  task_show: "br show"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
+CONFIG
+
+  HOME="$temp_dir" \
+    run_trudger
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"commands.task_update_in_progress must not be empty"* ]]
+}
+
 @test "missing on_completed hook errors" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-on-completed"
@@ -108,6 +161,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -131,6 +186,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -154,6 +211,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -186,6 +245,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -198,6 +259,8 @@ CONFIG
   local show_queue="${temp_dir}/show.queue"
   printf '%s\n' 'tr-42' '' > "$next_task_queue"
   printf '%s\n' \
+    '[{"id":"tr-42","status":"open","labels":[]}]' \
+    '[{"id":"tr-42","status":"open","labels":[]}]' \
     '[{"id":"tr-42","status":"open","labels":[]}]' \
     '[{"id":"tr-42","status":"closed","labels":[]}]' \
     > "$show_queue"
@@ -261,6 +324,8 @@ CONFIG
   printf '%s\n' '{"id":"tr-77"}' '' > "$robot_queue"
   printf '%s\n' \
     '[{"id":"tr-77","status":"ready","labels":[]}]' \
+    '[{"id":"tr-77","status":"ready","labels":[]}]' \
+    '[{"id":"tr-77","status":"ready","labels":[]}]' \
     '[{"id":"tr-77","status":"closed","labels":[]}]' \
     > "$show_queue"
 
@@ -291,6 +356,8 @@ CONFIG
 codex_command: "codex --yolo exec --custom"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -303,6 +370,8 @@ CONFIG
   local show_queue="${temp_dir}/show.queue"
   printf '%s\n' 'tr-10' '' > "$next_task_queue"
   printf '%s\n' \
+    '[{"id":"tr-10","status":"ready","labels":[]}]' \
+    '[{"id":"tr-10","status":"ready","labels":[]}]' \
     '[{"id":"tr-10","status":"ready","labels":[]}]' \
     '[{"id":"tr-10","status":"closed","labels":[]}]' \
     > "$show_queue"
@@ -317,6 +386,50 @@ CONFIG
   run grep -q -- "codex --yolo exec --custom" "$codex_log"
   [ "$status" -eq 0 ]
   run grep -q -- "codex --yolo exec --custom resume --last" "$codex_log"
+  [ "$status" -eq 0 ]
+}
+
+@test "hooks honor shell quoting with task id substitution" {
+  if ! should_run_codex_tests; then
+    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
+  fi
+
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/hook-quoting"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+commands:
+  next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "bash -lc 'hook --done \"$1\"'"
+  on_requires_human: "hook --needs-human"
+CONFIG
+
+  local hook_log="${temp_dir}/hook.log"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  printf '%s\n' 'tr-55' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-55","status":"ready","labels":[]}]' \
+    '[{"id":"tr-55","status":"ready","labels":[]}]' \
+    '[{"id":"tr-55","status":"ready","labels":[]}]' \
+    '[{"id":"tr-55","status":"closed","labels":[]}]' \
+    > "$show_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    HOOK_MOCK_LOG="$hook_log" \
+    run_trudger
+
+  [ "$status" -eq 0 ]
+  run grep -q -- "--done tr-55" "$hook_log"
   [ "$status" -eq 0 ]
 }
 
@@ -361,6 +474,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -373,6 +488,8 @@ CONFIG
   local show_queue="${temp_dir}/show.queue"
   printf '%s\n' 'tr-20 extra' '' > "$next_task_queue"
   printf '%s\n' \
+    '[{"id":"tr-20","status":"ready","labels":["trudgeable"]}]' \
+    '[{"id":"tr-20","status":"ready","labels":["trudgeable"]}]' \
     '[{"id":"tr-20","status":"ready","labels":["trudgeable"]}]' \
     '[{"id":"tr-20","status":"closed","labels":["trudgeable"]}]' \
     > "$show_queue"
@@ -395,6 +512,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -422,6 +541,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -449,6 +570,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -473,6 +596,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -484,6 +609,8 @@ CONFIG
   local show_queue="${temp_dir}/show.queue"
   local next_task_queue="${temp_dir}/next-task.queue"
   printf '%s\n' \
+    '[{"id":"tr-99","status":"ready","labels":[]}]' \
+    '[{"id":"tr-99","status":"ready","labels":[]}]' \
     '[{"id":"tr-99","status":"ready","labels":[]}]' \
     '[{"id":"tr-99","status":"closed","labels":[]}]' \
     > "$show_queue"
@@ -513,6 +640,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -524,6 +653,8 @@ CONFIG
   local show_queue="${temp_dir}/show.queue"
   printf '%s\n' 'tr-4' '' > "$next_task_queue"
   printf '%s\n' \
+    '[{"id":"tr-4","status":"ready","labels":[]}]' \
+    '[{"id":"tr-4","status":"ready","labels":[]}]' \
     '[{"id":"tr-4","status":"ready","labels":[]}]' \
     '[{"id":"tr-4","status":"closed","labels":[]}]' \
     > "$show_queue"

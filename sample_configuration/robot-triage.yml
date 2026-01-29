@@ -4,6 +4,8 @@
 codex_command: "codex --yolo exec"
 commands:
   next_task: "bv --robot-next | jq -r '.id // empty'"
+  task_show: "br show"
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
