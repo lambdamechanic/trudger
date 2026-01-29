@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_path="${TASK_SHOW_LOG:-}"
+if [[ -n "${log_path}" ]]; then
+  printf 'task-show %s\n' "$*" >> "${log_path}"
+fi
+
+if [[ -n "${TASK_SHOW_QUEUE:-}" && -f "${TASK_SHOW_QUEUE}" ]]; then
+  if read -r line < "${TASK_SHOW_QUEUE}"; then
+    tail -n +2 "${TASK_SHOW_QUEUE}" > "${TASK_SHOW_QUEUE}.tmp" || true
+    mv "${TASK_SHOW_QUEUE}.tmp" "${TASK_SHOW_QUEUE}"
+    if [[ -n "${line}" ]]; then
+      printf '%s\n' "${line}"
+    else
+      printf '%s\n' "[]"
+    fi
+  else
+    printf '%s\n' "[]"
+  fi
+else
+  printf '%s\n' "${TASK_SHOW_OUTPUT:-[]}"
+fi

@@ -44,8 +44,8 @@ copy_sample_config() {
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -88,8 +88,8 @@ CONFIG
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
 commands:
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -113,7 +113,7 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_update_in_progress: "br update"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -137,7 +137,7 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
+  task_show: "task-show"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -161,8 +161,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -186,8 +186,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -211,8 +211,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -245,8 +245,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -259,21 +259,24 @@ CONFIG
   local show_queue="${temp_dir}/show.queue"
   printf '%s\n' 'tr-42' '' > "$next_task_queue"
   printf '%s\n' \
-    '[{"id":"tr-42","status":"open","labels":[]}]' \
-    '[{"id":"tr-42","status":"open","labels":[]}]' \
-    '[{"id":"tr-42","status":"open","labels":[]}]' \
-    '[{"id":"tr-42","status":"closed","labels":[]}]' \
+    '[{"id":"tr-42","status":"open","labels":[],"payload":"SHOW_PAYLOAD"}]' \
+    '[{"id":"tr-42","status":"open","labels":[],"payload":"SHOW_PAYLOAD"}]' \
+    '[{"id":"tr-42","status":"open","labels":[],"payload":"SHOW_PAYLOAD"}]' \
+    '[{"id":"tr-42","status":"closed","labels":[],"payload":"SHOW_PAYLOAD"}]' \
     > "$show_queue"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
+    TASK_UPDATE_OUTPUT="UPDATE_IGNORED" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger
 
   [ "$status" -eq 0 ]
-  run grep -q -- "tr-42" "$codex_log"
+  run grep -q -- "SHOW_PAYLOAD" "$codex_log"
   [ "$status" -eq 0 ]
+  run grep -q -- "UPDATE_IGNORED" "$codex_log"
+  [ "$status" -ne 0 ]
 }
 
 @test "closed task removes trudgeable label" {
@@ -356,8 +359,8 @@ CONFIG
 codex_command: "codex --yolo exec --custom"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -378,7 +381,7 @@ CONFIG
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger
 
@@ -402,8 +405,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -424,7 +427,7 @@ CONFIG
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
     HOOK_MOCK_LOG="$hook_log" \
     run_trudger
 
@@ -474,8 +477,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -496,7 +499,7 @@ CONFIG
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
     BR_MOCK_LOG="$br_log" \
     run_trudger
 
@@ -512,8 +515,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -541,8 +544,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -570,8 +573,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -596,8 +599,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -620,7 +623,7 @@ CONFIG
     TRUDGER_NEXT_CMD='next-task' \
     TRUDGER_REVIEW_LOOPS=0 \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
     BR_MOCK_LOG="$br_log" \
     run_trudger
 
@@ -640,8 +643,8 @@ CONFIG
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
-  task_show: "br show"
-  task_update_in_progress: "br update"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -661,7 +664,7 @@ CONFIG
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
-    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
     CODEX_MOCK_FAIL_ON=exec \
     run_trudger
 

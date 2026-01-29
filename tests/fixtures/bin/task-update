@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_path="${TASK_UPDATE_LOG:-}"
+if [[ -n "${log_path}" ]]; then
+  printf 'task-update %s\n' "$*" >> "${log_path}"
+fi
+
+if [[ -n "${TASK_UPDATE_OUTPUT:-}" ]]; then
+  printf '%s\n' "${TASK_UPDATE_OUTPUT}"
+fi
