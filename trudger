@@ -47,6 +47,14 @@ log_transition() {
   printf '%s %s\n' "$ts" "$message" >> "$path" 2>/dev/null || true
 }
 
+sanitize_log_value() {
+  local value="$1"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "$value"
+}
+
 quit() {
   local reason="${1:-}"
   local code="${2:-0}"
@@ -309,12 +317,19 @@ run_config_command() {
   local prepend_task_id="$3"
   local shell_label="$4"
   local force_shell="$5"
-  shift 5
+  local log_label="${6:-$shell_label}"
+  shift 6
   local extra_args=("$@")
 
   if [[ -z "$command" ]]; then
     return 0
   fi
+
+  local task_token="none"
+  if [[ -n "$task_id" ]]; then
+    task_token="$task_id"
+  fi
+  log_transition "cmd start label=${log_label} task=${task_token} command=$(sanitize_log_value "$command")"
 
   local use_shell="false"
   if [[ "$command" == *'$1'* || "$command" == *'${1}'* ]]; then
@@ -324,6 +339,7 @@ run_config_command() {
   fi
 
   if [[ "$use_shell" == "true" ]]; then
+    log_transition "cmd label=${log_label} mode=bash_lc"
     if [[ -n "$task_id" || ${#extra_args[@]} -gt 0 ]]; then
       if [[ -n "$task_id" ]]; then
         bash -lc "$command" "$shell_label" "$task_id" "${extra_args[@]}"
@@ -333,7 +349,9 @@ run_config_command() {
     else
       bash -lc "$command"
     fi
-    return $?
+    local exit_code=$?
+    log_transition "cmd label=${log_label} exit=${exit_code}"
+    return "$exit_code"
   fi
 
   local parts=()
@@ -342,6 +360,7 @@ run_config_command() {
     return 0
   fi
 
+  log_transition "cmd label=${log_label} mode=argv argv=$(sanitize_log_value "$(printf '%q ' "${parts[@]}")")"
   if [[ -n "$task_id" ]]; then
     if [[ "$prepend_task_id" == "true" ]]; then
       "${parts[0]}" "$task_id" "${parts[@]:1}" "${extra_args[@]}"
@@ -351,15 +370,19 @@ run_config_command() {
   else
     "${parts[@]}" "${extra_args[@]}"
   fi
+  local exit_code=$?
+  log_transition "cmd label=${log_label} exit=${exit_code}"
+  return "$exit_code"
 }
 
 run_hook() {
   local hook_command="$1"
   local task_id="$2"
+  local hook_name="${3:-hook}"
   if [[ -z "$hook_command" ]]; then
     return 0
   fi
-  run_config_command "$hook_command" "$task_id" "true" "hook" "false"
+  run_config_command "$hook_command" "$task_id" "true" "hook" "false" "$hook_name"
 }
 
 run_task_command() {
@@ -368,7 +391,7 @@ run_task_command() {
   shift 2
   local extra_args=("$@")
 
-  run_config_command "$command" "$task_id" "false" "task" "false" "${extra_args[@]}"
+  run_config_command "$command" "$task_id" "false" "task" "false" "task" "${extra_args[@]}"
 }
 
 run_task_show() {
@@ -381,7 +404,7 @@ run_task_show() {
 get_next_task_id() {
   local raw exit_code
   set +e
-  raw="$(run_config_command "$next_task_command" "" "false" "next-task" "true" 2>/dev/null)"
+  raw="$(run_config_command "$next_task_command" "" "false" "next-task" "true" "next-task" 2>/dev/null)"
   exit_code=$?
   set -e
   if [[ "$exit_code" -eq 1 ]]; then
@@ -625,13 +648,13 @@ while true; do
   if [[ "$status" == "closed" ]]; then
     completed_tasks+=("$task_id")
     log_transition "completed task=${task_id}"
-    run_hook "$hook_on_completed" "$task_id"
+    run_hook "$hook_on_completed" "$task_id" "on_completed"
     break
   fi
 
   needs_human_tasks+=("$task_id")
   log_transition "needs_human task=${task_id}"
-  run_hook "$hook_on_requires_human" "$task_id"
+  run_hook "$hook_on_requires_human" "$task_id" "on_requires_human"
   break
 done
 
