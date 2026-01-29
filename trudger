@@ -157,26 +157,40 @@ update_tmux_name() {
 }
 
 # --- Config parsing ---
-trim_value() {
-  local value="$1"
-  value="${value#"${value%%[![:space:]]*}"}"
-  value="${value%"${value##*[![:space:]]}"}"
-  printf '%s' "$value"
+require_yq() {
+  if ! command -v yq >/dev/null 2>&1; then
+    cat <<'EOF' >&2
+Missing dependency: yq
+
+Install yq and ensure it is on your PATH, then re-run trudger.
+Common options:
+  - macOS: brew install yq
+  - Linux: https://github.com/mikefarah/yq#install
+EOF
+    exit 1
+  fi
 }
 
-normalize_value() {
-  local value
-  value="$(trim_value "$1")"
-  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
-    value="${value:1:${#value}-2}"
-  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
-    value="${value:1:${#value}-2}"
+detect_yq_mode() {
+  if yq eval -r '.' "$CONFIG_PATH" >/dev/null 2>&1; then
+    printf '%s' "mikefarah"
+  else
+    printf '%s' "kislyuk"
   fi
-  case "$value" in
-    null|NULL|Null|"~")
-      value=""
-      ;;
-  esac
+}
+
+read_config_value() {
+  local query="$1"
+  local mode="$2"
+  local value
+  if [[ "$mode" == "mikefarah" ]]; then
+    value="$(yq eval -r "$query" "$CONFIG_PATH")"
+  else
+    value="$(yq -r "$query" "$CONFIG_PATH")"
+  fi
+  if [[ "$value" == "null" ]]; then
+    value=""
+  fi
   printf '%s' "$value"
 }
 
@@ -201,82 +215,30 @@ EOF
     exit 1
   fi
 
-  local section=""
-  local line key value
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%%#*}"
-    line="${line%"${line##*[![:space:]]}"}"
-    if [[ -z "${line//[[:space:]]/}" ]]; then
-      continue
-    fi
+  require_yq
 
-    if [[ "$line" =~ ^([A-Za-z0-9_]+):[[:space:]]*(.*)$ ]]; then
-      key="${BASH_REMATCH[1]}"
-      value="$(normalize_value "${BASH_REMATCH[2]}")"
-      case "$key" in
-        hooks|commands)
-          if [[ -z "$value" ]]; then
-            section="$key"
-            continue
-          fi
-          ;;
-        *)
-          section=""
-          ;;
-      esac
-      case "$key" in
-        codex_command)
-          codex_command="$value"
-          ;;
-        review_loop_limit)
-          review_loop_limit="$value"
-          ;;
-        log_path)
-          trudger_log_path="$value"
-          ;;
-        *)
-          ;;
-      esac
-      continue
-    fi
+  local yq_mode
+  yq_mode="$(detect_yq_mode)"
 
-    if [[ "$line" =~ ^[[:space:]]+([A-Za-z0-9_]+):[[:space:]]*(.*)$ ]]; then
-      key="${BASH_REMATCH[1]}"
-      value="$(normalize_value "${BASH_REMATCH[2]}")"
-      case "$section" in
-        hooks)
-          case "$key" in
-            on_completed)
-              hook_on_completed="$value"
-              ;;
-            on_requires_human)
-              hook_on_requires_human="$value"
-              ;;
-            *)
-              ;;
-          esac
-          ;;
-        commands)
-          case "$key" in
-            next_task)
-              next_task_command="$value"
-              ;;
-            task_show)
-              task_show_command="$value"
-              ;;
-            task_update_in_progress)
-              task_update_in_progress_command="$value"
-              ;;
-            *)
-              ;;
-          esac
-          ;;
-        *)
-          ;;
-      esac
-      continue
-    fi
-  done < "$CONFIG_PATH"
+  codex_command="$(read_config_value '.codex_command' "$yq_mode")"
+  review_loop_limit="$(read_config_value '.review_loop_limit' "$yq_mode")"
+  trudger_log_path="$(read_config_value '.log_path' "$yq_mode")"
+  next_task_command="$(read_config_value '.commands.next_task' "$yq_mode")"
+  task_show_command="$(read_config_value '.commands.task_show' "$yq_mode")"
+  task_update_in_progress_command="$(read_config_value '.commands.task_update_in_progress' "$yq_mode")"
+  hook_on_completed="$(read_config_value '.hooks.on_completed' "$yq_mode")"
+  hook_on_requires_human="$(read_config_value '.hooks.on_requires_human' "$yq_mode")"
+
+  local key
+  while IFS= read -r key; do
+    case "$key" in
+      codex_command|commands|hooks|review_loop_limit|log_path)
+        ;;
+      *)
+        printf 'Warning: Unknown config key: %s\n' "$key" >&2
+        ;;
+    esac
+  done < <(if [[ "$yq_mode" == "mikefarah" ]]; then yq eval -r 'keys | .[]' "$CONFIG_PATH"; else yq -r 'keys | .[]' "$CONFIG_PATH"; fi)
 }
 
 validate_config() {
