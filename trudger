@@ -6,16 +6,22 @@ set -o errtrace
 
 PROMPT_TRUDGE="${HOME}/.codex/prompts/trudge.md"
 PROMPT_REVIEW="${HOME}/.codex/prompts/trudge_review.md"
-CONFIG_PATH="${HOME}/.config/trudger.yml"
+DEFAULT_CONFIG_PATH="${HOME}/.config/trudger.yml"
+CONFIG_PATH="${DEFAULT_CONFIG_PATH}"
+CONFIG_PATH_SOURCE="default"
 
 # --- Usage ---
 usage() {
   cat <<'EOF'
-Usage: ./trudger [task_id ...]
+Usage: ./trudger [options] [task_id ...]
 
 Loop over ready br tasks and run Codex solve+review prompts.
 If task IDs are provided, they run first (in order) before br ready tasks.
-Configuration is loaded from ~/.config/trudger.yml.
+Configuration is loaded from ~/.config/trudger.yml by default.
+
+Options:
+  -c, --config PATH   Load configuration from PATH instead of ~/.config/trudger.yml.
+  -h, --help          Show this help text.
 EOF
 }
 
@@ -221,6 +227,10 @@ read_config_value() {
 
 load_config() {
   if [[ ! -f "$CONFIG_PATH" ]]; then
+    if [[ "$CONFIG_PATH_SOURCE" == "flag" ]]; then
+      printf 'Missing config file: %s\n' "$CONFIG_PATH" >&2
+      quit "missing_config:${CONFIG_PATH}" 1
+    fi
     cat <<'EOF' >&2
 Missing config file: ~/.config/trudger.yml
 
@@ -477,6 +487,26 @@ while (($#)); do
     -h|--help)
       usage
       quit "help" 0
+      ;;
+    -c|--config)
+      option="$1"
+      shift
+      if (($# == 0)) || [[ -z "$1" ]]; then
+        printf 'Missing value for %s\n' "$option" >&2
+        usage
+        quit "missing_option_value:${option}" 1
+      fi
+      CONFIG_PATH="$1"
+      CONFIG_PATH_SOURCE="flag"
+      ;;
+    --config=*)
+      CONFIG_PATH="${1#*=}"
+      CONFIG_PATH_SOURCE="flag"
+      if [[ -z "$CONFIG_PATH" ]]; then
+        printf 'Missing value for --config\n' >&2
+        usage
+        quit "missing_option_value:--config" 1
+      fi
       ;;
     --)
       shift
