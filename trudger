@@ -503,7 +503,7 @@ while true; do
   log_transition "state=SOLVING task=${task_id} loop=${review_loops}"
 
   br update "$task_id" --status in_progress
-  if ! "${codex_cmd[@]}" "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"; then
+  if ! "${codex_cmd[@]}" "$task_id" "$(render_prompt "$PROMPT_TRUDGE" "$task_id")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "solve_failed task=${task_id}"
     printf 'Codex solve failed for task %s.\n' "$task_id" >&2
@@ -512,7 +512,7 @@ while true; do
   current_phase="REVIEWING"
   update_tmux_name "$current_phase" "$task_id"
   log_transition "state=REVIEWING task=${task_id} loop=${review_loops}"
-  if ! "${review_cmd[@]}" "$(render_prompt "$PROMPT_REVIEW" "$task_id")"; then
+  if ! "${review_cmd[@]}" "$task_id" "$(render_prompt "$PROMPT_REVIEW" "$task_id")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "review_failed task=${task_id}"
     printf 'Codex review failed for task %s.\n' "$task_id" >&2
