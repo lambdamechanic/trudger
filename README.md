@@ -95,7 +95,7 @@ The prompt sources live in `prompts/` and are installed by `./install.sh`.
 
 - Task selection uses `commands.next_task` and expects the first whitespace-delimited token of stdout to be the task id.
 - `commands.task_show` output is treated as free-form task details for Codex.
-- Tasks must be in status `ready` or `open` (from `commands.task_show --json`) or Trudger exits non-zero.
+- Tasks must be in status `ready` or `open` (from `commands.task_show --json`). When selecting via `commands.next_task`, Trudger skips non-ready tasks up to `TRUDGER_SKIP_NOT_READY_LIMIT` (default 5) before idling; manual task IDs still error if not ready.
 - If a task is closed after review, Trudger runs `hooks.on_completed`.
 - If a task remains open after review, Trudger runs `hooks.on_requires_human`.
 

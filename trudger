@@ -404,21 +404,27 @@ load_task_state() {
   ' 2>/dev/null || true
 }
 
+task_status() {
+  local task_id="$1"
+  local task_state
+  mapfile -t task_state < <(load_task_state "$task_id")
+  printf '%s' "${task_state[0]:-}"
+}
+
+is_ready_status() {
+  local status="$1"
+  [[ "$status" == "ready" || "$status" == "open" ]]
+}
+
 ensure_task_ready() {
   local task_id="$1"
-  local task_state status
-  mapfile -t task_state < <(load_task_state "$task_id")
-  status="${task_state[0]:-}"
-
-  case "$status" in
-    ready|open)
-      return 0
-      ;;
-    *)
-      printf 'Task %s is not ready (status: %s).\n' "$task_id" "${status:-unknown}" >&2
-      exit 1
-      ;;
-  esac
+  local status
+  status="$(task_status "$task_id")"
+  if is_ready_status "$status"; then
+    return 0
+  fi
+  printf 'Task %s is not ready (status: %s).\n' "$task_id" "${status:-unknown}" >&2
+  exit 1
 }
 
 # --- Prompt rendering ---
@@ -538,14 +544,38 @@ if ((${#manual_tasks[@]} > 0)); then
   task_id="${manual_tasks[0]}"
   manual_tasks=("${manual_tasks[@]:1}")
 else
-  task_id="$(get_next_task_id)"
+  skip_not_ready_limit="${TRUDGER_SKIP_NOT_READY_LIMIT:-5}"
+  if ! [[ "$skip_not_ready_limit" =~ ^[0-9]+$ ]] || ((skip_not_ready_limit < 1)); then
+    skip_not_ready_limit=5
+  fi
+  skip_count=0
+  while true; do
+    task_id="$(get_next_task_id)"
+    if [[ -z "$task_id" ]]; then
+      log_transition "idle no_task"
+      exit 0
+    fi
+    status="$(task_status "$task_id")"
+    if [[ -z "$status" ]]; then
+      printf 'Task %s missing status.\n' "$task_id" >&2
+      exit 1
+    fi
+    if is_ready_status "$status"; then
+      break
+    fi
+    log_transition "skip_not_ready task=${task_id} status=${status}"
+    skip_count=$((skip_count + 1))
+    if ((skip_count >= skip_not_ready_limit)); then
+      log_transition "idle no_ready_task attempts=${skip_count}"
+      printf 'Task %s is not ready (status: %s).\n' "$task_id" "$status" >&2
+      exit 0
+    fi
+  done
 fi
 if [[ -z "$task_id" ]]; then
   log_transition "idle no_task"
   exit 0
 fi
-
-ensure_task_ready "$task_id"
 
 review_loops=0
 while true; do

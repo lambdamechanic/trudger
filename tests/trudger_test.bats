@@ -346,6 +346,40 @@ CONFIG
   [ "$status" -eq 0 ]
 }
 
+@test "robot-triage skips non-ready tasks from bv" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/robot-triage-skip"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  copy_sample_config "$temp_dir" "robot-triage"
+
+  local br_log="${temp_dir}/br.log"
+  local codex_log="${temp_dir}/codex.log"
+  local robot_queue="${temp_dir}/robot.queue"
+  local show_queue="${temp_dir}/show.queue"
+  printf '%s\n' '{"id":"tr-1"}' '{"id":"tr-2"}' '' > "$robot_queue"
+  printf '%s\n' \
+    '[{"id":"tr-1","status":"in_progress","labels":[]}]' \
+    '[{"id":"tr-2","status":"ready","labels":[]}]' \
+    '[{"id":"tr-2","status":"ready","labels":[]}]' \
+    '[{"id":"tr-2","status":"ready","labels":[]}]' \
+    '[{"id":"tr-2","status":"closed","labels":[]}]' \
+    > "$show_queue"
+
+  HOME="$temp_dir" \
+    BV_MOCK_ROBOT_NEXT_QUEUE="$robot_queue" \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
+    BR_MOCK_LOG="$br_log" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger
+
+  [ "$status" -eq 0 ]
+  run grep -q -- "update tr-2 --status in_progress" "$br_log"
+  [ "$status" -eq 0 ]
+  run grep -q -- "update tr-1 --status in_progress" "$br_log"
+  [ "$status" -ne 0 ]
+}
+
 @test "uses configured codex command for solve and review" {
   if ! should_run_codex_tests; then
     skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
