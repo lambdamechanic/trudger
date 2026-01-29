@@ -38,7 +38,7 @@ trudger --config ./sample_configuration/trudgeable-with-hooks.yml
 
 ## Configuration
 
-Trudger requires `~/.config/trudger.yml` on startup unless `-c/--config` is provided. If the file is missing, it prints curl commands for sample configs and exits non-zero.
+Trudger requires `~/.config/trudger.yml` on startup unless `-c/--config` is provided, which overrides the default path. If the file is missing, it prints curl commands for sample configs and exits non-zero.
 Configuration is parsed with `yq`; unknown top-level keys are logged as warnings and ignored.
 
 Sample configs:
