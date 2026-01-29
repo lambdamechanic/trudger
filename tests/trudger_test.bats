@@ -23,6 +23,48 @@ create_prompts() {
   printf '%s\n' "\$ARGUMENTS" > "${temp_dir}/.codex/prompts/trudge_review.md"
 }
 
+yaml_quote() {
+  local value="$1"
+  value=${value//\'/\'\'}
+  printf "'%s'" "$value"
+}
+
+write_base_config() {
+  local temp_dir="$1"
+  local codex_command="${BASE_CODEX_COMMAND-"codex --yolo exec"}"
+  local next_task_command="${BASE_NEXT_TASK_COMMAND-"next-task"}"
+  local task_show_command="${BASE_TASK_SHOW_COMMAND-"task-show"}"
+  local task_update_command="${BASE_TASK_UPDATE_COMMAND-"task-update"}"
+  local review_loop_limit="${BASE_REVIEW_LOOP_LIMIT-"5"}"
+  local log_path="${BASE_LOG_PATH-"./.trudger.log"}"
+  local hook_on_completed="${BASE_HOOK_ON_COMPLETED-"hook --done"}"
+  local hook_on_requires_human="${BASE_HOOK_ON_REQUIRES_HUMAN-"hook --needs-human"}"
+  local extra_config="${BASE_EXTRA_CONFIG-}"
+
+  mkdir -p "${temp_dir}/.config"
+  {
+    printf 'codex_command: %s\n' "$(yaml_quote "$codex_command")"
+    printf 'commands:\n'
+    if [[ -n "$next_task_command" ]]; then
+      printf '  next_task: %s\n' "$(yaml_quote "$next_task_command")"
+    fi
+    printf '  task_show: %s\n' "$(yaml_quote "$task_show_command")"
+    printf '  task_update_in_progress: %s\n' "$(yaml_quote "$task_update_command")"
+    if [[ -n "$review_loop_limit" ]]; then
+      printf 'review_loop_limit: %s\n' "$review_loop_limit"
+    else
+      printf "review_loop_limit: ''\n"
+    fi
+    printf 'log_path: %s\n' "$(yaml_quote "$log_path")"
+    printf 'hooks:\n'
+    printf '  on_completed: %s\n' "$(yaml_quote "$hook_on_completed")"
+    printf '  on_requires_human: %s\n' "$(yaml_quote "$hook_on_requires_human")"
+    if [[ -n "$extra_config" ]]; then
+      printf '%s\n' "$extra_config"
+    fi
+  } > "${temp_dir}/.config/trudger.yml"
+}
+
 write_config() {
   local temp_dir="$1"
   mkdir -p "${temp_dir}/.config"
@@ -40,21 +82,7 @@ copy_sample_config() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-prompts"
   mkdir -p "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
-CONFIG
+  write_base_config "$temp_dir"
 
   HOME="$temp_dir" \
     BR_MOCK_READY_JSON='[]' \
@@ -85,17 +113,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/missing-next-task"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  BASE_NEXT_TASK_COMMAND="" write_base_config "$temp_dir"
 
   HOME="$temp_dir" \
     run_trudger
@@ -108,17 +126,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/missing-task-show"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  BASE_TASK_SHOW_COMMAND="" write_base_config "$temp_dir"
 
   HOME="$temp_dir" \
     run_trudger
@@ -132,17 +140,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/missing-task-update"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  BASE_TASK_UPDATE_COMMAND="" write_base_config "$temp_dir"
 
   HOME="$temp_dir" \
     run_trudger
@@ -156,18 +154,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/missing-on-completed"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: ""
-  on_requires_human: "hook --needs-human"
-CONFIG
+  BASE_HOOK_ON_COMPLETED="" write_base_config "$temp_dir"
 
   HOME="$temp_dir" \
     run_trudger
@@ -181,18 +168,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/missing-on-requires-human"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: ""
-CONFIG
+  BASE_HOOK_ON_REQUIRES_HUMAN="" write_base_config "$temp_dir"
 
   HOME="$temp_dir" \
     run_trudger
@@ -206,21 +182,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/no-tasks"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-labels:
-  trudgeable: trudgeable
-  requires_human: requires-human
-CONFIG
+  write_base_config "$temp_dir"
 
   local br_log="${temp_dir}/br.log"
   local codex_log="${temp_dir}/codex.log"
@@ -240,18 +202,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/open-task"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  write_base_config "$temp_dir"
 
   local codex_log="${temp_dir}/codex.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -388,18 +339,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/codex-config"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec --custom"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  BASE_CODEX_COMMAND="codex --yolo exec --custom" write_base_config "$temp_dir"
 
   local codex_log="${temp_dir}/codex.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -434,18 +374,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/hook-quoting"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "bash -lc 'hook --done \"$1\"'"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  BASE_HOOK_ON_COMPLETED="bash -lc 'hook --done \"$1\"'" write_base_config "$temp_dir"
 
   local hook_log="${temp_dir}/hook.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -506,18 +435,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/next-task"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  write_base_config "$temp_dir"
 
   local br_log="${temp_dir}/br.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -544,18 +462,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/next-task-empty"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  write_base_config "$temp_dir"
 
   local codex_log="${temp_dir}/codex.log"
 
@@ -573,18 +480,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/next-task-exit-1"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  write_base_config "$temp_dir"
 
   local codex_log="${temp_dir}/codex.log"
 
@@ -602,18 +498,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/next-task-exit-2"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  write_base_config "$temp_dir"
 
   HOME="$temp_dir" \
     NEXT_TASK_EXIT_CODE=2 \
@@ -628,18 +513,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/env-ignored"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  write_base_config "$temp_dir"
 
   local br_log="${temp_dir}/br.log"
   local show_queue="${temp_dir}/show.queue"
@@ -672,18 +546,7 @@ CONFIG
   temp_dir="${BATS_TEST_TMPDIR}/codex-fail"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_config "$temp_dir" <<'CONFIG'
-codex_command: "codex --yolo exec"
-commands:
-  next_task: "next-task"
-  task_show: "task-show"
-  task_update_in_progress: "task-update"
-review_loop_limit: 5
-log_path: "./.trudger.log"
-hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
-CONFIG
+  write_base_config "$temp_dir"
 
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
