@@ -1,10 +1,11 @@
 # trudger Specification
 
 ## Purpose
-Trudger serially loops over ready br tasks labeled `trudgeable`, runs Codex solve + review prompts for each task, and verifies the task is either closed or escalated for human input.
+Trudger is a generic task-processing loop for beads-backed task systems (for example `br` or `bd`). It selects ready tasks, runs Codex solve + review prompts, and verifies tasks are closed or escalated for human input.
+
 ## Requirements
 ### Requirement: Trudger entrypoint
-The system SHALL provide a root-level executable script named `./trudger` that orchestrates br task selection and Codex execution.
+The system SHALL provide a root-level executable script named `./trudger` that orchestrates task selection and Codex execution.
 
 #### Scenario: Script is executable
 - **WHEN** a user runs `./trudger`
@@ -18,40 +19,81 @@ The script SHALL verify that `~/.codex/prompts/trudge.md` and `~/.codex/prompts/
 - **WHEN** `./trudger` starts
 - **THEN** the script exits with a clear error indicating the missing prompt file path
 
-### Requirement: Task selection
-The script SHALL select the lowest-priority ready br task that has the `trudgeable` label and process one task per outer loop iteration.
+### Requirement: Configuration loading
+The script SHALL load configuration from `~/.config/trudger.yml` and exit with a clear error if the file is missing.
 
-#### Scenario: No trudgeable tasks
-- **WHEN** no ready tasks with label `trudgeable` are found
+#### Scenario: Missing config file
+- **WHEN** `~/.config/trudger.yml` does not exist
+- **THEN** the script exits non-zero and prints bootstrap instructions for sample configs
+
+### Requirement: Configuration validation
+The script SHALL require `codex_command`, `commands.next_task`, `commands.task_show`, `commands.task_update_in_progress`, `hooks.on_completed`, `hooks.on_requires_human`, `review_loop_limit`, and `log_path` to be present and non-empty.
+
+#### Scenario: Required config value missing
+- **WHEN** any required config value is missing or empty
+- **THEN** the script exits non-zero with a clear error naming the missing field
+
+### Requirement: Configuration parsing
+The script SHALL parse `~/.config/trudger.yml` using `yq` and treat null values as validation errors.
+
+#### Scenario: Null config value
+- **WHEN** a required config value is present but null
+- **THEN** the script exits non-zero with a clear error naming the field
+
+### Requirement: Unknown config keys
+The script SHALL emit a warning for unknown top-level config keys and continue.
+
+#### Scenario: Unknown config key
+- **WHEN** the config contains an unknown top-level key
+- **THEN** the script prints a warning naming the key and continues startup
+
+### Requirement: Task selection
+The script SHALL select the next task by running the configured `commands.next_task` command and process one task per outer loop iteration.
+
+#### Scenario: No selectable tasks
+- **WHEN** `commands.next_task` returns an empty result or exits with code 1
 - **THEN** the script exits with status 0
 
+#### Scenario: Task not ready is skipped
+- **WHEN** `commands.next_task` returns a task that is not `ready` or `open`
+- **THEN** the script skips it and retries up to `TRUDGER_SKIP_NOT_READY_LIMIT` before idling
+
 ### Requirement: Codex prompt execution
-For each selected task, the script SHALL start a Codex exec session using the contents of `~/.codex/prompts/trudge.md` with `$ARGUMENTS` replaced by the br id, then resume the same session with `~/.codex/prompts/trudge_review.md` with `$ARGUMENTS` replaced by the br id.
+For each selected task, the script SHALL start a Codex exec session using the contents of `~/.codex/prompts/trudge.md` with `$ARGUMENTS` replaced by the task id, then resume the same session with `~/.codex/prompts/trudge_review.md` with `$ARGUMENTS` replaced by the task id.
 
 #### Scenario: Codex solve + review
 - **WHEN** a task is selected
 - **THEN** the script invokes `codex exec` with the rendered trudge prompt
 - **AND** the script invokes `codex exec resume --last` with the rendered review prompt
 
+### Requirement: Hook execution semantics
+The script SHALL execute hooks either with `$1`/`${1}` substitution or by prepending the task id as the first argument when no substitution is present.
+
+#### Scenario: Hook uses $1 substitution
+- **WHEN** a hook command contains `$1` or `${1}`
+- **THEN** the hook is executed via a shell with the task id available as `$1`
+
+#### Scenario: Hook without substitution
+- **WHEN** a hook command does not contain `$1` or `${1}`
+- **THEN** the task id is passed as the first argument
+
 ### Requirement: Task closure on success
-When the review prompt indicates the task meets acceptance criteria, the script SHALL close the br task and remove the `trudgeable` label.
+When the review prompt indicates the task is closed, the script SHALL invoke `hooks.on_completed`.
 
 #### Scenario: Task closed after successful review
-- **WHEN** Codex review reports acceptance criteria satisfied
-- **THEN** the br task is closed and the `trudgeable` label is removed
+- **WHEN** the task status is `closed` after the review step
+- **THEN** `hooks.on_completed` is executed for that task
 
 ### Requirement: Requires-human escalation
-When the review prompt indicates human input is required, the script SHALL remove `trudgeable` and add `requires-human`.
+When the review prompt indicates the task is still open, the script SHALL invoke `hooks.on_requires_human`.
 
-#### Scenario: Requires-human handling
-- **WHEN** Codex review reports that human input is required
-- **THEN** the task receives a comment and notes update
-- **AND** the `trudgeable` label is removed
-- **AND** the `requires-human` label is added
+#### Scenario: Task still open after review
+- **WHEN** the task status is not `closed` after the review step
+- **THEN** `hooks.on_requires_human` is executed for that task
 
 ### Requirement: Codex update verification
-After the review step, the script SHALL verify that the task was either closed or labeled `requires-human` (with `trudgeable` removed) and exit with a non-zero status if neither occurred.
+After the review step, the script SHALL verify that the task has a non-empty status and error if status is missing.
 
-#### Scenario: Missing update is an error
-- **WHEN** the review step completes without closing the task or applying requires-human escalation
+#### Scenario: Missing status after review
+- **WHEN** the review step completes and the task status is empty or missing
 - **THEN** the script exits with a non-zero status
