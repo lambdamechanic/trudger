@@ -80,7 +80,7 @@ CONFIG
   [[ "$output" == *"robot-triage.yml"* ]]
 }
 
-@test "missing commands.next_task errors" {
+@test "missing commands.next_task exits cleanly" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-next-task"
   mkdir -p "$temp_dir"
@@ -100,8 +100,7 @@ CONFIG
   HOME="$temp_dir" \
     run_trudger
 
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"commands.next_task must not be empty"* ]]
+  [ "$status" -eq 0 ]
 }
 
 @test "missing commands.task_show errors" {

@@ -263,10 +263,6 @@ validate_config() {
     printf 'codex_command must not be empty.\n' >&2
     quit "missing_codex_command" 1
   fi
-  if [[ -z "$next_task_command" ]]; then
-    printf 'commands.next_task must not be empty.\n' >&2
-    quit "missing_next_task_command" 1
-  fi
   if [[ -z "$task_show_command" ]]; then
     printf 'commands.task_show must not be empty.\n' >&2
     quit "missing_task_show_command" 1
@@ -640,6 +636,7 @@ while true; do
 done
 
 TRUDGER_COMPLETED="$(IFS=','; printf '%s' "${completed_tasks[*]:-}")"
+log_transition "env TRUDGER_COMPLETED=${TRUDGER_COMPLETED}"
 export TRUDGER_COMPLETED
 TRUDGER_NEEDS_HUMAN="$(IFS=','; printf '%s' "${needs_human_tasks[*]:-}")"
 export TRUDGER_NEEDS_HUMAN
