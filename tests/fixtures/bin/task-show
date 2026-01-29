@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tests/fixtures/bin/_queue_helpers
+source "${SCRIPT_DIR}/_queue_helpers"
+
 log_path="${TASK_SHOW_LOG:-}"
 if [[ -n "${log_path}" ]]; then
   printf 'task-show %s\n' "$*" >> "${log_path}"
 fi
 
 if [[ -n "${TASK_SHOW_QUEUE:-}" && -f "${TASK_SHOW_QUEUE}" ]]; then
-  if read -r line < "${TASK_SHOW_QUEUE}"; then
-    tail -n +2 "${TASK_SHOW_QUEUE}" > "${TASK_SHOW_QUEUE}.tmp" || true
-    mv "${TASK_SHOW_QUEUE}.tmp" "${TASK_SHOW_QUEUE}"
+  if line="$(fixture_queue_pop "${TASK_SHOW_QUEUE}")"; then
     if [[ -n "${line}" ]]; then
       printf '%s\n' "${line}"
     else

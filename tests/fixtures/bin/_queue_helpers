@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fixture_queue_pop() {
+  local queue_path="${1:-}"
+  local line=""
+
+  if [[ -z "${queue_path}" || ! -f "${queue_path}" ]]; then
+    return 2
+  fi
+
+  if IFS= read -r line < "${queue_path}"; then
+    tail -n +2 "${queue_path}" > "${queue_path}.tmp" || true
+    mv "${queue_path}.tmp" "${queue_path}"
+    printf '%s' "${line}"
+    return 0
+  fi
+
+  return 1
+}

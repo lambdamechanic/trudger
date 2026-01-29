@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tests/fixtures/bin/_queue_helpers
+source "${SCRIPT_DIR}/_queue_helpers"
+
 exit_code="${NEXT_TASK_EXIT_CODE:-0}"
 
 if [[ -n "${NEXT_TASK_OUTPUT_QUEUE:-}" && -f "${NEXT_TASK_OUTPUT_QUEUE}" ]]; then
-  if read -r line < "${NEXT_TASK_OUTPUT_QUEUE}"; then
-    tail -n +2 "${NEXT_TASK_OUTPUT_QUEUE}" > "${NEXT_TASK_OUTPUT_QUEUE}.tmp" || true
-    mv "${NEXT_TASK_OUTPUT_QUEUE}.tmp" "${NEXT_TASK_OUTPUT_QUEUE}"
+  if line="$(fixture_queue_pop "${NEXT_TASK_OUTPUT_QUEUE}")"; then
     printf '%s' "${line}"
   fi
   exit "$exit_code"

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tests/fixtures/bin/_queue_helpers
+source "${SCRIPT_DIR}/_queue_helpers"
+
 log_path="${BR_MOCK_LOG:-}"
 if [[ -n "${log_path}" ]]; then
   printf 'br %s\n' "$*" >> "${log_path}"
@@ -13,9 +17,7 @@ case "${cmd}" in
   ready)
     if printf '%s' "$*" | grep -q -- '--json'; then
       if [[ -n "${BR_MOCK_READY_QUEUE:-}" && -f "${BR_MOCK_READY_QUEUE}" ]]; then
-        if read -r line < "${BR_MOCK_READY_QUEUE}"; then
-          tail -n +2 "${BR_MOCK_READY_QUEUE}" > "${BR_MOCK_READY_QUEUE}.tmp" || true
-          mv "${BR_MOCK_READY_QUEUE}.tmp" "${BR_MOCK_READY_QUEUE}"
+        if line="$(fixture_queue_pop "${BR_MOCK_READY_QUEUE}")"; then
           if [[ -n "${line}" ]]; then
             printf '%s\n' "${line}"
           else
@@ -34,9 +36,7 @@ case "${cmd}" in
   show)
     if printf '%s' "$*" | grep -q -- '--json'; then
       if [[ -n "${BR_MOCK_SHOW_QUEUE:-}" && -f "${BR_MOCK_SHOW_QUEUE}" ]]; then
-        if read -r line < "${BR_MOCK_SHOW_QUEUE}"; then
-          tail -n +2 "${BR_MOCK_SHOW_QUEUE}" > "${BR_MOCK_SHOW_QUEUE}.tmp" || true
-          mv "${BR_MOCK_SHOW_QUEUE}.tmp" "${BR_MOCK_SHOW_QUEUE}"
+        if line="$(fixture_queue_pop "${BR_MOCK_SHOW_QUEUE}")"; then
           if [[ -n "${line}" ]]; then
             printf '%s\n' "${line}"
           else
