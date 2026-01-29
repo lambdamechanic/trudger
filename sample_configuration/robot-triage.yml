@@ -2,7 +2,8 @@
 # - Selects tasks via `bv --robot-next`.
 # - No label changes (hooks are no-ops).
 codex_command: "codex --yolo exec"
-next_task_command: "bv --robot-next | jq -r '.id // empty'"
+commands:
+  next_task: "bv --robot-next | jq -r '.id // empty'"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 

@@ -42,7 +42,8 @@ copy_sample_config() {
   mkdir -p "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
-next_task_command: "next-task"
+commands:
+  next_task: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -77,7 +78,7 @@ CONFIG
   [[ "$output" == *"robot-triage.yml"* ]]
 }
 
-@test "missing next_task_command errors" {
+@test "missing commands.next_task errors" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-next-task"
   mkdir -p "$temp_dir"
@@ -95,7 +96,7 @@ CONFIG
     run_trudger
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"next_task_command must not be empty"* ]]
+  [[ "$output" == *"commands.next_task must not be empty"* ]]
 }
 
 @test "missing on_completed hook errors" {
@@ -105,7 +106,8 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
-next_task_command: "next-task"
+commands:
+  next_task: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -127,7 +129,8 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
-next_task_command: "next-task"
+commands:
+  next_task: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -149,7 +152,8 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
-next_task_command: "next-task"
+commands:
+  next_task: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -180,7 +184,8 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
-next_task_command: "next-task"
+commands:
+  next_task: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -284,7 +289,8 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec --custom"
-next_task_command: "next-task"
+commands:
+  next_task: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -353,7 +359,8 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
-next_task_command: "next-task"
+commands:
+  next_task: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -386,7 +393,8 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
-next_task_command: "next-task"
+commands:
+  next_task: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -405,6 +413,57 @@ CONFIG
   [ ! -s "$codex_log" ]
 }
 
+@test "next-task command exit 1 exits zero" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/next-task-exit-1"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+commands:
+  next_task: "next-task"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
+CONFIG
+
+  local codex_log="${temp_dir}/codex.log"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_EXIT_CODE=1 \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger
+
+  [ "$status" -eq 0 ]
+  [ ! -s "$codex_log" ]
+}
+
+@test "next-task command non-zero exit errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/next-task-exit-2"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  write_config "$temp_dir" <<'CONFIG'
+codex_command: "codex --yolo exec"
+commands:
+  next_task: "next-task"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
+CONFIG
+
+  HOME="$temp_dir" \
+    NEXT_TASK_EXIT_CODE=2 \
+    run_trudger
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"next_task command failed with exit code 2"* ]]
+}
+
 @test "env config is ignored" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/env-ignored"
@@ -412,7 +471,8 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
-next_task_command: "next-task"
+commands:
+  next_task: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
@@ -451,7 +511,8 @@ CONFIG
   create_prompts "$temp_dir"
   write_config "$temp_dir" <<'CONFIG'
 codex_command: "codex --yolo exec"
-next_task_command: "next-task"
+commands:
+  next_task: "next-task"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:

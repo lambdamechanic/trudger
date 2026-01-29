@@ -214,7 +214,7 @@ EOF
       key="${BASH_REMATCH[1]}"
       value="$(normalize_value "${BASH_REMATCH[2]}")"
       case "$key" in
-        hooks)
+        hooks|commands)
           if [[ -z "$value" ]]; then
             section="$key"
             continue
@@ -227,9 +227,6 @@ EOF
       case "$key" in
         codex_command)
           codex_command="$value"
-          ;;
-        next_task_command)
-          next_task_command="$value"
           ;;
         review_loop_limit)
           review_loop_limit="$value"
@@ -259,6 +256,15 @@ EOF
               ;;
           esac
           ;;
+        commands)
+          case "$key" in
+            next_task)
+              next_task_command="$value"
+              ;;
+            *)
+              ;;
+          esac
+          ;;
         *)
           ;;
       esac
@@ -273,7 +279,7 @@ validate_config() {
     exit 1
   fi
   if [[ -z "$next_task_command" ]]; then
-    printf 'next_task_command must not be empty.\n' >&2
+    printf 'commands.next_task must not be empty.\n' >&2
     exit 1
   fi
   if [[ -z "$hook_on_completed" ]]; then
@@ -319,8 +325,17 @@ run_hook() {
 
 # --- Task selection and state ---
 get_next_task_id() {
-  local raw
-  raw="$(bash -lc "${next_task_command}" 2>/dev/null || true)"
+  local raw exit_code
+  raw="$(bash -lc "${next_task_command}" 2>/dev/null)"
+  exit_code=$?
+  if [[ "$exit_code" -eq 1 ]]; then
+    log_transition "idle next_task_exit=1"
+    exit 0
+  fi
+  if [[ "$exit_code" -ne 0 ]]; then
+    printf 'next_task command failed with exit code %s.\n' "$exit_code" >&2
+    exit "$exit_code"
+  fi
   printf '%s' "$raw" | awk 'NF { print $1; exit }'
 }
 
