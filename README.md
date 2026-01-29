@@ -60,9 +60,10 @@ hooks:
 
 Notes:
 - `codex_command` is used for solve; review uses the same command with `resume --last` appended.
+- `commands.next_task`, `commands.task_show`, and `commands.task_update_in_progress` are required and must be non-empty.
 - `commands.next_task` runs in a shell and the first whitespace-delimited token of stdout is used as the task id.
-- `commands.task_show` output is passed to Codex unparsed.
-- `commands.task_update_in_progress` output is ignored.
+- `commands.task_show` runs as `<command> <task_id> --json` (task id is the first argument); output is passed to Codex unparsed.
+- `commands.task_update_in_progress` runs as `<command> <task_id> --status in_progress` (task id is the first argument); output is ignored.
 - `hooks.on_completed` and `hooks.on_requires_human` are required; label updates must happen in hooks if you want them.
 - Hook commands honor shell quoting. If a hook contains `$1`/`${1}`, Trudger runs it via `bash -lc` and passes the task id as `$1`; otherwise the task id is prepended as the first argument.
 
@@ -94,6 +95,7 @@ The prompt sources live in `prompts/` and are installed by `./install.sh`.
 
 - Task selection uses `commands.next_task` and expects the first whitespace-delimited token of stdout to be the task id.
 - `commands.task_show` output is treated as free-form task details for Codex.
+- Tasks must be in status `ready` or `open` (from `commands.task_show --json`) or Trudger exits non-zero.
 - If a task is closed after review, Trudger runs `hooks.on_completed`.
 - If a task remains open after review, Trudger runs `hooks.on_requires_human`.
 
