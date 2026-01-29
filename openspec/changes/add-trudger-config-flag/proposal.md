@@ -11,3 +11,7 @@ Tests and alternate task-selection workflows need a deterministic way to inject 
 ## Impact
 - Affected specs: `trudger`
 - Affected code: `./trudger`, `tests/`, `README.md`, new sample config files.
+
+## Dependencies
+- Depends on `update-trudger-config-bootstrap` (config bootstrap and command-based behavior).
+- Depends on `refactor-trudger-config-and-docs` (aligns config parsing/validation and warning behavior).
