@@ -18,6 +18,7 @@ It is slower and more serial, but if you have a large number of smaller projects
 ## Requirements
 
 - `codex` CLI on your PATH
+- `yq` on your PATH for config parsing
 - Any task system CLIs referenced by your configured commands (for example `bd`, `br`, `bv`)
 - Prompt files installed under `~/.codex/prompts/` (see below):
   - `trudge.md`
@@ -32,6 +33,7 @@ trudger
 ## Configuration
 
 Trudger requires `~/.config/trudger.yml` on startup. If the file is missing, it prints curl commands for sample configs and exits non-zero.
+Configuration is parsed with `yq`; unknown top-level keys are logged as warnings and ignored.
 
 Sample configs:
 - `sample_configuration/trudgeable-with-hooks.yml`
@@ -60,6 +62,8 @@ hooks:
 
 Notes:
 - `codex_command` is used for solve; review uses the same command with `resume --last` appended.
+- Required keys (non-empty, non-null): `codex_command`, `review_loop_limit`, `log_path`, `commands.next_task`, `commands.task_show`, `commands.task_update_in_progress`, `hooks.on_completed`, `hooks.on_requires_human`.
+- Null values are treated as validation errors for required keys.
 - `commands.next_task`, `commands.task_show`, and `commands.task_update_in_progress` are required and must be non-empty.
 - `commands.next_task` runs in a shell and the first whitespace-delimited token of stdout is used as the task id.
 - `commands.task_show` runs as `<command> <task_id> --json` (task id is the first argument); output is passed to Codex unparsed.
@@ -96,6 +100,7 @@ The prompt sources live in `prompts/` and are installed by `./install.sh`.
 - Task selection uses `commands.next_task` and expects the first whitespace-delimited token of stdout to be the task id.
 - `commands.task_show` output is treated as free-form task details for Codex.
 - Tasks must be in status `ready` or `open` (from `commands.task_show --json`). When selecting via `commands.next_task`, Trudger skips non-ready tasks up to `TRUDGER_SKIP_NOT_READY_LIMIT` (default 5) before idling; manual task IDs still error if not ready.
+- If `commands.next_task` exits 1 or returns an empty task id, Trudger exits 0 (no selectable tasks).
 - If a task is closed after review, Trudger runs `hooks.on_completed`.
 - If a task remains open after review, Trudger runs `hooks.on_requires_human`.
 
