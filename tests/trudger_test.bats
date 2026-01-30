@@ -9,7 +9,34 @@ setup() {
 }
 
 run_trudger() {
-  run "${ROOT_DIR}/trudger"
+  local config_path=""
+  local prev=""
+  for arg in "$@"; do
+    if [[ "$prev" == "--config" || "$prev" == "-c" ]]; then
+      config_path="$arg"
+      break
+    fi
+    case "$arg" in
+      --config=*)
+        config_path="${arg#*=}"
+        break
+        ;;
+    esac
+    prev="$arg"
+  done
+  if [[ -n "$config_path" && -n "${HOME:-}" ]]; then
+    if [[ -x /bin/mkdir ]]; then
+      /bin/mkdir -p "${HOME}/.config"
+    else
+      mkdir -p "${HOME}/.config"
+    fi
+    if [[ -x /bin/cp ]]; then
+      /bin/cp "$config_path" "${HOME}/.config/trudger.yml"
+    else
+      cp "$config_path" "${HOME}/.config/trudger.yml"
+    fi
+  fi
+  run "${ROOT_DIR}/trudger" "$@"
 }
 
 should_run_codex_tests() {
@@ -31,6 +58,7 @@ yaml_quote() {
 
 write_base_config() {
   local temp_dir="$1"
+  local config_path="${temp_dir}/trudger.yml"
   local codex_command="${BASE_CODEX_COMMAND-"codex --yolo exec"}"
   local next_task_command="${BASE_NEXT_TASK_COMMAND-"next-task"}"
   local task_show_command="${BASE_TASK_SHOW_COMMAND-"task-show"}"
@@ -41,7 +69,6 @@ write_base_config() {
   local hook_on_requires_human="${BASE_HOOK_ON_REQUIRES_HUMAN-"hook --needs-human"}"
   local extra_config="${BASE_EXTRA_CONFIG-}"
 
-  mkdir -p "${temp_dir}/.config"
   {
     printf 'codex_command: %s\n' "$(yaml_quote "$codex_command")"
     printf 'commands:\n'
@@ -62,20 +89,22 @@ write_base_config() {
     if [[ -n "$extra_config" ]]; then
       printf '%s\n' "$extra_config"
     fi
-  } > "${temp_dir}/.config/trudger.yml"
+  } > "${config_path}"
+  printf '%s' "${config_path}"
 }
 
 write_config() {
   local temp_dir="$1"
-  mkdir -p "${temp_dir}/.config"
-  cat > "${temp_dir}/.config/trudger.yml"
+  local config_path="${temp_dir}/trudger.yml"
+  cat > "${config_path}"
+  printf '%s' "${config_path}"
 }
 
 copy_sample_config() {
   local temp_dir="$1"
   local name="$2"
-  mkdir -p "${temp_dir}/.config"
-  cp "${ROOT_DIR}/sample_configuration/${name}.yml" "${temp_dir}/.config/trudger.yml"
+  local config_path="${ROOT_DIR}/sample_configuration/${name}.yml"
+  printf '%s' "${config_path}"
 }
 
 make_minimal_path() {
@@ -93,11 +122,11 @@ make_minimal_path() {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-prompts"
   mkdir -p "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
     BR_MOCK_READY_JSON='[]' \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"Missing prompt file"* ]]
@@ -124,10 +153,10 @@ make_minimal_path() {
   temp_dir="${BATS_TEST_TMPDIR}/missing-next-task"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_NEXT_TASK_COMMAND="" write_base_config "$temp_dir"
+  BASE_NEXT_TASK_COMMAND="" config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
 }
@@ -137,10 +166,10 @@ make_minimal_path() {
   temp_dir="${BATS_TEST_TMPDIR}/missing-task-show"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_TASK_SHOW_COMMAND="" write_base_config "$temp_dir"
+  BASE_TASK_SHOW_COMMAND="" config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"commands.task_show must not be empty"* ]]
@@ -151,10 +180,10 @@ make_minimal_path() {
   temp_dir="${BATS_TEST_TMPDIR}/missing-task-update"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_TASK_UPDATE_COMMAND="" write_base_config "$temp_dir"
+  BASE_TASK_UPDATE_COMMAND="" config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"commands.task_update_in_progress must not be empty"* ]]
@@ -165,10 +194,10 @@ make_minimal_path() {
   temp_dir="${BATS_TEST_TMPDIR}/missing-on-completed"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_HOOK_ON_COMPLETED="" write_base_config "$temp_dir"
+  BASE_HOOK_ON_COMPLETED="" config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"hooks.on_completed must not be empty"* ]]
@@ -179,10 +208,10 @@ make_minimal_path() {
   temp_dir="${BATS_TEST_TMPDIR}/missing-on-requires-human"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_HOOK_ON_REQUIRES_HUMAN="" write_base_config "$temp_dir"
+  BASE_HOOK_ON_REQUIRES_HUMAN="" config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"hooks.on_requires_human must not be empty"* ]]
@@ -193,10 +222,10 @@ make_minimal_path() {
   temp_dir="${BATS_TEST_TMPDIR}/empty-codex-command"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_CODEX_COMMAND="" write_base_config "$temp_dir"
+  BASE_CODEX_COMMAND="" config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"codex_command must not be empty"* ]]
@@ -207,10 +236,10 @@ make_minimal_path() {
   temp_dir="${BATS_TEST_TMPDIR}/empty-log-path"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_LOG_PATH="" write_base_config "$temp_dir"
+  BASE_LOG_PATH="" config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"log_path must not be empty"* ]]
@@ -222,7 +251,7 @@ make_minimal_path() {
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
 
-  write_config "$temp_dir" <<'EOF'
+  config_path="$(write_config "$temp_dir" <<'EOF'
 codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
@@ -234,9 +263,10 @@ hooks:
   on_completed: "hook --done"
   on_requires_human: "hook --needs-human"
 EOF
+)"
 
   HOME="$temp_dir" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"review_loop_limit must be a positive integer"* ]]
@@ -247,11 +277,11 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/unknown-config-keys"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_EXTRA_CONFIG="unknown_key: 'mystery'" write_base_config "$temp_dir"
+  BASE_EXTRA_CONFIG="unknown_key: 'mystery'" config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT='' \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"Warning: Unknown config key: unknown_key"* ]]
@@ -262,14 +292,14 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/missing-yq"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   local minimal_path
   minimal_path="$(make_minimal_path "$temp_dir")"
 
   HOME="$temp_dir" \
     PATH="$minimal_path" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"Missing dependency: yq"* ]]
@@ -280,7 +310,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/no-tasks"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   local br_log="${temp_dir}/br.log"
   local codex_log="${temp_dir}/codex.log"
@@ -289,7 +319,7 @@ EOF
     NEXT_TASK_OUTPUT='' \
     BR_MOCK_LOG="$br_log" \
     CODEX_MOCK_LOG="$codex_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   [ ! -s "$codex_log" ]
@@ -300,7 +330,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/open-task"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   local codex_log="${temp_dir}/codex.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -318,7 +348,7 @@ EOF
     TASK_SHOW_QUEUE="$show_queue" \
     TASK_UPDATE_OUTPUT="UPDATE_IGNORED" \
     CODEX_MOCK_LOG="$codex_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   run grep -q -- "SHOW_PAYLOAD" "$codex_log"
@@ -336,7 +366,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/closed-task"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  copy_sample_config "$temp_dir" "trudgeable-with-hooks"
+  config_path="$(copy_sample_config "$temp_dir" "trudgeable-with-hooks")"
 
   local br_log="${temp_dir}/br.log"
   local codex_log="${temp_dir}/codex.log"
@@ -348,7 +378,7 @@ EOF
     BR_MOCK_SHOW_JSON='[{"id":"tr-1","status":"closed","labels":["trudgeable"]}]' \
     BR_MOCK_LOG="$br_log" \
     CODEX_MOCK_LOG="$codex_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   run grep -q -- "label remove tr-1 trudgeable" "$br_log"
@@ -366,7 +396,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/robot-triage"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  copy_sample_config "$temp_dir" "robot-triage"
+  config_path="$(copy_sample_config "$temp_dir" "robot-triage")"
 
   local br_log="${temp_dir}/br.log"
   local codex_log="${temp_dir}/codex.log"
@@ -385,7 +415,7 @@ EOF
     BR_MOCK_SHOW_QUEUE="$show_queue" \
     BR_MOCK_LOG="$br_log" \
     CODEX_MOCK_LOG="$codex_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   run grep -q -- "update tr-77 --status in_progress" "$br_log"
@@ -399,7 +429,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/robot-triage-skip"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  copy_sample_config "$temp_dir" "robot-triage"
+  config_path="$(copy_sample_config "$temp_dir" "robot-triage")"
 
   local br_log="${temp_dir}/br.log"
   local codex_log="${temp_dir}/codex.log"
@@ -419,7 +449,7 @@ EOF
     BR_MOCK_SHOW_QUEUE="$show_queue" \
     BR_MOCK_LOG="$br_log" \
     CODEX_MOCK_LOG="$codex_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   run grep -q -- "update tr-2 --status in_progress" "$br_log"
@@ -437,7 +467,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/codex-config"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_CODEX_COMMAND="codex --yolo exec --custom" write_base_config "$temp_dir"
+  BASE_CODEX_COMMAND="codex --yolo exec --custom" config_path="$(write_base_config "$temp_dir")"
 
   local codex_log="${temp_dir}/codex.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -454,7 +484,7 @@ EOF
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
     CODEX_MOCK_LOG="$codex_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   run grep -q -- "codex --yolo exec --custom" "$codex_log"
@@ -472,7 +502,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/hook-quoting"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_HOOK_ON_COMPLETED="bash -lc 'hook --done \"$1\"'" write_base_config "$temp_dir"
+  BASE_HOOK_ON_COMPLETED="bash -lc 'hook --done \"$1\"'" config_path="$(write_base_config "$temp_dir")"
 
   local hook_log="${temp_dir}/hook.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -489,7 +519,7 @@ EOF
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
     HOOK_MOCK_LOG="$hook_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   run grep -q -- "--done tr-55" "$hook_log"
@@ -505,7 +535,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/hook-prepend"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_HOOK_ON_COMPLETED="hook --done" write_base_config "$temp_dir"
+  BASE_HOOK_ON_COMPLETED="hook --done" config_path="$(write_base_config "$temp_dir")"
 
   local hook_log="${temp_dir}/hook.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -522,7 +552,7 @@ EOF
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
     HOOK_MOCK_LOG="$hook_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   run grep -q -- "tr-66 --done" "$hook_log"
@@ -538,7 +568,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/requires-human"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  copy_sample_config "$temp_dir" "trudgeable-with-hooks"
+  config_path="$(copy_sample_config "$temp_dir" "trudgeable-with-hooks")"
 
   local br_log="${temp_dir}/br.log"
   local ready_queue="${temp_dir}/ready.queue"
@@ -548,7 +578,7 @@ EOF
     BR_MOCK_READY_QUEUE="$ready_queue" \
     BR_MOCK_SHOW_JSON='[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
     BR_MOCK_LOG="$br_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   run grep -q -- "label remove tr-2 trudgeable" "$br_log"
@@ -566,7 +596,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/missing-status-after-review"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
@@ -581,7 +611,7 @@ EOF
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"Task tr-88 missing status after review."* ]]
@@ -596,7 +626,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/next-task"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   local br_log="${temp_dir}/br.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -613,7 +643,7 @@ EOF
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
     BR_MOCK_LOG="$br_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
 }
@@ -623,14 +653,14 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/next-task-empty"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   local codex_log="${temp_dir}/codex.log"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT='' \
     CODEX_MOCK_LOG="$codex_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   [ ! -s "$codex_log" ]
@@ -641,14 +671,14 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/next-task-exit-1"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   local codex_log="${temp_dir}/codex.log"
 
   HOME="$temp_dir" \
     NEXT_TASK_EXIT_CODE=1 \
     CODEX_MOCK_LOG="$codex_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
   [ ! -s "$codex_log" ]
@@ -659,11 +689,11 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/next-task-exit-2"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
     NEXT_TASK_EXIT_CODE=2 \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 2 ]
   [[ "$output" == *"next_task command failed with exit code 2"* ]]
@@ -674,7 +704,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/env-ignored"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   local br_log="${temp_dir}/br.log"
   local show_queue="${temp_dir}/show.queue"
@@ -693,7 +723,7 @@ EOF
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
     BR_MOCK_LOG="$br_log" \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
 }
@@ -707,7 +737,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/codex-fail"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  write_base_config "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
 
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
@@ -723,7 +753,7 @@ EOF
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
     CODEX_MOCK_FAIL_ON=exec \
-    run_trudger
+    run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
 }
