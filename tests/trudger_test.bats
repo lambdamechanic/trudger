@@ -59,15 +59,15 @@ yaml_quote() {
 write_base_config() {
   local temp_dir="$1"
   local config_path="${temp_dir}/trudger.yml"
-  local codex_command="${BASE_CODEX_COMMAND-"codex --yolo exec"}"
+  local codex_command="${BASE_CODEX_COMMAND-"codex --yolo exec \"\$@\""}"
   local next_task_command="${BASE_NEXT_TASK_COMMAND-"next-task"}"
-  local task_show_command="${BASE_TASK_SHOW_COMMAND-"task-show"}"
-  local task_status_command="${BASE_TASK_STATUS_COMMAND-"task-status"}"
-  local task_update_command="${BASE_TASK_UPDATE_COMMAND-"task-update"}"
+  local task_show_command="${BASE_TASK_SHOW_COMMAND-"task-show \"\$@\""}"
+  local task_status_command="${BASE_TASK_STATUS_COMMAND-"task-status \"\$@\""}"
+  local task_update_command="${BASE_TASK_UPDATE_COMMAND-"task-update \"\$@\""}"
   local review_loop_limit="${BASE_REVIEW_LOOP_LIMIT-"5"}"
   local log_path="${BASE_LOG_PATH-"./.trudger.log"}"
-  local hook_on_completed="${BASE_HOOK_ON_COMPLETED-"hook --done"}"
-  local hook_on_requires_human="${BASE_HOOK_ON_REQUIRES_HUMAN-"hook --needs-human"}"
+  local hook_on_completed="${BASE_HOOK_ON_COMPLETED-"hook --done \"\$@\""}"
+  local hook_on_requires_human="${BASE_HOOK_ON_REQUIRES_HUMAN-"hook --needs-human \"\$@\""}"
   local extra_config="${BASE_EXTRA_CONFIG-}"
 
   {
@@ -157,32 +157,32 @@ make_minimal_path() {
   create_prompts "$temp_dir"
 
   cat > "${temp_dir}/.config/trudger.yml" <<'EOF'
-codex_command: "codex --yolo exec --default"
+codex_command: 'codex --yolo exec --default "$@"'
 commands:
   next_task: "next-task"
-  task_show: "task-show"
-  task_status: "task-status"
-  task_update_in_progress: "task-update"
+  task_show: 'task-show "$@"'
+  task_status: 'task-status "$@"'
+  task_update_in_progress: 'task-update "$@"'
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
+  on_completed: 'hook --done "$@"'
+  on_requires_human: 'hook --needs-human "$@"'
 EOF
 
   local override_config_path
   override_config_path="$(write_config "$temp_dir" <<'EOF'
-codex_command: "codex --yolo exec --override"
+codex_command: 'codex --yolo exec --override "$@"'
 commands:
   next_task: "next-task"
-  task_show: "task-show"
-  task_status: "task-status"
-  task_update_in_progress: "task-update"
+  task_show: 'task-show "$@"'
+  task_status: 'task-status "$@"'
+  task_update_in_progress: 'task-update "$@"'
 review_loop_limit: 5
 log_path: "./.trudger.log"
 hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
+  on_completed: 'hook --done "$@"'
+  on_requires_human: 'hook --needs-human "$@"'
 EOF
 )"
 
@@ -346,17 +346,17 @@ EOF
   create_prompts "$temp_dir"
 
   config_path="$(write_config "$temp_dir" <<'EOF'
-codex_command: "codex --yolo exec"
+codex_command: 'codex --yolo exec "$@"'
 commands:
   next_task: "next-task"
-  task_show: "task-show"
-  task_status: "task-status"
-  task_update_in_progress: "task-update"
+  task_show: 'task-show "$@"'
+  task_status: 'task-status "$@"'
+  task_update_in_progress: 'task-update "$@"'
 review_loop_limit: null
 log_path: "./.trudger.log"
 hooks:
-  on_completed: "hook --done"
-  on_requires_human: "hook --needs-human"
+  on_completed: 'hook --done "$@"'
+  on_requires_human: 'hook --needs-human "$@"'
 EOF
 )"
 
@@ -574,7 +574,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/codex-config"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_CODEX_COMMAND="codex --yolo exec --custom" config_path="$(write_base_config "$temp_dir")"
+  BASE_CODEX_COMMAND='codex --yolo exec --custom "$@"' config_path="$(write_base_config "$temp_dir")"
 
   local codex_log="${temp_dir}/codex.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -639,7 +639,7 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "hooks prepend task id when no substitution is present" {
+@test "hooks do not prepend task id when no substitution is present" {
   if ! should_run_codex_tests; then
     skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
   fi
@@ -671,8 +671,10 @@ EOF
     run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
-  run grep -q -- "tr-66 --done" "$hook_log"
+  run grep -q -- "--done" "$hook_log"
   [ "$status" -eq 0 ]
+  run grep -q -- "tr-66" "$hook_log"
+  [ "$status" -ne 0 ]
 }
 
 @test "requires-human updates labels" {

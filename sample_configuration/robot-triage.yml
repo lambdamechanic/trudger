@@ -1,12 +1,12 @@
 # Robot triage
 # - Selects tasks via `bv --robot-next` (exits 1 when none).
 # - No label changes (hooks are no-ops).
-codex_command: "codex --yolo exec --model gpt-5.2-codex --reasoning medium"
+codex_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium "$@"'
 commands:
   next_task: 'task_id=$(bv --robot-next | jq -r ".id // empty"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
-  task_show: "br show"
+  task_show: 'br show "$@"'
   task_status: 'br show "$1" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
-  task_update_in_progress: "br update"
+  task_update_in_progress: 'br update "$@"'
 review_loop_limit: 5
 log_path: "./.trudger.log"
 

@@ -317,17 +317,33 @@ validate_config() {
 }
 
 # --- Command helpers ---
-parse_command() {
-  local input="$1"
-  # shellcheck disable=SC2034
-  local -n out="$2"
-  out=()
-  if [[ -n "$input" ]]; then
-    if ! mapfile -d '' -t out < <(bash -c 'set -f; eval "set -- $1"; printf "%s\0" "$@"' -- "$input"); then
-      printf 'Failed to parse command: %s\n' "$input" >&2
-      quit "parse_command_failed" 1
-    fi
+run_shell_command() {
+  local command="$1"
+  local log_label="$2"
+  shift 2
+  local args=("$@")
+
+  if [[ -z "$command" ]]; then
+    return 0
   fi
+
+  log_transition "cmd label=${log_label} mode=bash_lc args=$(sanitize_log_value "$(printf '%q ' "${args[@]}")")"
+  local errexit_enabled=0
+  if [[ $- == *e* ]]; then
+    errexit_enabled=1
+  fi
+  set +e
+  if ((${#args[@]} > 0)); then
+    bash -lc "$command" -- "${args[@]}"
+  else
+    bash -lc "$command"
+  fi
+  local exit_code=$?
+  if ((errexit_enabled)); then
+    set -e
+  fi
+  log_transition "cmd label=${log_label} exit=${exit_code}"
+  return "$exit_code"
 }
 
 run_config_command() {
@@ -350,69 +366,23 @@ run_config_command() {
   fi
   log_transition "cmd start label=${log_label} task=${task_token} command=$(sanitize_log_value "$command")"
 
-  local use_shell="false"
-  if [[ "$command" == *'$1'* || "$command" == *'${1}'* ]]; then
-    use_shell="true"
-  elif [[ "$force_shell" == "true" ]]; then
-    use_shell="true"
-  fi
-
-  local errexit_enabled=0
-  if [[ $- == *e* ]]; then
-    errexit_enabled=1
-  fi
-
-  if [[ "$use_shell" == "true" ]]; then
-    log_transition "cmd label=${log_label} mode=shell_eval"
-    set +e
-    if [[ -n "$task_id" || ${#extra_args[@]} -gt 0 ]]; then
-      if [[ -n "$task_id" ]]; then
-        (
-          set -- "$task_id" "${extra_args[@]}"
-          eval "$command"
-        )
-      else
-        (
-          set -- "${extra_args[@]}"
-          eval "$command"
-        )
-      fi
-    else
-      (
-        eval "$command"
-      )
-    fi
-    local exit_code=$?
-    if ((errexit_enabled)); then
-      set -e
-    fi
-    log_transition "cmd label=${log_label} exit=${exit_code}"
-    return "$exit_code"
-  fi
-
-  local parts=()
-  parse_command "$command" parts
-  if ((${#parts[@]} == 0)); then
-    return 0
-  fi
-
-  log_transition "cmd label=${log_label} mode=argv argv=$(sanitize_log_value "$(printf '%q ' "${parts[@]}")")"
-  set +e
+  local args=()
   if [[ -n "$task_id" ]]; then
-    if [[ "$prepend_task_id" == "true" ]]; then
-      "${parts[0]}" "$task_id" "${parts[@]:1}" "${extra_args[@]}"
-    else
-      "${parts[@]}" "$task_id" "${extra_args[@]}"
-    fi
-  else
-    "${parts[@]}" "${extra_args[@]}"
+    args+=("$task_id")
   fi
-  local exit_code=$?
-  if ((errexit_enabled)); then
-    set -e
+  if ((${#extra_args[@]} > 0)); then
+    args+=("${extra_args[@]}")
   fi
-  log_transition "cmd label=${log_label} exit=${exit_code}"
-  return "$exit_code"
+  run_shell_command "$command" "$log_label" "${args[@]}"
+}
+
+run_codex_command() {
+  local command="$1"
+  shift
+  local args=("$@")
+
+  log_transition "cmd start label=codex task=none command=$(sanitize_log_value "$command")"
+  run_shell_command "$command" "codex" "${args[@]}"
 }
 
 run_hook() {
@@ -606,9 +576,7 @@ fi
 current_task_id=""
 current_phase=""
 
-codex_cmd=()
-parse_command "$codex_command" codex_cmd
-review_cmd=("${codex_cmd[@]}" resume --last)
+review_args=("resume" "--last")
 
 handle_error() {
   if [[ -n "${current_task_id}" ]]; then
@@ -699,7 +667,7 @@ while true; do
 
   run_task_command "$task_update_in_progress_command" "$task_id" --status in_progress
   task_show_output="$(run_task_show "$task_id" --json)"
-  if ! "${codex_cmd[@]}" "$(render_prompt "$PROMPT_TRUDGE" "$task_id" "$task_show_output")"; then
+  if ! run_codex_command "$codex_command" "$(render_prompt "$PROMPT_TRUDGE" "$task_id" "$task_show_output")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "solve_failed task=${task_id}"
     printf 'Codex solve failed for task %s.\n' "$task_id" >&2
@@ -709,7 +677,7 @@ while true; do
   update_tmux_name "$current_phase" "$task_id"
   log_transition "state=REVIEWING task=${task_id} loop=${review_loops}"
   task_show_output="$(run_task_show "$task_id" --json)"
-  if ! "${review_cmd[@]}" "$(render_prompt "$PROMPT_REVIEW" "$task_id" "$task_show_output")"; then
+  if ! run_codex_command "$codex_command" "${review_args[@]}" "$(render_prompt "$PROMPT_REVIEW" "$task_id" "$task_show_output")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "review_failed task=${task_id}"
     printf 'Codex review failed for task %s.\n' "$task_id" >&2
