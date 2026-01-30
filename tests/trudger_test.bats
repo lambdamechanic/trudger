@@ -24,7 +24,7 @@ run_trudger() {
     esac
     prev="$arg"
   done
-  if [[ -n "$config_path" && -n "${HOME:-}" ]]; then
+  if [[ -n "$config_path" && -n "${HOME:-}" && "${TRUDGER_TEST_SKIP_CONFIG_COPY:-}" != "1" ]]; then
     if [[ -x /bin/mkdir ]]; then
       /bin/mkdir -p "${HOME}/.config"
     else
@@ -146,6 +146,78 @@ make_minimal_path() {
   [[ "$output" == *"Missing config file"* ]]
   [[ "$output" == *"trudgeable-with-hooks.yml"* ]]
   [[ "$output" == *"robot-triage.yml"* ]]
+}
+
+@test "config flag uses provided file" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/config-override"
+  mkdir -p "${temp_dir}/.config"
+  create_prompts "$temp_dir"
+
+  cat > "${temp_dir}/.config/trudger.yml" <<'EOF'
+codex_command: "codex --yolo exec --default"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
+EOF
+
+  local override_config_path
+  override_config_path="$(write_config "$temp_dir" <<'EOF'
+codex_command: "codex --yolo exec --override"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_update_in_progress: "task-update"
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "hook --done"
+  on_requires_human: "hook --needs-human"
+EOF
+)"
+
+  local codex_log="${temp_dir}/codex.log"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  printf '%s\n' 'tr-10' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-10","status":"ready","labels":[]}]' \
+    '[{"id":"tr-10","status":"ready","labels":[]}]' \
+    '[{"id":"tr-10","status":"ready","labels":[]}]' \
+    '[{"id":"tr-10","status":"closed","labels":[]}]' \
+    > "$show_queue"
+
+  HOME="$temp_dir" \
+    TRUDGER_TEST_SKIP_CONFIG_COPY=1 \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger --config "$override_config_path"
+
+  [ "$status" -eq 0 ]
+  run grep -q -- "codex --yolo exec --override" "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -q -- "codex --yolo exec --default" "$codex_log"
+  [ "$status" -ne 0 ]
+}
+
+@test "missing -c value errors with usage" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-config-flag"
+  mkdir -p "$temp_dir"
+
+  HOME="$temp_dir" \
+    run_trudger -c
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Missing value for -c"* ]]
+  [[ "$output" == *"Usage:"* ]]
 }
 
 @test "missing commands.next_task exits cleanly" {
