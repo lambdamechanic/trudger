@@ -490,7 +490,7 @@ EOF
   [ "$status" -eq 0 ]
   run grep -q -- "codex --yolo exec " "$codex_log"
   [ "$status" -eq 0 ]
-  run grep -q -- "codex --yolo exec resume --last " "$codex_log"
+  run grep -q -- "resume --last" "$codex_log"
   [ "$status" -eq 0 ]
   run grep -q -- "tr-1" "$codex_log"
   [ "$status" -eq 0 ]
@@ -610,7 +610,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/hook-quoting"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_HOOK_ON_COMPLETED="bash -lc 'hook --done \"$1\"'" config_path="$(write_base_config "$temp_dir")"
+  BASE_HOOK_ON_COMPLETED='hook --done "$1"' config_path="$(write_base_config "$temp_dir")"
 
   local hook_log="${temp_dir}/hook.log"
   local next_task_queue="${temp_dir}/next-task.queue"

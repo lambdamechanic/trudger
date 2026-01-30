@@ -64,8 +64,8 @@ review_loop_limit: 5
 log_path: "./.trudger.log"
 
 hooks:
-  on_completed: "bash -lc 'br label remove \"$1\" \"trudgeable\"'"
-  on_requires_human: "bash -lc 'br label remove \"$1\" \"trudgeable\"; br label add \"$1\" \"human-required\"'"
+  on_completed: 'br label remove "$1" "trudgeable"'
+  on_requires_human: 'br label remove "$1" "trudgeable"; br label add "$1" "human-required"'
 ```
 
 Notes:

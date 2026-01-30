@@ -363,16 +363,19 @@ run_config_command() {
   fi
 
   if [[ "$use_shell" == "true" ]]; then
+    local shell_path shell_command
+    shell_path="$(printf '%q' "$PATH")"
+    shell_command="PATH=${shell_path}; ${command}"
     log_transition "cmd label=${log_label} mode=bash_lc"
     set +e
     if [[ -n "$task_id" || ${#extra_args[@]} -gt 0 ]]; then
       if [[ -n "$task_id" ]]; then
-        bash -lc "$command" "$shell_label" "$task_id" "${extra_args[@]}"
+        bash -lc "$shell_command" "$shell_label" "$task_id" "${extra_args[@]}"
       else
-        bash -lc "$command" "$shell_label" "${extra_args[@]}"
+        bash -lc "$shell_command" "$shell_label" "${extra_args[@]}"
       fi
     else
-      bash -lc "$command"
+      bash -lc "$shell_command"
     fi
     local exit_code=$?
     if ((errexit_enabled)); then
