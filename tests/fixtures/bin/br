@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tests/fixtures/bin/_queue_helpers
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/_queue_helpers"
 
 log_path="${BR_MOCK_LOG:-}"

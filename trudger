@@ -349,11 +349,9 @@ run_shell_command() {
 run_config_command() {
   local command="$1"
   local task_id="$2"
-  local prepend_task_id="$3"
-  local shell_label="$4"
-  local force_shell="$5"
-  local log_label="${6:-$shell_label}"
-  shift 6
+  local shell_label="$3"
+  local log_label="${4:-$shell_label}"
+  shift 4
   local extra_args=("$@")
 
   if [[ -z "$command" ]]; then
@@ -392,7 +390,7 @@ run_hook() {
   if [[ -z "$hook_command" ]]; then
     return 0
   fi
-  run_config_command "$hook_command" "$task_id" "true" "hook" "false" "$hook_name"
+  run_config_command "$hook_command" "$task_id" "hook" "$hook_name"
 }
 
 run_task_command() {
@@ -401,7 +399,7 @@ run_task_command() {
   shift 2
   local extra_args=("$@")
 
-  run_config_command "$command" "$task_id" "false" "task" "false" "task" "${extra_args[@]}"
+  run_config_command "$command" "$task_id" "task" "task" "${extra_args[@]}"
 }
 
 run_task_show() {
@@ -434,7 +432,7 @@ run_task_status() {
 get_next_task_id() {
   local raw exit_code
   set +e
-  raw="$(run_config_command "$next_task_command" "" "false" "next-task" "true" "next-task" 2>/dev/null)"
+  raw="$(run_config_command "$next_task_command" "" "next-task" "next-task" 2>/dev/null)"
   exit_code=$?
   set -e
   if [[ "$exit_code" -eq 1 ]]; then
