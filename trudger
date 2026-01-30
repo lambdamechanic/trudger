@@ -260,6 +260,7 @@ EOF
   trudger_log_path="$(read_config_value '.log_path' "$yq_mode")"
   next_task_command="$(read_config_value '.commands.next_task' "$yq_mode")"
   task_show_command="$(read_config_value '.commands.task_show' "$yq_mode")"
+  task_status_command="$(read_config_value '.commands.task_status' "$yq_mode")"
   task_update_in_progress_command="$(read_config_value '.commands.task_update_in_progress' "$yq_mode")"
   hook_on_completed="$(read_config_value '.hooks.on_completed' "$yq_mode")"
   hook_on_requires_human="$(read_config_value '.hooks.on_requires_human' "$yq_mode")"
@@ -281,9 +282,17 @@ validate_config() {
     printf 'codex_command must not be empty.\n' >&2
     quit "missing_codex_command" 1
   fi
+  if [[ -z "$next_task_command" ]]; then
+    printf 'commands.next_task must not be empty.\n' >&2
+    quit "missing_next_task_command" 1
+  fi
   if [[ -z "$task_show_command" ]]; then
     printf 'commands.task_show must not be empty.\n' >&2
     quit "missing_task_show_command" 1
+  fi
+  if [[ -z "$task_status_command" ]]; then
+    printf 'commands.task_status must not be empty.\n' >&2
+    quit "missing_task_status_command" 1
   fi
   if [[ -z "$task_update_in_progress_command" ]]; then
     printf 'commands.task_update_in_progress must not be empty.\n' >&2
@@ -348,8 +357,14 @@ run_config_command() {
     use_shell="true"
   fi
 
+  local errexit_enabled=0
+  if [[ $- == *e* ]]; then
+    errexit_enabled=1
+  fi
+
   if [[ "$use_shell" == "true" ]]; then
     log_transition "cmd label=${log_label} mode=bash_lc"
+    set +e
     if [[ -n "$task_id" || ${#extra_args[@]} -gt 0 ]]; then
       if [[ -n "$task_id" ]]; then
         bash -lc "$command" "$shell_label" "$task_id" "${extra_args[@]}"
@@ -360,6 +375,9 @@ run_config_command() {
       bash -lc "$command"
     fi
     local exit_code=$?
+    if ((errexit_enabled)); then
+      set -e
+    fi
     log_transition "cmd label=${log_label} exit=${exit_code}"
     return "$exit_code"
   fi
@@ -371,6 +389,7 @@ run_config_command() {
   fi
 
   log_transition "cmd label=${log_label} mode=argv argv=$(sanitize_log_value "$(printf '%q ' "${parts[@]}")")"
+  set +e
   if [[ -n "$task_id" ]]; then
     if [[ "$prepend_task_id" == "true" ]]; then
       "${parts[0]}" "$task_id" "${parts[@]:1}" "${extra_args[@]}"
@@ -381,6 +400,9 @@ run_config_command() {
     "${parts[@]}" "${extra_args[@]}"
   fi
   local exit_code=$?
+  if ((errexit_enabled)); then
+    set -e
+  fi
   log_transition "cmd label=${log_label} exit=${exit_code}"
   return "$exit_code"
 }
@@ -407,7 +429,27 @@ run_task_command() {
 run_task_show() {
   local task_id="$1"
   shift
-  run_task_command "$task_show_command" "$task_id" "$@"
+  local raw exit_code
+  local errexit_enabled=0
+  if [[ $- == *e* ]]; then
+    errexit_enabled=1
+  fi
+  set +e
+  raw="$(run_task_command "$task_show_command" "$task_id" "$@")"
+  exit_code=$?
+  if ((errexit_enabled)); then
+    set -e
+  fi
+  if [[ "$exit_code" -ne 0 ]]; then
+    printf 'task_show command failed with exit code %s.\n' "$exit_code" >&2
+    quit "task_show_failed:${exit_code}" "$exit_code"
+  fi
+  printf '%s' "$raw"
+}
+
+run_task_status() {
+  local task_id="$1"
+  run_task_command "$task_status_command" "$task_id"
 }
 
 # --- Task selection and state ---
@@ -428,26 +470,25 @@ get_next_task_id() {
   printf '%s' "$raw" | awk 'NF { print $1; exit }'
 }
 
-load_task_state() {
-  local task_id="$1"
-  local raw
-  raw="$(run_task_show "$task_id" --json)"
-  printf '%s' "$raw" | jq -r '
-    def item: if type == "array" then .[0] else . end;
-    if (type == "array" and length == 0) or type == "null" then
-      ["", ""]
-    else
-      item | [(.status // ""), ((.labels // []) | join(" "))]
-    end
-    | .[]
-  ' 2>/dev/null || true
-}
-
 task_status() {
   local task_id="$1"
-  local task_state
-  mapfile -t task_state < <(load_task_state "$task_id")
-  printf '%s' "${task_state[0]:-}"
+  local raw exit_code status
+  local errexit_enabled=0
+  if [[ $- == *e* ]]; then
+    errexit_enabled=1
+  fi
+  set +e
+  raw="$(run_task_status "$task_id")"
+  exit_code=$?
+  if ((errexit_enabled)); then
+    set -e
+  fi
+  if [[ "$exit_code" -ne 0 ]]; then
+    printf 'task_status command failed with exit code %s.\n' "$exit_code" >&2
+    quit "task_status_failed:${exit_code}" "$exit_code"
+  fi
+  status="$(printf '%s' "$raw" | awk 'NF { print $1; exit }')"
+  printf '%s' "$status"
 }
 
 is_ready_status() {
@@ -528,6 +569,7 @@ done
 codex_command=""
 next_task_command=""
 task_show_command=""
+task_status_command=""
 task_update_in_progress_command=""
 review_loop_limit=""
 trudger_log_path=""
@@ -663,10 +705,8 @@ while true; do
     quit "review_failed:${task_id}" 1
   fi
 
-  mapfile -t task_state < <(load_task_state "$task_id")
-  status="${task_state[0]:-}"
-  labels="${task_state[1]:-}"
-  log_transition "review_state task=${task_id} status=${status:-unknown} labels=${labels:-none}"
+  status="$(task_status "$task_id")"
+  log_transition "review_state task=${task_id} status=${status:-unknown}"
 
   if [[ -z "$status" ]]; then
     update_tmux_name "ERROR" "$task_id"

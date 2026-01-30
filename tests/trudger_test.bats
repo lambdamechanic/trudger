@@ -62,6 +62,7 @@ write_base_config() {
   local codex_command="${BASE_CODEX_COMMAND-"codex --yolo exec"}"
   local next_task_command="${BASE_NEXT_TASK_COMMAND-"next-task"}"
   local task_show_command="${BASE_TASK_SHOW_COMMAND-"task-show"}"
+  local task_status_command="${BASE_TASK_STATUS_COMMAND-"task-status"}"
   local task_update_command="${BASE_TASK_UPDATE_COMMAND-"task-update"}"
   local review_loop_limit="${BASE_REVIEW_LOOP_LIMIT-"5"}"
   local log_path="${BASE_LOG_PATH-"./.trudger.log"}"
@@ -76,6 +77,7 @@ write_base_config() {
       printf '  next_task: %s\n' "$(yaml_quote "$next_task_command")"
     fi
     printf '  task_show: %s\n' "$(yaml_quote "$task_show_command")"
+    printf '  task_status: %s\n' "$(yaml_quote "$task_status_command")"
     printf '  task_update_in_progress: %s\n' "$(yaml_quote "$task_update_command")"
     if [[ -n "$review_loop_limit" ]]; then
       printf 'review_loop_limit: %s\n' "$review_loop_limit"
@@ -159,6 +161,7 @@ codex_command: "codex --yolo exec --default"
 commands:
   next_task: "next-task"
   task_show: "task-show"
+  task_status: "task-status"
   task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
@@ -173,6 +176,7 @@ codex_command: "codex --yolo exec --override"
 commands:
   next_task: "next-task"
   task_show: "task-show"
+  task_status: "task-status"
   task_update_in_progress: "task-update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
@@ -185,6 +189,7 @@ EOF
   local codex_log="${temp_dir}/codex.log"
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
   printf '%s\n' 'tr-10' '' > "$next_task_queue"
   printf '%s\n' \
     '[{"id":"tr-10","status":"ready","labels":[]}]' \
@@ -192,11 +197,13 @@ EOF
     '[{"id":"tr-10","status":"ready","labels":[]}]' \
     '[{"id":"tr-10","status":"closed","labels":[]}]' \
     > "$show_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
 
   HOME="$temp_dir" \
     TRUDGER_TEST_SKIP_CONFIG_COPY=1 \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger --config "$override_config_path"
 
@@ -220,7 +227,7 @@ EOF
   [[ "$output" == *"Usage:"* ]]
 }
 
-@test "missing commands.next_task exits cleanly" {
+@test "missing commands.next_task errors" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-next-task"
   mkdir -p "$temp_dir"
@@ -230,7 +237,8 @@ EOF
   HOME="$temp_dir" \
     run_trudger -c "$config_path"
 
-  [ "$status" -eq 0 ]
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"commands.next_task must not be empty"* ]]
 }
 
 @test "missing commands.task_show errors" {
@@ -245,6 +253,20 @@ EOF
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"commands.task_show must not be empty"* ]]
+}
+
+@test "missing commands.task_status errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-task-status"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  BASE_TASK_STATUS_COMMAND="" config_path="$(write_base_config "$temp_dir")"
+
+  HOME="$temp_dir" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"commands.task_status must not be empty"* ]]
 }
 
 @test "missing commands.task_update_in_progress errors" {
@@ -328,6 +350,7 @@ codex_command: "codex --yolo exec"
 commands:
   next_task: "next-task"
   task_show: "task-show"
+  task_status: "task-status"
   task_update_in_progress: "task-update"
 review_loop_limit: null
 log_path: "./.trudger.log"
@@ -407,6 +430,7 @@ EOF
   local codex_log="${temp_dir}/codex.log"
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
   printf '%s\n' 'tr-42' '' > "$next_task_queue"
   printf '%s\n' \
     '[{"id":"tr-42","status":"open","labels":[],"payload":"SHOW_PAYLOAD"}]' \
@@ -414,10 +438,12 @@ EOF
     '[{"id":"tr-42","status":"open","labels":[],"payload":"SHOW_PAYLOAD"}]' \
     '[{"id":"tr-42","status":"closed","labels":[],"payload":"SHOW_PAYLOAD"}]' \
     > "$show_queue"
+  printf '%s\n' 'open' 'closed' > "$status_queue"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
     TASK_UPDATE_OUTPUT="UPDATE_IGNORED" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger -c "$config_path"
@@ -443,11 +469,18 @@ EOF
   local br_log="${temp_dir}/br.log"
   local codex_log="${temp_dir}/codex.log"
   local ready_queue="${temp_dir}/ready.queue"
+  local show_queue="${temp_dir}/show.queue"
   printf '%s\n' '[{"id":"tr-1"}]' '[]' > "$ready_queue"
+  printf '%s\n' \
+    '[{"id":"tr-1","status":"ready","labels":["trudgeable"]}]' \
+    '[{"id":"tr-1","status":"ready","labels":["trudgeable"]}]' \
+    '[{"id":"tr-1","status":"ready","labels":["trudgeable"]}]' \
+    '[{"id":"tr-1","status":"closed","labels":["trudgeable"]}]' \
+    > "$show_queue"
 
   HOME="$temp_dir" \
     BR_MOCK_READY_QUEUE="$ready_queue" \
-    BR_MOCK_SHOW_JSON='[{"id":"tr-1","status":"closed","labels":["trudgeable"]}]' \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
     BR_MOCK_LOG="$br_log" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger -c "$config_path"
@@ -544,6 +577,7 @@ EOF
   local codex_log="${temp_dir}/codex.log"
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
   printf '%s\n' 'tr-10' '' > "$next_task_queue"
   printf '%s\n' \
     '[{"id":"tr-10","status":"ready","labels":[]}]' \
@@ -551,10 +585,12 @@ EOF
     '[{"id":"tr-10","status":"ready","labels":[]}]' \
     '[{"id":"tr-10","status":"closed","labels":[]}]' \
     > "$show_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger -c "$config_path"
 
@@ -579,6 +615,7 @@ EOF
   local hook_log="${temp_dir}/hook.log"
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
   printf '%s\n' 'tr-55' '' > "$next_task_queue"
   printf '%s\n' \
     '[{"id":"tr-55","status":"ready","labels":[]}]' \
@@ -586,10 +623,12 @@ EOF
     '[{"id":"tr-55","status":"ready","labels":[]}]' \
     '[{"id":"tr-55","status":"closed","labels":[]}]' \
     > "$show_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
     HOOK_MOCK_LOG="$hook_log" \
     run_trudger -c "$config_path"
 
@@ -612,6 +651,7 @@ EOF
   local hook_log="${temp_dir}/hook.log"
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
   printf '%s\n' 'tr-66' '' > "$next_task_queue"
   printf '%s\n' \
     '[{"id":"tr-66","status":"ready","labels":[]}]' \
@@ -619,10 +659,12 @@ EOF
     '[{"id":"tr-66","status":"ready","labels":[]}]' \
     '[{"id":"tr-66","status":"closed","labels":[]}]' \
     > "$show_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
     HOOK_MOCK_LOG="$hook_log" \
     run_trudger -c "$config_path"
 
@@ -644,11 +686,18 @@ EOF
 
   local br_log="${temp_dir}/br.log"
   local ready_queue="${temp_dir}/ready.queue"
+  local show_queue="${temp_dir}/show.queue"
   printf '%s\n' '[{"id":"tr-2"}]' '[]' > "$ready_queue"
+  printf '%s\n' \
+    '[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
+    '[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
+    '[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
+    '[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
+    > "$show_queue"
 
   HOME="$temp_dir" \
     BR_MOCK_READY_QUEUE="$ready_queue" \
-    BR_MOCK_SHOW_JSON='[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
+    BR_MOCK_SHOW_QUEUE="$show_queue" \
     BR_MOCK_LOG="$br_log" \
     run_trudger -c "$config_path"
 
@@ -672,6 +721,7 @@ EOF
 
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
   printf '%s\n' 'tr-88' '' > "$next_task_queue"
   printf '%s\n' \
     '[{"id":"tr-88","status":"ready","labels":[]}]' \
@@ -679,10 +729,12 @@ EOF
     '[{"id":"tr-88","status":"ready","labels":[]}]' \
     '[{"id":"tr-88","labels":[]}]' \
     > "$show_queue"
+  printf '%s\n' 'ready' '' > "$status_queue"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
     run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
@@ -703,6 +755,7 @@ EOF
   local br_log="${temp_dir}/br.log"
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
   printf '%s\n' 'tr-20 extra' '' > "$next_task_queue"
   printf '%s\n' \
     '[{"id":"tr-20","status":"ready","labels":["trudgeable"]}]' \
@@ -710,10 +763,12 @@ EOF
     '[{"id":"tr-20","status":"ready","labels":["trudgeable"]}]' \
     '[{"id":"tr-20","status":"closed","labels":["trudgeable"]}]' \
     > "$show_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
     BR_MOCK_LOG="$br_log" \
     run_trudger -c "$config_path"
 
@@ -781,6 +836,7 @@ EOF
   local br_log="${temp_dir}/br.log"
   local show_queue="${temp_dir}/show.queue"
   local next_task_queue="${temp_dir}/next-task.queue"
+  local status_queue="${temp_dir}/status.queue"
   printf '%s\n' \
     '[{"id":"tr-99","status":"ready","labels":[]}]' \
     '[{"id":"tr-99","status":"ready","labels":[]}]' \
@@ -788,12 +844,14 @@ EOF
     '[{"id":"tr-99","status":"closed","labels":[]}]' \
     > "$show_queue"
   printf '%s\n' 'tr-99' '' > "$next_task_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
 
   HOME="$temp_dir" \
     TRUDGER_NEXT_CMD='next-task' \
     TRUDGER_REVIEW_LOOPS=0 \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
     BR_MOCK_LOG="$br_log" \
     run_trudger -c "$config_path"
 
@@ -813,6 +871,7 @@ EOF
 
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
   printf '%s\n' 'tr-4' '' > "$next_task_queue"
   printf '%s\n' \
     '[{"id":"tr-4","status":"ready","labels":[]}]' \
@@ -820,10 +879,12 @@ EOF
     '[{"id":"tr-4","status":"ready","labels":[]}]' \
     '[{"id":"tr-4","status":"closed","labels":[]}]' \
     > "$show_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
     TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
     CODEX_MOCK_FAIL_ON=exec \
     run_trudger -c "$config_path"
 

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tests/fixtures/bin/_queue_helpers
+source "${SCRIPT_DIR}/_queue_helpers"
+
+log_path="${TASK_STATUS_LOG:-}"
+if [[ -n "${log_path}" ]]; then
+  printf 'task-status %s\n' "$*" >> "${log_path}"
+fi
+
+exit_code="${TASK_STATUS_EXIT_CODE:-0}"
+
+if [[ -n "${TASK_STATUS_QUEUE:-}" && -f "${TASK_STATUS_QUEUE}" ]]; then
+  if line="$(fixture_queue_pop "${TASK_STATUS_QUEUE}")"; then
+    if [[ -n "${line}" ]]; then
+      printf '%s\n' "${line}"
+    fi
+  fi
+  exit "$exit_code"
+fi
+
+if [[ -n "${TASK_STATUS_OUTPUT:-}" ]]; then
+  printf '%s' "${TASK_STATUS_OUTPUT}"
+fi
+exit "$exit_code"
