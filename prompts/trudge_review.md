@@ -6,7 +6,7 @@ argument-hint: task-id
 Task ID: $ARGUMENTS
 Task details:
 $TASK_SHOW
-Review the specified task after the solve step and update the task state accordingly. The task details from `commands.task_show --json` are provided above.
+Review the specified task after the solve step and update the task state accordingly. The task details from `commands.task_show` are provided above.
 
 **Requirements**
 - Agent binaries available: `br`, `codex`, `jq`, `beads_rust`, `MCPShell`.

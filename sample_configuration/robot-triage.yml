@@ -4,9 +4,9 @@
 codex_command: "codex --yolo exec --model gpt-5.2-codex --reasoning medium"
 commands:
   next_task: 'task_id=$(bv --robot-next | jq -r ".id // empty"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
-  task_show: "bd show"
-  task_status: 'bd show "$1" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
-  task_update_in_progress: "bd update"
+  task_show: "br show"
+  task_status: 'br show "$1" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 

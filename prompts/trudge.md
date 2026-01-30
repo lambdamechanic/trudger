@@ -6,7 +6,7 @@ argument-hint: task-id
 Task ID: $ARGUMENTS
 Task details:
 $TASK_SHOW
-Work the specified task to completion in the current repo. The task details from `commands.task_show --json` are provided above.
+Work the specified task to completion in the current repo. The task details from `commands.task_show` are provided above.
 
 **Requirements**
 - Agent binaries available: `br`, `codex`, `jq`, `beads_rust`, `MCPShell`.

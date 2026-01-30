@@ -56,10 +56,10 @@ Example:
 ```yaml
 codex_command: "codex --yolo exec"
 commands:
-  next_task: 'task_id=$(bd ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
-  task_show: "bd show"
-  task_status: 'bd show "$1" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
-  task_update_in_progress: "bd update"
+  next_task: 'task_id=$(br ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
+  task_show: "br show"
+  task_status: 'br show "$1" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
+  task_update_in_progress: "br update"
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
@@ -74,11 +74,11 @@ Notes:
 - Null values are treated as validation errors for required keys.
 - `commands.next_task`, `commands.task_show`, `commands.task_status`, and `commands.task_update_in_progress` are required and must be non-empty.
 - `commands.next_task` runs in a shell and the first whitespace-delimited token of stdout is used as the task id.
-- `commands.task_show` runs as `<command> <task_id> --json` (task id is the first argument); output is passed to Codex unparsed and interpolated into prompts where `$TASK_SHOW` appears.
+- `commands.task_show` runs as `<command> <task_id>` (task id is the first argument); output is passed to Codex unparsed and interpolated into prompts where `$TASK_SHOW` appears.
 - `commands.task_status` runs as `<command> <task_id>` and the first whitespace-delimited token of stdout is used as the task status (for example `ready`, `open`, or `closed`).
 - `commands.task_update_in_progress` runs as `<command> <task_id> --status in_progress` (task id is the first argument); output is ignored.
 - `hooks.on_completed` and `hooks.on_requires_human` are required; label updates must happen in hooks if you want them.
-- Hook commands honor shell quoting. If a hook contains `$1`/`${1}`, Trudger runs it via `bash -lc` and passes the task id as `$1`; otherwise the task id is prepended as the first argument.
+- Hook commands honor shell quoting. If a hook contains `$1`/`${1}`, Trudger runs it in a subshell with the task id set as `$1`; otherwise the task id is prepended as the first argument.
 
 ## Install
 
@@ -103,7 +103,7 @@ trudger --help
 ## Prompts
 
 The prompt sources live in `prompts/` and are installed by `./install.sh`.
-- Trudger replaces `$ARGUMENTS` with the task id and `$TASK_SHOW` with `commands.task_show --json` output.
+- Trudger replaces `$ARGUMENTS` with the task id and `$TASK_SHOW` with `commands.task_show` output.
 
 ## Behavior details
 
