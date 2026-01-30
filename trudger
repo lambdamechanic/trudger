@@ -513,7 +513,8 @@ ensure_task_ready() {
 # --- Prompt rendering ---
 render_prompt() {
   local prompt_path="$1"
-  local task_context="$2"
+  local task_id="$2"
+  local task_show_output="$3"
   local content
 
   content="$(awk '
@@ -521,7 +522,9 @@ render_prompt() {
     in_frontmatter && $0 == "---" { in_frontmatter = 0; next }
     !in_frontmatter { print }
   ' "$prompt_path")"
-  printf '%s' "${content//\$ARGUMENTS/$task_context}"
+  content="${content//\$ARGUMENTS/$task_id}"
+  content="${content//\$TASK_SHOW/$task_show_output}"
+  printf '%s' "${content}"
 }
 
 # --- Main ---
@@ -691,7 +694,7 @@ while true; do
 
   run_task_command "$task_update_in_progress_command" "$task_id" --status in_progress
   task_show_output="$(run_task_show "$task_id" --json)"
-  if ! "${codex_cmd[@]}" "$(render_prompt "$PROMPT_TRUDGE" "$task_show_output")"; then
+  if ! "${codex_cmd[@]}" "$(render_prompt "$PROMPT_TRUDGE" "$task_id" "$task_show_output")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "solve_failed task=${task_id}"
     printf 'Codex solve failed for task %s.\n' "$task_id" >&2
@@ -701,7 +704,7 @@ while true; do
   update_tmux_name "$current_phase" "$task_id"
   log_transition "state=REVIEWING task=${task_id} loop=${review_loops}"
   task_show_output="$(run_task_show "$task_id" --json)"
-  if ! "${review_cmd[@]}" "$(render_prompt "$PROMPT_REVIEW" "$task_show_output")"; then
+  if ! "${review_cmd[@]}" "$(render_prompt "$PROMPT_REVIEW" "$task_id" "$task_show_output")"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "review_failed task=${task_id}"
     printf 'Codex review failed for task %s.\n' "$task_id" >&2

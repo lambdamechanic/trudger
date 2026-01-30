@@ -59,7 +59,7 @@ The script SHALL select the next task by running the configured `commands.next_t
 - **THEN** the script skips it and retries up to `TRUDGER_SKIP_NOT_READY_LIMIT` before idling
 
 ### Requirement: Codex prompt execution
-For each selected task, the script SHALL start a Codex exec session using the contents of `~/.codex/prompts/trudge.md` with `$ARGUMENTS` replaced by the output of `commands.task_show --json`, then resume the same session with `~/.codex/prompts/trudge_review.md` with `$ARGUMENTS` replaced by the output of `commands.task_show --json`.
+For each selected task, the script SHALL start a Codex exec session using the contents of `~/.codex/prompts/trudge.md` with `$ARGUMENTS` replaced by the task id and `$TASK_SHOW` replaced by the output of `commands.task_show --json`, then resume the same session with `~/.codex/prompts/trudge_review.md` using the same replacements.
 
 #### Scenario: Codex solve + review
 - **WHEN** a task is selected

@@ -46,8 +46,8 @@ should_run_codex_tests() {
 create_prompts() {
   local temp_dir="$1"
   mkdir -p "${temp_dir}/.codex/prompts"
-  printf '%s\n' "\$ARGUMENTS" > "${temp_dir}/.codex/prompts/trudge.md"
-  printf '%s\n' "\$ARGUMENTS" > "${temp_dir}/.codex/prompts/trudge_review.md"
+  printf '%s\n' "Task ID: \$ARGUMENTS" "Task details:" "\$TASK_SHOW" > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' "Task ID: \$ARGUMENTS" "Task details:" "\$TASK_SHOW" > "${temp_dir}/.codex/prompts/trudge_review.md"
 }
 
 yaml_quote() {
@@ -433,10 +433,10 @@ EOF
   local status_queue="${temp_dir}/status.queue"
   printf '%s\n' 'tr-42' '' > "$next_task_queue"
   printf '%s\n' \
-    '[{"id":"tr-42","status":"open","labels":[],"payload":"SHOW_PAYLOAD"}]' \
-    '[{"id":"tr-42","status":"open","labels":[],"payload":"SHOW_PAYLOAD"}]' \
-    '[{"id":"tr-42","status":"open","labels":[],"payload":"SHOW_PAYLOAD"}]' \
-    '[{"id":"tr-42","status":"closed","labels":[],"payload":"SHOW_PAYLOAD"}]' \
+    'SHOW_PAYLOAD' \
+    'SHOW_PAYLOAD' \
+    'SHOW_PAYLOAD' \
+    'SHOW_PAYLOAD' \
     > "$show_queue"
   printf '%s\n' 'open' 'closed' > "$status_queue"
 
@@ -448,6 +448,8 @@ EOF
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger -c "$config_path"
 
+  [ "$status" -eq 0 ]
+  run grep -q -- "Task ID: tr-42" "$codex_log"
   [ "$status" -eq 0 ]
   run grep -q -- "SHOW_PAYLOAD" "$codex_log"
   [ "$status" -eq 0 ]
