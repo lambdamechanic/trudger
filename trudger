@@ -205,9 +205,13 @@ EOF
 detect_yq_mode() {
   if yq eval -r '.' "$CONFIG_PATH" >/dev/null 2>&1; then
     printf '%s' "mikefarah"
-  else
-    printf '%s' "kislyuk"
+    return 0
   fi
+  if yq -r '.' "$CONFIG_PATH" >/dev/null 2>&1; then
+    printf '%s' "kislyuk"
+    return 0
+  fi
+  return 1
 }
 
 read_config_value() {
@@ -253,7 +257,10 @@ EOF
   require_yq
 
   local yq_mode
-  yq_mode="$(detect_yq_mode)"
+  if ! yq_mode="$(detect_yq_mode)"; then
+    printf 'Invalid config file (failed to parse YAML): %s\n' "$CONFIG_PATH" >&2
+    quit "invalid_config_parse:${CONFIG_PATH}" 1
+  fi
 
   codex_command="$(read_config_value '.codex_command' "$yq_mode")"
   review_loop_limit="$(read_config_value '.review_loop_limit' "$yq_mode")"
@@ -484,6 +491,13 @@ ensure_task_ready() {
 }
 
 # --- Prompt rendering ---
+escape_prompt_replacement() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//&/\\&}"
+  printf '%s' "$value"
+}
+
 render_prompt() {
   local prompt_path="$1"
   local task_id="$2"
@@ -495,8 +509,12 @@ render_prompt() {
     in_frontmatter && $0 == "---" { in_frontmatter = 0; next }
     !in_frontmatter { print }
   ' "$prompt_path")"
-  content="${content//\$ARGUMENTS/$task_id}"
-  content="${content//\$TASK_SHOW/$task_show_output}"
+  local safe_task_id
+  local safe_task_show
+  safe_task_id="$(escape_prompt_replacement "$task_id")"
+  safe_task_show="$(escape_prompt_replacement "$task_show_output")"
+  content="${content//\$ARGUMENTS/$safe_task_id}"
+  content="${content//\$TASK_SHOW/$safe_task_show}"
   printf '%s' "${content}"
 }
 

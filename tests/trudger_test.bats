@@ -400,6 +400,34 @@ EOF
   [[ "$output" == *"Missing dependency: yq"* ]]
 }
 
+@test "invalid yaml prints parse error" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/invalid-yaml"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  config_path="$(write_config "$temp_dir" <<'EOF'
+codex_command: 'codex --yolo exec "$@"'
+commands:
+  next_task: 'next-task'
+  task_show: 'task-show "$@"'
+  task_status: 'task-status "$@"'
+  task_update_in_progress: 'task-update "$@"'
+review_loop_limit: 5
+log_path: './.trudger.log'
+hooks:
+  on_completed: 'hook --done "$@"'
+  on_requires_human: 'hook --needs-human "$@"'
+bad: [oops
+EOF
+)"
+
+  HOME="$temp_dir" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Invalid config file (failed to parse YAML):"* ]]
+}
+
 @test "no tasks exits zero without codex" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/no-tasks"
@@ -455,6 +483,34 @@ EOF
   [ "$status" -eq 0 ]
   run grep -q -- "UPDATE_IGNORED" "$codex_log"
   [ "$status" -ne 0 ]
+}
+
+@test "task_show preserves ampersands and backslashes" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/task-show-escape"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  config_path="$(write_base_config "$temp_dir")"
+
+  local codex_log="${temp_dir}/codex.log"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local status_queue="${temp_dir}/status.queue"
+  printf '%s\n' 'tr-88' '' > "$next_task_queue"
+  printf '%s\n' 'open' 'closed' > "$status_queue"
+
+  local task_show_output
+  task_show_output=$'R&D \\path'
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_SHOW_OUTPUT="$task_show_output" \
+    TASK_STATUS_QUEUE="$status_queue" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "$task_show_output" "$codex_log"
+  [ "$status" -eq 0 ]
 }
 
 @test "closed task removes trudgeable label" {
