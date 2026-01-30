@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf 'pre-push: missing required command: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+require_cmd shellcheck
+require_cmd bats
+
+printf 'pre-push: running shellcheck...\n'
+shellcheck \
+  "${root_dir}/trudger" \
+  "${root_dir}/tests/trudger_test.bats" \
+  "${root_dir}/tests/fixtures/bin/br" \
+  "${root_dir}/tests/fixtures/bin/bv" \
+  "${root_dir}/tests/fixtures/bin/codex"
+
+printf 'pre-push: running bats...\n'
+bats "${root_dir}/tests/trudger_test.bats"

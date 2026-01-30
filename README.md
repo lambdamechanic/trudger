@@ -106,6 +106,14 @@ trudger --help
 The prompt sources live in `prompts/` and are installed by `./install.sh`.
 - Trudger replaces `$ARGUMENTS` with the task id and `$TASK_SHOW` with `commands.task_show` output.
 
+## Development
+
+Enable the repo git hooks (runs `shellcheck` and `bats` on pre-push):
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Behavior details
 
 - Task selection uses `commands.next_task` and expects the first whitespace-delimited token of stdout to be the task id.
