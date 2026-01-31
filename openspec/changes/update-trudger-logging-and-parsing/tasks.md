@@ -6,4 +6,6 @@
 - [ ] 1.5 Ensure error trap exits via quit path
 - [ ] 1.6 Use resolved reexec path when available
 - [ ] 1.7 Add tests for parse failure, prompt substitution, and logging/error behavior
-- [ ] 1.8 Run validation: `openspec validate update-trudger-logging-and-parsing --strict --no-interactive`
+- [ ] 1.8 Run shellcheck: `shellcheck trudger tests/trudger_test.bats tests/fixtures/bin/br tests/fixtures/bin/bv tests/fixtures/bin/codex`
+- [ ] 1.9 Run tests: `bats tests/trudger_test.bats`
+- [ ] 1.10 Run OpenSpec validation: `openspec validate update-trudger-logging-and-parsing --strict --no-interactive`
