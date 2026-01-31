@@ -68,7 +68,7 @@ quit() {
   if [[ -z "$reason" ]]; then
     sanitized="unknown"
   else
-    sanitized="${reason// /_}"
+    sanitized="$(sanitize_log_value "$reason")"
   fi
   log_transition "quit reason=${sanitized}"
   exit "$code"

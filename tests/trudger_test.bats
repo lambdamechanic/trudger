@@ -339,6 +339,86 @@ EOF
   [[ "$output" == *"log_path must not be empty"* ]]
 }
 
+@test "log command entries escape control characters" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/log-command-sanitize"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+
+  local log_path="${temp_dir}/trudger.log"
+  config_path="$(write_config "$temp_dir" <<EOF
+codex_command: 'codex --yolo exec "\$@"'
+commands:
+  next_task: "next-task\t--with-tab"
+  task_show: 'task-show "\$@"'
+  task_status: 'task-status "\$@"'
+  task_update_in_progress: 'task-update "\$@"'
+review_loop_limit: 1
+log_path: "${log_path}"
+hooks:
+  on_completed: 'hook --done "\$@"'
+  on_requires_human: 'hook --needs-human "\$@"'
+EOF
+)"
+
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
+  printf '%s\n' 'tr-10' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-10","status":"ready","labels":[]}]' \
+    '[{"id":"tr-10","status":"ready","labels":[]}]' \
+    '[{"id":"tr-10","status":"ready","labels":[]}]' \
+    '[{"id":"tr-10","status":"closed","labels":[]}]' \
+    > "$show_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "cmd start label=next-task task=none command=next-task\\t--with-tab" "$log_path"
+  [ "$status" -eq 0 ]
+}
+
+@test "quit reasons escape control characters" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/log-quit-sanitize"
+  mkdir -p "$temp_dir"
+
+  local log_path="${temp_dir}/trudger.log"
+  config_path="$(write_config "$temp_dir" <<EOF
+codex_command: 'codex --yolo exec "\$@"'
+commands:
+  next_task: 'next-task'
+  task_show: 'task-show "\$@"'
+  task_status: 'task-status "\$@"'
+  task_update_in_progress: 'task-update "\$@"'
+review_loop_limit: 1
+log_path: "${log_path}"
+hooks:
+  on_completed: 'hook --done "\$@"'
+  on_requires_human: 'hook --needs-human "\$@"'
+EOF
+)"
+
+  local bad_home
+  bad_home="${temp_dir}"$'\n'"bad-home"
+  local expected_reason="missing_prompt:${bad_home}/.codex/prompts/trudge.md"
+  expected_reason="${expected_reason//$'\n'/\\n}"
+
+  HOME="$bad_home" \
+    TRUDGER_TEST_SKIP_CONFIG_COPY=1 \
+    run_trudger -c "$config_path"
+
+  [ "$status" -ne 0 ]
+  run grep -Fq -- "quit reason=${expected_reason}" "$log_path"
+  [ "$status" -eq 0 ]
+}
+
 @test "null review_loop_limit errors" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/null-review-limit"
