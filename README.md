@@ -71,9 +71,9 @@ hooks:
 Notes:
 - All configured commands are executed via `bash -lc`, with arguments available as `$1`, `$2`, etc; include `$@` or `$1` in your command string to forward them.
 - `codex_command` is used for solve; review uses the same command with `resume --last` appended before the prompt argument.
-- Required keys (non-empty, non-null): `codex_command`, `review_loop_limit`, `log_path`, `commands.next_task`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, `hooks.on_requires_human`.
+- Required keys (non-empty, non-null): `codex_command`, `review_loop_limit`, `log_path`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, `hooks.on_requires_human`. `commands.next_task` is required unless you supply manual task IDs.
 - Null values are treated as validation errors for required keys.
-- `commands.next_task`, `commands.task_show`, `commands.task_status`, and `commands.task_update_in_progress` are required and must be non-empty.
+- `commands.next_task`, `commands.task_show`, `commands.task_status`, and `commands.task_update_in_progress` must be non-empty when used; `commands.next_task` is required when you are not supplying manual task IDs.
 - `commands.next_task` runs in `bash -lc` and the first whitespace-delimited token of stdout is used as the task id.
 - `commands.task_show` runs in `bash -lc` with the task id as `$1`; output is passed to Codex unparsed and interpolated into prompts where `$TASK_SHOW` appears.
 - `commands.task_status` runs in `bash -lc` with the task id as `$1` and the first whitespace-delimited token of stdout is used as the task status (for example `ready`, `open`, or `closed`).

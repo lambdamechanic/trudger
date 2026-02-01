@@ -290,8 +290,13 @@ validate_config() {
     quit "missing_codex_command" 1
   fi
   if [[ -z "$next_task_command" ]]; then
-    printf 'commands.next_task must not be empty.\n' >&2
-    quit "missing_next_task_command" 1
+    if ((${#manual_tasks[@]} > 0)); then
+      printf 'Warning: commands.next_task is empty; manual task IDs provided, continuing without next_task.\n' >&2
+    else
+      printf 'commands.next_task must not be empty.\n' >&2
+      printf 'Migration: add commands.next_task to your config (required when no manual task IDs). See README.md or sample_configuration/*.yml.\n' >&2
+      quit "missing_next_task_command" 1
+    fi
   fi
   if [[ -z "$task_show_command" ]]; then
     printf 'commands.task_show must not be empty.\n' >&2
@@ -733,5 +738,17 @@ reexec_path="$0"
 if command -v "$0" >/dev/null 2>&1; then
   reexec_path="$(command -v "$0")"
 fi
+if ((${#manual_tasks[@]} == 0)) && [[ -z "$next_task_command" ]]; then
+  log_transition "idle missing_next_task_command"
+  quit "missing_next_task_command" 0
+fi
 log_transition "reexec path=${reexec_path} next_tasks=${#manual_tasks[@]}"
+parse_error=""
+if ! parse_error="$(bash -n "$reexec_path" 2>&1)"; then
+  log_transition "reexec parse_failed path=$(sanitize_log_value "$reexec_path") error=$(sanitize_log_value "$parse_error")"
+  snapshot_path="/tmp/trudger.reexec-bad.$(date -u '+%Y%m%dT%H%M%SZ').$$"
+  cp "$reexec_path" "$snapshot_path" 2>/dev/null || true
+  log_transition "reexec parse_failed_copy path=$(sanitize_log_value "$snapshot_path")"
+  quit "reexec_parse_failed" 2
+fi
 exec "$0" "${manual_tasks[@]}"

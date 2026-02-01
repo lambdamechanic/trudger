@@ -239,6 +239,53 @@ EOF
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"commands.next_task must not be empty"* ]]
+  [[ "$output" == *"Migration: add commands.next_task to your config"* ]]
+}
+
+@test "empty commands.next_task errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/empty-next-task"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  config_path="$(write_config "$temp_dir" <<'EOF'
+codex_command: 'codex --yolo exec "$@"'
+commands:
+  next_task: ''
+  task_show: 'task-show "$@"'
+  task_status: 'task-status "$@"'
+  task_update_in_progress: 'task-update "$@"'
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: 'hook --done "$@"'
+  on_requires_human: 'hook --needs-human "$@"'
+EOF
+)"
+
+  HOME="$temp_dir" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"commands.next_task must not be empty"* ]]
+}
+
+@test "missing commands.next_task warns when manual task provided" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-next-task-manual"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  BASE_NEXT_TASK_COMMAND="" config_path="$(write_base_config "$temp_dir")"
+  local status_queue="${temp_dir}/task-status.queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
+  local codex_log="${temp_dir}/codex.log"
+
+  HOME="$temp_dir" \
+    TASK_STATUS_QUEUE="$status_queue" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger -c "$config_path" tr-1
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Warning: commands.next_task is empty"* ]]
 }
 
 @test "missing commands.task_show errors" {

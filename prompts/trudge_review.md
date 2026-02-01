@@ -11,7 +11,7 @@ Review the specified task after the solve step and update the task state accordi
 **Requirements**
 - Agent binaries available: `br`, `codex`, `jq`, `beads_rust`, `MCPShell`.
 - Verify acceptance criteria against the implemented changes and tests.
-- Trudger reads `~/.config/trudger.yml` (parsed via `yq`); required keys include `codex_command`, `review_loop_limit`, `log_path`, `commands.next_task`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, and `hooks.on_requires_human`.
+- Trudger reads `~/.config/trudger.yml` (parsed via `yq`); required keys include `codex_command`, `review_loop_limit`, `log_path`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, and `hooks.on_requires_human`; `commands.next_task` is required unless manual task IDs are supplied.
 
 **If the task is complete**
 - Close the task with the configured task-close command (for example `br close <id>`).
