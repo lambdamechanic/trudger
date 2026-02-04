@@ -54,32 +54,35 @@ Sample configs:
 Example:
 
 ```yaml
-codex_command: 'codex --yolo exec "$@"'
+agent_command: 'codex --yolo exec --prompt "$TRUDGER_PROMPT"'
+agent_review_command: 'codex --yolo exec --prompt "$TRUDGER_REVIEW_PROMPT"'
 commands:
   next_task: 'task_id=$(br ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
-  task_show: 'br show "$@"'
-  task_status: 'br show "$1" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
-  task_update_in_progress: 'br update "$@"'
+  task_show: 'br show "$TRUDGER_TASK_ID"'
+  task_status: 'br show "$TRUDGER_TASK_ID" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
+  task_update_in_progress: 'br update "$TRUDGER_TASK_ID" --status in_progress'
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
 hooks:
-  on_completed: 'br label remove "$1" "trudgeable"'
-  on_requires_human: 'br label remove "$1" "trudgeable"; br label add "$1" "human-required"'
+  on_completed: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"'
+  on_requires_human: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"; br label add "$TRUDGER_TASK_ID" "human-required"'
 ```
 
 Notes:
-- All configured commands are executed via `bash -lc`, with arguments available as `$1`, `$2`, etc; include `$@` or `$1` in your command string to forward them.
-- `codex_command` is used for solve; review uses the same command with `resume --last` appended before the prompt argument.
-- Required keys (non-empty, non-null): `codex_command`, `review_loop_limit`, `log_path`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, `hooks.on_requires_human`. `commands.next_task` is required unless you supply manual task IDs.
+- All configured commands are executed via `bash -lc`.
+- `agent_command` is used for solve; `agent_review_command` is used for review (Trudger appends `resume --last` to the review command arguments).
+- Required keys (non-empty, non-null): `agent_command`, `agent_review_command`, `review_loop_limit`, `log_path`, `commands.next_task`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, `hooks.on_requires_human`.
 - Null values are treated as validation errors for required keys.
-- `commands.next_task`, `commands.task_show`, `commands.task_status`, and `commands.task_update_in_progress` must be non-empty when used; `commands.next_task` is required when you are not supplying manual task IDs.
+- `commands.next_task`, `commands.task_show`, `commands.task_status`, and `commands.task_update_in_progress` must be non-empty when used.
 - `commands.next_task` runs in `bash -lc` and the first whitespace-delimited token of stdout is used as the task id.
-- `commands.task_show` runs in `bash -lc` with the task id as `$1`; output is passed to Codex unparsed and interpolated into prompts where `$TASK_SHOW` appears.
-- `commands.task_status` runs in `bash -lc` with the task id as `$1` and the first whitespace-delimited token of stdout is used as the task status (for example `ready`, `open`, or `closed`).
-- `commands.task_update_in_progress` runs in `bash -lc` with the task id as `$1` and extra args appended; output is ignored.
+- `commands.task_show` runs in `bash -lc`; its output is treated as prompt context only and is exposed via `TRUDGER_TASK_SHOW`.
+- `commands.task_status` runs in `bash -lc`; the first whitespace-delimited token of stdout is used as the task status (for example `ready`, `open`, or `closed`) and is exposed via `TRUDGER_TASK_STATUS`.
+- `commands.task_update_in_progress` runs in `bash -lc`; output is ignored.
 - `hooks.on_completed` and `hooks.on_requires_human` are required; label updates must happen in hooks if you want them.
-- Hook commands run in `bash -lc` with the task id passed as `$1` (use `$1` or `$@` to forward it).
+- Commands and hooks receive task context via environment variables instead of positional arguments.
+- Trudger may append extra arguments to some commands (for example `commands.task_show` receives `--json` and `commands.task_update_in_progress` receives `--status in_progress`); include `$@` in the command string if you need them, but task id is always provided via `TRUDGER_TASK_ID`.
+- Environment variables available to commands/hooks include `TRUDGER_TASK_ID` (set when a task is selected), `TRUDGER_TASK_SHOW` (set after `commands.task_show`), `TRUDGER_TASK_STATUS` (set after `commands.task_status`), `TRUDGER_CONFIG_PATH` (always set), `TRUDGER_PROMPT` (solve prompt only; unset during review), and `TRUDGER_REVIEW_PROMPT` (review prompt only; unset during solve).
 
 ## Install
 
@@ -104,7 +107,7 @@ trudger --help
 ## Prompts
 
 The prompt sources live in `prompts/` and are installed by `./install.sh`.
-- Trudger replaces `$ARGUMENTS` with the task id and `$TASK_SHOW` with `commands.task_show` output.
+- Trudger does not perform prompt substitutions; prompt content is delivered via `TRUDGER_PROMPT` and `TRUDGER_REVIEW_PROMPT`.
 
 ## Development
 
@@ -117,7 +120,7 @@ git config core.hooksPath .githooks
 ## Behavior details
 
 - Task selection uses `commands.next_task` and expects the first whitespace-delimited token of stdout to be the task id.
-- `commands.task_show` output is treated as free-form task details for Codex and rendered into prompts via `$TASK_SHOW`; `$ARGUMENTS` is the task id.
+- `commands.task_show` output is treated as free-form task details for the agent and provided via `TRUDGER_TASK_SHOW`.
 - Control flow decisions (readiness and post-review status) use `commands.task_status`; `commands.task_show` is not used for status checks.
 - Tasks must be in status `ready` or `open` (from `commands.task_status`). When selecting via `commands.next_task`, Trudger skips non-ready tasks up to `TRUDGER_SKIP_NOT_READY_LIMIT` (default 5) before idling; manual task IDs still error if not ready.
 - If `commands.next_task` exits 1 or returns an empty task id, Trudger exits 0 (no selectable tasks).

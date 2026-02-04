@@ -2,13 +2,13 @@
 # - Selects the next ready br task labeled "trudgeable" (exits 1 when none).
 # - On completion, removes the "trudgeable" label (task id via TRUDGER_TASK_ID).
 # - On requires-human, removes "trudgeable" and adds "human-required" (task id via TRUDGER_TASK_ID).
-agent_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium "$@"'
-agent_review_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium "$@"'
+agent_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_PROMPT"'
+agent_review_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_REVIEW_PROMPT"'
 commands:
   next_task: 'task_id=$(br ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
-  task_show: 'br show "$TRUDGER_TASK_ID" "$@"'
+  task_show: 'br show "$TRUDGER_TASK_ID"'
   task_status: 'br show "$TRUDGER_TASK_ID" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
-  task_update_in_progress: 'br update "$TRUDGER_TASK_ID" "$@"'
+  task_update_in_progress: 'br update "$TRUDGER_TASK_ID" --status in_progress'
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
