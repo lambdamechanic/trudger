@@ -50,6 +50,7 @@ log_transition() {
   if [[ -z "$path" ]]; then
     return 0
   fi
+  message="$(sanitize_log_value "$message")"
   printf '%s %s\n' "$ts" "$message" >> "$path" 2>/dev/null || true
 }
 
@@ -332,14 +333,17 @@ validate_config() {
 run_shell_command() {
   local command="$1"
   local log_label="$2"
-  shift 2
+  local task_token="$3"
+  shift 3
   local args=("$@")
 
   if [[ -z "$command" ]]; then
     return 0
   fi
 
-  log_transition "cmd label=${log_label} mode=bash_lc args=$(sanitize_log_value "$(printf '%q ' "${args[@]}")")"
+  local args_render
+  args_render="$(printf '%q ' "${args[@]}")"
+  log_transition "cmd start label=${log_label} task=${task_token} mode=bash_lc command=$(sanitize_log_value "$command") args=$(sanitize_log_value "$args_render")"
   local errexit_enabled=0
   if [[ $- == *e* ]]; then
     errexit_enabled=1
@@ -354,7 +358,7 @@ run_shell_command() {
   if ((errexit_enabled)); then
     set -e
   fi
-  log_transition "cmd label=${log_label} exit=${exit_code}"
+  log_transition "cmd exit label=${log_label} task=${task_token} exit=${exit_code}"
   return "$exit_code"
 }
 
@@ -374,7 +378,6 @@ run_config_command() {
   if [[ -n "$task_id" ]]; then
     task_token="$task_id"
   fi
-  log_transition "cmd start label=${log_label} task=${task_token} command=$(sanitize_log_value "$command")"
 
   local args=()
   if [[ -n "$task_id" ]]; then
@@ -383,7 +386,7 @@ run_config_command() {
   if ((${#extra_args[@]} > 0)); then
     args+=("${extra_args[@]}")
   fi
-  run_shell_command "$command" "$log_label" "${args[@]}"
+  run_shell_command "$command" "$log_label" "$task_token" "${args[@]}"
 }
 
 run_codex_command() {
@@ -391,8 +394,7 @@ run_codex_command() {
   shift
   local args=("$@")
 
-  log_transition "cmd start label=codex task=none command=$(sanitize_log_value "$command")"
-  run_shell_command "$command" "codex" "${args[@]}"
+  run_shell_command "$command" "codex" "none" "${args[@]}"
 }
 
 run_hook() {

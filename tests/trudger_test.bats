@@ -427,7 +427,39 @@ EOF
     run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
-  run grep -Fq -- "cmd start label=next-task task=none command=next-task\\t--with-tab" "$log_path"
+  run grep -Fq -- "cmd start label=next-task task=none mode=bash_lc command=next-task\\t--with-tab args=" "$log_path"
+  [ "$status" -eq 0 ]
+}
+
+@test "exit code log lines include label and task id" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/log-exit-task"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+
+  local log_path="${temp_dir}/trudger.log"
+  BASE_LOG_PATH="$log_path" config_path="$(write_base_config "$temp_dir")"
+
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
+  printf '%s\n' 'tr-101' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-101","status":"ready","labels":[]}]' \
+    '[{"id":"tr-101","status":"ready","labels":[]}]' \
+    '[{"id":"tr-101","status":"ready","labels":[]}]' \
+    '[{"id":"tr-101","status":"closed","labels":[]}]' \
+    > "$show_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "cmd exit label=task task=tr-101 exit=0" "$log_path"
   [ "$status" -eq 0 ]
 }
 
