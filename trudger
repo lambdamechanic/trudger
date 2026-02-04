@@ -486,10 +486,12 @@ run_config_command() {
 run_agent_command() {
   local command="$1"
   local log_label="${2:-agent}"
-  shift 2
+  local prompt="${3:-}"
+  local review_prompt="${4:-}"
+  shift 4
   local args=("$@")
 
-  set_command_env "${current_task_id:-}" "${TRUDGER_PROMPT:-}" "${TRUDGER_REVIEW_PROMPT:-}"
+  set_command_env "${current_task_id:-}" "$prompt" "$review_prompt"
   run_shell_command "$command" "$log_label" "none" "${args[@]}"
 }
 
@@ -707,6 +709,8 @@ export TRUDGER_CONFIG_PATH="$CONFIG_PATH"
 require_jq
 require_prompt "$PROMPT_TRUDGE"
 require_prompt "$PROMPT_REVIEW"
+prompt_trudge_content="$(render_prompt "$PROMPT_TRUDGE")"
+prompt_review_content="$(render_prompt "$PROMPT_REVIEW")"
 init_tmux_base_name
 
 completed_tasks=()
@@ -828,9 +832,7 @@ while true; do
 
   run_task_command "$task_update_in_progress_command" "$task_id" --status in_progress
   run_task_show "$task_id" --json
-  TRUDGER_PROMPT="$(render_prompt "$PROMPT_TRUDGE")"
-  set_prompt_env "$TRUDGER_PROMPT" ""
-  if ! run_agent_command "$agent_command" "agent_solve"; then
+  if ! run_agent_command "$agent_command" "agent_solve" "$prompt_trudge_content" ""; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "solve_failed task=${task_id}"
     printf 'Agent solve failed for task %s.\n' "$task_id" >&2
@@ -840,9 +842,7 @@ while true; do
   update_tmux_name "$current_phase" "$task_id"
   log_transition "state=REVIEWING task=${task_id} loop=${review_loops}"
   run_task_show "$task_id" --json
-  TRUDGER_REVIEW_PROMPT="$(render_prompt "$PROMPT_REVIEW")"
-  set_prompt_env "" "$TRUDGER_REVIEW_PROMPT"
-  if ! run_agent_command "$agent_review_command" "agent_review" "${review_args[@]}"; then
+  if ! run_agent_command "$agent_review_command" "agent_review" "" "$prompt_review_content" "${review_args[@]}"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "review_failed task=${task_id}"
     printf 'Agent review failed for task %s.\n' "$task_id" >&2

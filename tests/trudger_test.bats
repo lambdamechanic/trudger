@@ -720,6 +720,29 @@ EOF
   [ "$status" -eq 0 ]
   run grep -Fq -- "envset TRUDGER_REVIEW_PROMPT=0" "$codex_log"
   [ "$status" -eq 0 ]
+  run awk '
+    /^codex / { entry++; next }
+    entry == 1 && /^envset TRUDGER_PROMPT=/ {
+      if ($2 != "TRUDGER_PROMPT=1") exit 1
+      solve_prompt=1
+    }
+    entry == 1 && /^envset TRUDGER_REVIEW_PROMPT=/ {
+      if ($2 != "TRUDGER_REVIEW_PROMPT=0") exit 1
+      solve_review=1
+    }
+    entry == 2 && /^envset TRUDGER_PROMPT=/ {
+      if ($2 != "TRUDGER_PROMPT=0") exit 1
+      review_prompt=1
+    }
+    entry == 2 && /^envset TRUDGER_REVIEW_PROMPT=/ {
+      if ($2 != "TRUDGER_REVIEW_PROMPT=1") exit 1
+      review_review=1
+    }
+    END {
+      if (!(solve_prompt && solve_review && review_prompt && review_review)) exit 1
+    }
+  ' "$codex_log"
+  [ "$status" -eq 0 ]
   run grep -Fq -- "next-task args_count=0 args=" "$next_task_log"
   [ "$status" -eq 0 ]
   run grep -Fq -- "envset TRUDGER_TASK_ID=0" "$next_task_log"
@@ -965,8 +988,8 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/codex-config"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_AGENT_COMMAND='codex --yolo exec --custom "$@"' \
-    BASE_AGENT_REVIEW_COMMAND='codex --yolo exec --custom "$@"' \
+  BASE_AGENT_COMMAND='codex --yolo exec --custom-solve "$@"' \
+    BASE_AGENT_REVIEW_COMMAND='codex --yolo exec --custom-review "$@"' \
     config_path="$(write_base_config "$temp_dir")"
 
   local codex_log="${temp_dir}/codex.log"
@@ -990,9 +1013,9 @@ EOF
     run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
-  run grep -q -- "codex --yolo exec --custom" "$codex_log"
+  run grep -q -- "codex --yolo exec --custom-solve" "$codex_log"
   [ "$status" -eq 0 ]
-  run grep -q -- "codex --yolo exec --custom resume --last" "$codex_log"
+  run grep -q -- "codex --yolo exec --custom-review resume --last" "$codex_log"
   [ "$status" -eq 0 ]
 }
 
