@@ -3,7 +3,6 @@ set -euo pipefail
 
 log_path="${CODEX_MOCK_LOG:-}"
 if [[ -n "${log_path}" ]]; then
-  printf 'codex %s\n' "$*" >> "${log_path}"
   sanitize_log_value() {
     local value="$1"
     value="${value//$'\n'/\\n}"
@@ -11,9 +10,12 @@ if [[ -n "${log_path}" ]]; then
     value="${value//$'\t'/\\t}"
     printf '%s' "$value"
   }
-  printf 'env TRUDGER_PROMPT=%s\n' "$(sanitize_log_value "${TRUDGER_PROMPT:-}")" >> "${log_path}"
-  printf 'env TRUDGER_REVIEW_PROMPT=%s\n' "$(sanitize_log_value "${TRUDGER_REVIEW_PROMPT:-}")" >> "${log_path}"
-  printf 'env TRUDGER_TASK_SHOW=%s\n' "$(sanitize_log_value "${TRUDGER_TASK_SHOW:-}")" >> "${log_path}"
+  {
+    printf 'codex %s\n' "$*"
+    printf 'env TRUDGER_PROMPT=%s\n' "$(sanitize_log_value "${TRUDGER_PROMPT:-}")"
+    printf 'env TRUDGER_REVIEW_PROMPT=%s\n' "$(sanitize_log_value "${TRUDGER_REVIEW_PROMPT:-}")"
+    printf 'env TRUDGER_TASK_SHOW=%s\n' "$(sanitize_log_value "${TRUDGER_TASK_SHOW:-}")"
+  } >> "${log_path}"
 fi
 
 fail_on="${CODEX_MOCK_FAIL_ON:-}"
