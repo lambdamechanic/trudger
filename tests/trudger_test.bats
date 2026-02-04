@@ -585,6 +585,7 @@ EOF
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"Invalid config file (failed to parse YAML):"* ]]
+  [[ "$output" == *"$config_path"* ]]
 }
 
 @test "no tasks exits zero without codex" {
@@ -636,9 +637,11 @@ EOF
     run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
-  run grep -q -- "Task ID: tr-42" "$codex_log"
+  run grep -Fq -- "env TRUDGER_PROMPT=Task ID: \$ARGUMENTS\\nTask details:\\n\$TASK_SHOW" "$codex_log"
   [ "$status" -eq 0 ]
-  run grep -q -- "SHOW_PAYLOAD" "$codex_log"
+  run grep -Fq -- "env TRUDGER_REVIEW_PROMPT=Task ID: \$ARGUMENTS\\nTask details:\\n\$TASK_SHOW" "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "env TRUDGER_TASK_SHOW=SHOW_PAYLOAD" "$codex_log"
   [ "$status" -eq 0 ]
   run grep -q -- "UPDATE_IGNORED" "$codex_log"
   [ "$status" -ne 0 ]
@@ -668,7 +671,60 @@ EOF
     run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
-  run grep -Fq -- "$task_show_output" "$codex_log"
+  run grep -Fq -- "env TRUDGER_TASK_SHOW=$task_show_output" "$codex_log"
+  [ "$status" -eq 0 ]
+}
+
+@test "error trap logs quit reason and exits" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/error-trap"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+
+  local log_path="${temp_dir}/trudger.log"
+  BASE_LOG_PATH="$log_path" config_path="$(write_base_config "$temp_dir")"
+
+  HOME="$temp_dir" \
+    TRUDGER_TEST_FORCE_ERR=1 \
+    run_trudger -c "$config_path"
+
+  [ "$status" -ne 0 ]
+  run grep -Fq -- "quit reason=error" "$log_path"
+  [ "$status" -eq 0 ]
+}
+
+@test "reexec logs resolved path" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/reexec-log"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+
+  local log_path="${temp_dir}/trudger.log"
+  BASE_LOG_PATH="$log_path" config_path="$(write_base_config "$temp_dir")"
+
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
+  printf '%s\n' 'tr-5' '' > "$next_task_queue"
+  printf '%s\n' \
+    '[{"id":"tr-5","status":"ready","labels":[]}]' \
+    '[{"id":"tr-5","status":"ready","labels":[]}]' \
+    '[{"id":"tr-5","status":"ready","labels":[]}]' \
+    '[{"id":"tr-5","status":"closed","labels":[]}]' \
+    > "$show_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
+
+  local expected_reexec_path
+  expected_reexec_path="$(command -v "${ROOT_DIR}/trudger")"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "reexec path=${expected_reexec_path} next_tasks=0" "$log_path"
   [ "$status" -eq 0 ]
 }
 
@@ -729,6 +785,7 @@ EOF
     '[{"id":"tr-77","status":"ready","labels":[]}]' \
     '[{"id":"tr-77","status":"ready","labels":[]}]' \
     '[{"id":"tr-77","status":"ready","labels":[]}]' \
+    '[{"id":"tr-77","status":"ready","labels":[]}]' \
     '[{"id":"tr-77","status":"closed","labels":[]}]' \
     > "$show_queue"
 
@@ -760,6 +817,8 @@ EOF
   printf '%s\n' '{"id":"tr-1"}' '{"id":"tr-2"}' '' > "$robot_queue"
   printf '%s\n' \
     '[{"id":"tr-1","status":"in_progress","labels":[]}]' \
+    '[{"id":"tr-1","status":"in_progress","labels":[]}]' \
+    '[{"id":"tr-2","status":"ready","labels":[]}]' \
     '[{"id":"tr-2","status":"ready","labels":[]}]' \
     '[{"id":"tr-2","status":"ready","labels":[]}]' \
     '[{"id":"tr-2","status":"ready","labels":[]}]' \

@@ -14,6 +14,22 @@ fi
 cmd="${1:-}"
 shift || true
 
+emit_triage() {
+  local line="$1"
+  if [[ "$line" == *'"triage"'* ]]; then
+    printf '%s\n' "$line"
+    return 0
+  fi
+  local id=""
+  if command -v jq >/dev/null 2>&1; then
+    id="$(printf '%s' "$line" | jq -r '.id // empty' 2>/dev/null || true)"
+  fi
+  if [[ -z "$id" ]]; then
+    id="$line"
+  fi
+  printf '{"triage":{"blockers_to_clear":[{"id":"%s","actionable":true}]}}\n' "$id"
+}
+
 case "${cmd}" in
   --robot-next)
     if [[ -n "${BV_MOCK_ROBOT_NEXT_QUEUE:-}" && -f "${BV_MOCK_ROBOT_NEXT_QUEUE}" ]]; then
@@ -24,6 +40,19 @@ case "${cmd}" in
       fi
     else
       printf '%s\n' "${BV_MOCK_ROBOT_NEXT_JSON:-}"
+    fi
+    ;;
+  --robot-triage)
+    if [[ -n "${BV_MOCK_ROBOT_NEXT_QUEUE:-}" && -f "${BV_MOCK_ROBOT_NEXT_QUEUE}" ]]; then
+      if line="$(fixture_queue_pop "${BV_MOCK_ROBOT_NEXT_QUEUE}")"; then
+        if [[ -n "${line}" ]]; then
+          emit_triage "$line"
+        fi
+      fi
+    else
+      if [[ -n "${BV_MOCK_ROBOT_NEXT_JSON:-}" ]]; then
+        emit_triage "${BV_MOCK_ROBOT_NEXT_JSON}"
+      fi
     fi
     ;;
   *)
