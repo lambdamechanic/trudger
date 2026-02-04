@@ -82,6 +82,7 @@ fn unknown_top_level_keys(mapping: &Mapping) -> Vec<String> {
 }
 
 fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
+    reject_deprecated_keys(mapping)?;
     require_non_empty_string(mapping, "agent_command", "agent_command")?;
     require_non_empty_string(mapping, "agent_review_command", "agent_review_command")?;
     require_non_empty_string(mapping, "log_path", "log_path")?;
@@ -105,6 +106,17 @@ fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
         "hooks.on_requires_human",
     )?;
 
+    Ok(())
+}
+
+fn reject_deprecated_keys(mapping: &Mapping) -> Result<(), String> {
+    let key = Value::String("codex_command".to_string());
+    if mapping.contains_key(&key) {
+        return Err(
+            "codex_command is no longer supported; use agent_command and agent_review_command"
+                .to_string(),
+        );
+    }
     Ok(())
 }
 
@@ -256,5 +268,34 @@ extra_key: true
         let file = write_temp_config(config);
         let loaded = load_config(file.path()).expect("config should load");
         assert_eq!(loaded.warnings, vec!["extra_key".to_string()]);
+    }
+
+    #[test]
+    fn codex_command_is_rejected() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+codex_command: "codex"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+review_loop_limit: 3
+log_path: "./log"
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected codex_command error");
+        assert!(
+            err.contains("codex_command"),
+            "error should mention codex_command, got: {err}"
+        );
+        assert!(
+            err.contains("agent_command"),
+            "error should mention agent_command, got: {err}"
+        );
     }
 }
