@@ -10,11 +10,33 @@ if [[ -n "${log_path}" ]]; then
     value="${value//$'\t'/\\t}"
     printf '%s' "$value"
   }
+  log_env_flag() {
+    local name="$1"
+    if [[ -v $name ]]; then
+      printf 'envset %s=1\n' "$name"
+    else
+      printf 'envset %s=0\n' "$name"
+    fi
+  }
+  log_env_value() {
+    local name="$1"
+    local value="${!name-}"
+    printf 'env %s=%s\n' "$name" "$(sanitize_log_value "$value")"
+  }
   {
     printf 'codex %s\n' "$*"
-    printf 'env TRUDGER_PROMPT=%s\n' "$(sanitize_log_value "${TRUDGER_PROMPT:-}")"
-    printf 'env TRUDGER_REVIEW_PROMPT=%s\n' "$(sanitize_log_value "${TRUDGER_REVIEW_PROMPT:-}")"
-    printf 'env TRUDGER_TASK_SHOW=%s\n' "$(sanitize_log_value "${TRUDGER_TASK_SHOW:-}")"
+    log_env_flag "TRUDGER_PROMPT"
+    log_env_flag "TRUDGER_REVIEW_PROMPT"
+    log_env_flag "TRUDGER_TASK_ID"
+    log_env_flag "TRUDGER_TASK_SHOW"
+    log_env_flag "TRUDGER_TASK_STATUS"
+    log_env_flag "TRUDGER_CONFIG_PATH"
+    log_env_value "TRUDGER_PROMPT"
+    log_env_value "TRUDGER_REVIEW_PROMPT"
+    log_env_value "TRUDGER_TASK_ID"
+    log_env_value "TRUDGER_TASK_SHOW"
+    log_env_value "TRUDGER_TASK_STATUS"
+    log_env_value "TRUDGER_CONFIG_PATH"
   } >> "${log_path}"
 fi
 

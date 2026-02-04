@@ -59,7 +59,8 @@ yaml_quote() {
 write_base_config() {
   local temp_dir="$1"
   local config_path="${temp_dir}/trudger.yml"
-  local codex_command="${BASE_CODEX_COMMAND-"codex --yolo exec \"\$@\""}"
+  local agent_command="${BASE_AGENT_COMMAND-"codex --yolo exec \"\$@\""}"
+  local agent_review_command="${BASE_AGENT_REVIEW_COMMAND-"codex --yolo exec \"\$@\""}"
   local next_task_command="${BASE_NEXT_TASK_COMMAND-"next-task"}"
   local task_show_command="${BASE_TASK_SHOW_COMMAND-"task-show \"\$@\""}"
   local task_status_command="${BASE_TASK_STATUS_COMMAND-"task-status \"\$@\""}"
@@ -71,7 +72,8 @@ write_base_config() {
   local extra_config="${BASE_EXTRA_CONFIG-}"
 
   {
-    printf 'codex_command: %s\n' "$(yaml_quote "$codex_command")"
+    printf 'agent_command: %s\n' "$(yaml_quote "$agent_command")"
+    printf 'agent_review_command: %s\n' "$(yaml_quote "$agent_review_command")"
     printf 'commands:\n'
     if [[ -n "$next_task_command" ]]; then
       printf '  next_task: %s\n' "$(yaml_quote "$next_task_command")"
@@ -157,7 +159,8 @@ make_minimal_path() {
   create_prompts "$temp_dir"
 
   cat > "${temp_dir}/.config/trudger.yml" <<'EOF'
-codex_command: 'codex --yolo exec --default "$@"'
+agent_command: 'codex --yolo exec --default "$@"'
+agent_review_command: 'codex --yolo exec --default "$@"'
 commands:
   next_task: "next-task"
   task_show: 'task-show "$@"'
@@ -172,7 +175,8 @@ EOF
 
   local override_config_path
   override_config_path="$(write_config "$temp_dir" <<'EOF'
-codex_command: 'codex --yolo exec --override "$@"'
+agent_command: 'codex --yolo exec --override "$@"'
+agent_review_command: 'codex --yolo exec --override "$@"'
 commands:
   next_task: "next-task"
   task_show: 'task-show "$@"'
@@ -248,7 +252,8 @@ EOF
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
   config_path="$(write_config "$temp_dir" <<'EOF'
-codex_command: 'codex --yolo exec "$@"'
+agent_command: 'codex --yolo exec "$@"'
+agent_review_command: 'codex --yolo exec "$@"'
 commands:
   next_task: ''
   task_show: 'task-show "$@"'
@@ -358,18 +363,62 @@ EOF
   [[ "$output" == *"hooks.on_requires_human must not be empty"* ]]
 }
 
-@test "empty codex_command errors" {
+@test "empty agent_command errors" {
   local temp_dir
-  temp_dir="${BATS_TEST_TMPDIR}/empty-codex-command"
+  temp_dir="${BATS_TEST_TMPDIR}/empty-agent-command"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_CODEX_COMMAND="" config_path="$(write_base_config "$temp_dir")"
+  BASE_AGENT_COMMAND="" config_path="$(write_base_config "$temp_dir")"
 
   HOME="$temp_dir" \
     run_trudger -c "$config_path"
 
   [ "$status" -ne 0 ]
-  [[ "$output" == *"codex_command must not be empty"* ]]
+  [[ "$output" == *"agent_command must not be empty"* ]]
+}
+
+@test "empty agent_review_command errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/empty-agent-review-command"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  BASE_AGENT_REVIEW_COMMAND="" config_path="$(write_base_config "$temp_dir")"
+
+  HOME="$temp_dir" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"agent_review_command must not be empty"* ]]
+}
+
+@test "codex_command triggers migration error" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/codex-command-migration"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+
+  config_path="$(write_config "$temp_dir" <<'EOF'
+agent_command: 'codex --yolo exec "$@"'
+agent_review_command: 'codex --yolo exec "$@"'
+codex_command: 'codex --yolo exec "$@"'
+commands:
+  next_task: "next-task"
+  task_show: 'task-show "$@"'
+  task_status: 'task-status "$@"'
+  task_update_in_progress: 'task-update "$@"'
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: 'hook --done "$@"'
+  on_requires_human: 'hook --needs-human "$@"'
+EOF
+)"
+
+  HOME="$temp_dir" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"codex_command is no longer supported"* ]]
 }
 
 @test "empty log_path errors" {
@@ -394,7 +443,8 @@ EOF
 
   local log_path="${temp_dir}/trudger.log"
   config_path="$(write_config "$temp_dir" <<EOF
-codex_command: 'codex --yolo exec "\$@"'
+agent_command: 'codex --yolo exec "\$@"'
+agent_review_command: 'codex --yolo exec "\$@"'
 commands:
   next_task: "next-task\t--with-tab"
   task_show: 'task-show "\$@"'
@@ -470,7 +520,8 @@ EOF
 
   local log_path="${temp_dir}/trudger.log"
   config_path="$(write_config "$temp_dir" <<EOF
-codex_command: 'codex --yolo exec "\$@"'
+agent_command: 'codex --yolo exec "\$@"'
+agent_review_command: 'codex --yolo exec "\$@"'
 commands:
   next_task: 'next-task'
   task_show: 'task-show "\$@"'
@@ -505,7 +556,8 @@ EOF
   create_prompts "$temp_dir"
 
   config_path="$(write_config "$temp_dir" <<'EOF'
-codex_command: 'codex --yolo exec "$@"'
+agent_command: 'codex --yolo exec "$@"'
+agent_review_command: 'codex --yolo exec "$@"'
 commands:
   next_task: "next-task"
   task_show: 'task-show "$@"'
@@ -565,7 +617,8 @@ EOF
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
   config_path="$(write_config "$temp_dir" <<'EOF'
-codex_command: 'codex --yolo exec "$@"'
+agent_command: 'codex --yolo exec "$@"'
+agent_review_command: 'codex --yolo exec "$@"'
 commands:
   next_task: 'next-task'
   task_show: 'task-show "$@"'
@@ -616,6 +669,11 @@ EOF
   config_path="$(write_base_config "$temp_dir")"
 
   local codex_log="${temp_dir}/codex.log"
+  local next_task_log="${temp_dir}/next-task.log"
+  local task_show_log="${temp_dir}/task-show.log"
+  local task_status_log="${temp_dir}/task-status.log"
+  local task_update_log="${temp_dir}/task-update.log"
+  local hook_log="${temp_dir}/hook.log"
   local next_task_queue="${temp_dir}/next-task.queue"
   local show_queue="${temp_dir}/show.queue"
   local status_queue="${temp_dir}/status.queue"
@@ -633,6 +691,11 @@ EOF
     TASK_SHOW_QUEUE="$show_queue" \
     TASK_STATUS_QUEUE="$status_queue" \
     TASK_UPDATE_OUTPUT="UPDATE_IGNORED" \
+    NEXT_TASK_LOG="$next_task_log" \
+    TASK_SHOW_LOG="$task_show_log" \
+    TASK_STATUS_LOG="$task_status_log" \
+    TASK_UPDATE_LOG="$task_update_log" \
+    HOOK_MOCK_LOG="$hook_log" \
     CODEX_MOCK_LOG="$codex_log" \
     run_trudger -c "$config_path"
 
@@ -642,6 +705,60 @@ EOF
   run grep -Fq -- "env TRUDGER_REVIEW_PROMPT=Task ID: \$ARGUMENTS\\nTask details:\\n\$TASK_SHOW" "$codex_log"
   [ "$status" -eq 0 ]
   run grep -Fq -- "env TRUDGER_TASK_SHOW=SHOW_PAYLOAD" "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_PROMPT=1" "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_REVIEW_PROMPT=1" "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_TASK_ID=1" "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_TASK_SHOW=1" "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_CONFIG_PATH=1" "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_PROMPT=0" "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_REVIEW_PROMPT=0" "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "next-task args_count=0 args=" "$next_task_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_TASK_ID=0" "$next_task_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_TASK_SHOW=0" "$next_task_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_TASK_STATUS=0" "$next_task_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_PROMPT=0" "$next_task_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_REVIEW_PROMPT=0" "$next_task_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_CONFIG_PATH=1" "$next_task_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "task-show args_count=1 args=--json" "$task_show_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_TASK_ID=1" "$task_show_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_PROMPT=0" "$task_show_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_REVIEW_PROMPT=0" "$task_show_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "task-status args_count=0 args=" "$task_status_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_TASK_ID=1" "$task_status_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "task-update args_count=2 args=--status in_progress" "$task_update_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_TASK_ID=1" "$task_update_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "hook args_count=1 args=--done" "$hook_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "env TRUDGER_TASK_STATUS=closed" "$hook_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "env TRUDGER_TASK_SHOW=SHOW_PAYLOAD" "$hook_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_PROMPT=0" "$hook_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "envset TRUDGER_REVIEW_PROMPT=0" "$hook_log"
   [ "$status" -eq 0 ]
   run grep -q -- "UPDATE_IGNORED" "$codex_log"
   [ "$status" -ne 0 ]
@@ -848,7 +965,9 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/codex-config"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_CODEX_COMMAND='codex --yolo exec --custom "$@"' config_path="$(write_base_config "$temp_dir")"
+  BASE_AGENT_COMMAND='codex --yolo exec --custom "$@"' \
+    BASE_AGENT_REVIEW_COMMAND='codex --yolo exec --custom "$@"' \
+    config_path="$(write_base_config "$temp_dir")"
 
   local codex_log="${temp_dir}/codex.log"
   local next_task_queue="${temp_dir}/next-task.queue"
@@ -906,10 +1025,10 @@ EOF
     TASK_SHOW_QUEUE="$show_queue" \
     TASK_STATUS_QUEUE="$status_queue" \
     HOOK_MOCK_LOG="$hook_log" \
-    run_trudger -c "$config_path"
+  run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
-  run grep -q -- "--done tr-55" "$hook_log"
+  run grep -Fq -- "hook args_count=2 args=--done tr-55" "$hook_log"
   [ "$status" -eq 0 ]
 }
 
@@ -942,13 +1061,13 @@ EOF
     TASK_SHOW_QUEUE="$show_queue" \
     TASK_STATUS_QUEUE="$status_queue" \
     HOOK_MOCK_LOG="$hook_log" \
-    run_trudger -c "$config_path"
+  run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
-  run grep -q -- "--done" "$hook_log"
+  run grep -Fq -- "hook args_count=1 args=--done" "$hook_log"
   [ "$status" -eq 0 ]
-  run grep -q -- "tr-66" "$hook_log"
-  [ "$status" -ne 0 ]
+  run grep -Fq -- "env TRUDGER_TASK_ID=tr-66" "$hook_log"
+  [ "$status" -eq 0 ]
 }
 
 @test "requires-human updates labels" {

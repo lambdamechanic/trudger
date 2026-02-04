@@ -2,7 +2,7 @@
 set -euo pipefail
 set -o errtrace
 
-# trudger: loop over br tasks and run Codex solve+review prompts.
+# trudger: loop over br tasks and run agent solve+review prompts.
 
 PROMPT_TRUDGE="${HOME}/.codex/prompts/trudge.md"
 PROMPT_REVIEW="${HOME}/.codex/prompts/trudge_review.md"
@@ -15,7 +15,7 @@ usage() {
   cat <<'EOF'
 Usage: ./trudger [options] [task_id ...]
 
-Loop over ready br tasks and run Codex solve+review prompts.
+Loop over ready br tasks and run agent solve+review prompts.
 If task IDs are provided, they run first (in order) before br ready tasks.
 Configuration is loaded from ~/.config/trudger.yml by default.
 
@@ -230,6 +230,18 @@ read_config_value() {
   printf '%s' "$value"
 }
 
+config_has_key() {
+  local key="$1"
+  local mode="$2"
+  local value
+  if [[ "$mode" == "mikefarah" ]]; then
+    value="$(yq eval -r "has(\"${key}\")" "$CONFIG_PATH")"
+  else
+    value="$(yq -r "has(\"${key}\")" "$CONFIG_PATH")"
+  fi
+  [[ "$value" == "true" ]]
+}
+
 load_config() {
   if [[ ! -f "$CONFIG_PATH" ]]; then
     if [[ "$CONFIG_PATH_SOURCE" == "flag" ]]; then
@@ -263,7 +275,8 @@ EOF
     quit "invalid_config_parse:${CONFIG_PATH}" 1
   fi
 
-  codex_command="$(read_config_value '.codex_command' "$yq_mode")"
+  agent_command="$(read_config_value '.agent_command' "$yq_mode")"
+  agent_review_command="$(read_config_value '.agent_review_command' "$yq_mode")"
   review_loop_limit="$(read_config_value '.review_loop_limit' "$yq_mode")"
   trudger_log_path="$(read_config_value '.log_path' "$yq_mode")"
   next_task_command="$(read_config_value '.commands.next_task' "$yq_mode")"
@@ -273,10 +286,19 @@ EOF
   hook_on_completed="$(read_config_value '.hooks.on_completed' "$yq_mode")"
   hook_on_requires_human="$(read_config_value '.hooks.on_requires_human' "$yq_mode")"
 
+  if config_has_key "codex_command" "$yq_mode"; then
+    printf 'Migration: codex_command is no longer supported; use agent_command and agent_review_command.\n' >&2
+    quit "invalid_codex_command" 1
+  fi
+
   local key
   while IFS= read -r key; do
     case "$key" in
-      codex_command|commands|hooks|review_loop_limit|log_path)
+      agent_command|agent_review_command|commands|hooks|review_loop_limit|log_path)
+        ;;
+      codex_command)
+        printf 'Migration: codex_command is no longer supported; use agent_command and agent_review_command.\n' >&2
+        quit "invalid_codex_command" 1
         ;;
       *)
         printf 'Warning: Unknown config key: %s\n' "$key" >&2
@@ -286,9 +308,13 @@ EOF
 }
 
 validate_config() {
-  if [[ -z "$codex_command" ]]; then
-    printf 'codex_command must not be empty.\n' >&2
-    quit "missing_codex_command" 1
+  if [[ -z "$agent_command" ]]; then
+    printf 'agent_command must not be empty.\n' >&2
+    quit "missing_agent_command" 1
+  fi
+  if [[ -z "$agent_review_command" ]]; then
+    printf 'agent_review_command must not be empty.\n' >&2
+    quit "missing_agent_review_command" 1
   fi
   if [[ -z "$next_task_command" ]]; then
     if ((${#manual_tasks[@]} > 0)); then
@@ -368,6 +394,70 @@ run_shell_command() {
   return "$exit_code"
 }
 
+set_prompt_env() {
+  local prompt="${1:-}"
+  local review_prompt="${2:-}"
+  if [[ -n "$prompt" ]]; then
+    export TRUDGER_PROMPT="$prompt"
+  else
+    unset TRUDGER_PROMPT
+  fi
+  if [[ -n "$review_prompt" ]]; then
+    export TRUDGER_REVIEW_PROMPT="$review_prompt"
+  else
+    unset TRUDGER_REVIEW_PROMPT
+  fi
+}
+
+set_task_show_state() {
+  local value="$1"
+  current_task_show="$value"
+  current_task_show_set=1
+  export TRUDGER_TASK_SHOW="$current_task_show"
+}
+
+set_task_status_state() {
+  local value="$1"
+  current_task_status="$value"
+  current_task_status_set=1
+  export TRUDGER_TASK_STATUS="$current_task_status"
+}
+
+clear_task_context_state() {
+  current_task_show=""
+  current_task_show_set=0
+  current_task_status=""
+  current_task_status_set=0
+  unset TRUDGER_TASK_SHOW
+  unset TRUDGER_TASK_STATUS
+}
+
+set_command_env() {
+  local task_id="$1"
+  local prompt="${2:-}"
+  local review_prompt="${3:-}"
+
+  export TRUDGER_CONFIG_PATH="$CONFIG_PATH"
+  if [[ -n "$task_id" ]]; then
+    export TRUDGER_TASK_ID="$task_id"
+    if ((current_task_show_set)); then
+      export TRUDGER_TASK_SHOW="$current_task_show"
+    else
+      unset TRUDGER_TASK_SHOW
+    fi
+    if ((current_task_status_set)); then
+      export TRUDGER_TASK_STATUS="$current_task_status"
+    else
+      unset TRUDGER_TASK_STATUS
+    fi
+  else
+    unset TRUDGER_TASK_ID
+    unset TRUDGER_TASK_SHOW
+    unset TRUDGER_TASK_STATUS
+  fi
+  set_prompt_env "$prompt" "$review_prompt"
+}
+
 run_config_command() {
   local command="$1"
   local task_id="$2"
@@ -386,21 +476,21 @@ run_config_command() {
   fi
 
   local args=()
-  if [[ -n "$task_id" ]]; then
-    args+=("$task_id")
-  fi
   if ((${#extra_args[@]} > 0)); then
     args+=("${extra_args[@]}")
   fi
+  set_command_env "$task_id" "" ""
   run_shell_command "$command" "$log_label" "$task_token" "${args[@]}"
 }
 
-run_codex_command() {
+run_agent_command() {
   local command="$1"
-  shift
+  local log_label="${2:-agent}"
+  shift 2
   local args=("$@")
 
-  run_shell_command "$command" "codex" "none" "${args[@]}"
+  set_command_env "${current_task_id:-}" "${TRUDGER_PROMPT:-}" "${TRUDGER_REVIEW_PROMPT:-}"
+  run_shell_command "$command" "$log_label" "none" "${args[@]}"
 }
 
 run_hook() {
@@ -434,6 +524,7 @@ run_task_show() {
   prev_err_trap="$(trap -p ERR)"
   trap - ERR
   set +e
+  current_task_show_set=0
   raw="$(run_task_command "$task_show_command" "$task_id" "$@")"
   exit_code=$?
   if [[ -n "$prev_err_trap" ]]; then
@@ -446,12 +537,29 @@ run_task_show() {
     printf 'task_show command failed with exit code %s.\n' "$exit_code" >&2
     quit "task_show_failed:${exit_code}" "$exit_code"
   fi
-  printf '%s' "$raw"
+  set_task_show_state "$raw"
 }
 
 run_task_status() {
   local task_id="$1"
   run_task_command "$task_status_command" "$task_id"
+}
+
+reexec_trudger() {
+  local reexec_path=""
+  reexec_path="$(command -v "$0" 2>/dev/null || true)"
+  if [[ -z "$reexec_path" ]]; then
+    reexec_path="$0"
+  fi
+  local args=()
+  if [[ "$CONFIG_PATH_SOURCE" == "flag" ]]; then
+    args+=(--config "$CONFIG_PATH")
+  fi
+  if ((${#manual_tasks[@]} > 0)); then
+    args+=("${manual_tasks[@]}")
+  fi
+  log_transition "reexec path=${reexec_path} next_tasks=${#manual_tasks[@]}"
+  exec "$reexec_path" "${args[@]}"
 }
 
 # --- Task selection and state ---
@@ -489,6 +597,7 @@ task_status() {
   prev_err_trap="$(trap -p ERR)"
   trap - ERR
   set +e
+  current_task_status_set=0
   raw="$(run_task_status "$task_id")"
   exit_code=$?
   if [[ -n "$prev_err_trap" ]]; then
@@ -502,7 +611,7 @@ task_status() {
     quit "task_status_failed:${exit_code}" "$exit_code"
   fi
   status="$(printf '%s' "$raw" | awk 'NF { print $1; exit }')"
-  printf '%s' "$status"
+  set_task_status_state "$status"
 }
 
 is_ready_status() {
@@ -513,7 +622,8 @@ is_ready_status() {
 ensure_task_ready() {
   local task_id="$1"
   local status
-  status="$(task_status "$task_id")"
+  task_status "$task_id"
+  status="$current_task_status"
   if is_ready_status "$status"; then
     return 0
   fi
@@ -579,7 +689,8 @@ while (($#)); do
   shift
 done
 
-codex_command=""
+agent_command=""
+agent_review_command=""
 next_task_command=""
 task_show_command=""
 task_status_command=""
@@ -591,6 +702,7 @@ hook_on_requires_human=""
 
 load_config
 validate_config
+export TRUDGER_CONFIG_PATH="$CONFIG_PATH"
 
 require_jq
 require_prompt "$PROMPT_TRUDGE"
@@ -607,6 +719,10 @@ if [[ -n "${TRUDGER_NEEDS_HUMAN:-}" ]]; then
 fi
 current_task_id=""
 current_phase=""
+current_task_show=""
+current_task_show_set=0
+current_task_status=""
+current_task_status_set=0
 
 review_args=("resume" "--last")
 
@@ -658,78 +774,83 @@ if ((${#manual_tasks[@]} > 0)); then
   done
 fi
 
-if ((${#manual_tasks[@]} > 0)); then
-  task_id="${manual_tasks[0]}"
-  manual_tasks=("${manual_tasks[@]:1}")
-else
-  skip_not_ready_limit="${TRUDGER_SKIP_NOT_READY_LIMIT:-5}"
-  if ! [[ "$skip_not_ready_limit" =~ ^[0-9]+$ ]] || ((skip_not_ready_limit < 1)); then
-    skip_not_ready_limit=5
-  fi
-  skip_count=0
-  while true; do
-    task_id="$(get_next_task_id)"
-    if [[ -z "$task_id" ]]; then
-      log_transition "idle no_task"
-      quit "no_task" 0
-    fi
-    status="$(task_status "$task_id")"
-    if [[ -z "$status" ]]; then
-      printf 'Task %s missing status.\n' "$task_id" >&2
-      quit "task_missing_status:${task_id}" 1
-    fi
-    if is_ready_status "$status"; then
-      break
-    fi
-    log_transition "skip_not_ready task=${task_id} status=${status}"
-    skip_count=$((skip_count + 1))
-    if ((skip_count >= skip_not_ready_limit)); then
-      log_transition "idle no_ready_task attempts=${skip_count}"
-      printf 'Task %s is not ready (status: %s).\n' "$task_id" "$status" >&2
-      quit "no_ready_task" 0
-    fi
-  done
-fi
-if [[ -z "$task_id" ]]; then
-  log_transition "idle no_task"
-  quit "no_task" 0
-fi
-
-review_loops=0
 while true; do
-  current_task_id="$task_id"
-  current_phase="SOLVING"
-  update_tmux_name "$current_phase" "$task_id"
-  log_transition "state=SOLVING task=${task_id} loop=${review_loops}"
+  task_id=""
+  if ((${#manual_tasks[@]} > 0)); then
+    task_id="${manual_tasks[0]}"
+    manual_tasks=("${manual_tasks[@]:1}")
+  else
+    if [[ -z "$next_task_command" ]]; then
+      log_transition "idle missing_next_task_command"
+      quit "missing_next_task_command" 0
+    fi
+    skip_not_ready_limit="${TRUDGER_SKIP_NOT_READY_LIMIT:-5}"
+    if ! [[ "$skip_not_ready_limit" =~ ^[0-9]+$ ]] || ((skip_not_ready_limit < 1)); then
+      skip_not_ready_limit=5
+    fi
+    skip_count=0
+    while true; do
+      task_id="$(get_next_task_id)"
+      if [[ -z "$task_id" ]]; then
+        log_transition "idle no_task"
+        quit "no_task" 0
+      fi
+      task_status "$task_id"
+      status="$current_task_status"
+      if [[ -z "$status" ]]; then
+        printf 'Task %s missing status.\n' "$task_id" >&2
+        quit "task_missing_status:${task_id}" 1
+      fi
+      if is_ready_status "$status"; then
+        break
+      fi
+      log_transition "skip_not_ready task=${task_id} status=${status}"
+      skip_count=$((skip_count + 1))
+      if ((skip_count >= skip_not_ready_limit)); then
+        log_transition "idle no_ready_task attempts=${skip_count}"
+        printf 'Task %s is not ready (status: %s).\n' "$task_id" "$status" >&2
+        quit "no_ready_task" 0
+      fi
+    done
+  fi
+  if [[ -z "$task_id" ]]; then
+    log_transition "idle no_task"
+    quit "no_task" 0
+  fi
+
+  clear_task_context_state
+  review_loops=0
+  while true; do
+    current_task_id="$task_id"
+    current_phase="SOLVING"
+    update_tmux_name "$current_phase" "$task_id"
+    log_transition "state=SOLVING task=${task_id} loop=${review_loops}"
 
   run_task_command "$task_update_in_progress_command" "$task_id" --status in_progress
-  task_show_output="$(run_task_show "$task_id" --json)"
-  TRUDGER_TASK_SHOW="$task_show_output"
+  run_task_show "$task_id" --json
   TRUDGER_PROMPT="$(render_prompt "$PROMPT_TRUDGE")"
-  TRUDGER_REVIEW_PROMPT=""
-  export TRUDGER_TASK_SHOW TRUDGER_PROMPT TRUDGER_REVIEW_PROMPT
-  if ! run_codex_command "$codex_command"; then
+  set_prompt_env "$TRUDGER_PROMPT" ""
+  if ! run_agent_command "$agent_command" "agent_solve"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "solve_failed task=${task_id}"
-    printf 'Codex solve failed for task %s.\n' "$task_id" >&2
+    printf 'Agent solve failed for task %s.\n' "$task_id" >&2
     quit "solve_failed:${task_id}" 1
   fi
   current_phase="REVIEWING"
   update_tmux_name "$current_phase" "$task_id"
   log_transition "state=REVIEWING task=${task_id} loop=${review_loops}"
-  task_show_output="$(run_task_show "$task_id" --json)"
-  TRUDGER_TASK_SHOW="$task_show_output"
-  TRUDGER_PROMPT=""
+  run_task_show "$task_id" --json
   TRUDGER_REVIEW_PROMPT="$(render_prompt "$PROMPT_REVIEW")"
-  export TRUDGER_TASK_SHOW TRUDGER_PROMPT TRUDGER_REVIEW_PROMPT
-  if ! run_codex_command "$codex_command" "${review_args[@]}"; then
+  set_prompt_env "" "$TRUDGER_REVIEW_PROMPT"
+  if ! run_agent_command "$agent_review_command" "agent_review" "${review_args[@]}"; then
     update_tmux_name "ERROR" "$task_id"
     log_transition "review_failed task=${task_id}"
-    printf 'Codex review failed for task %s.\n' "$task_id" >&2
+    printf 'Agent review failed for task %s.\n' "$task_id" >&2
     quit "review_failed:${task_id}" 1
   fi
 
-  status="$(task_status "$task_id")"
+  task_status "$task_id"
+  status="$current_task_status"
   log_transition "review_state task=${task_id} status=${status:-unknown}"
 
   if [[ -z "$status" ]]; then
@@ -739,40 +860,29 @@ while true; do
     quit "task_missing_status_after_review:${task_id}" 1
   fi
 
-  if [[ "$status" == "closed" ]]; then
-    completed_tasks+=("$task_id")
-    log_transition "completed task=${task_id}"
-    run_hook "$hook_on_completed" "$task_id" "on_completed"
+    if [[ "$status" == "closed" ]]; then
+      completed_tasks+=("$task_id")
+      log_transition "completed task=${task_id}"
+      run_hook "$hook_on_completed" "$task_id" "on_completed"
+      break
+    fi
+
+    needs_human_tasks+=("$task_id")
+    log_transition "needs_human task=${task_id}"
+    run_hook "$hook_on_requires_human" "$task_id" "on_requires_human"
     break
+  done
+
+  TRUDGER_COMPLETED="$(IFS=','; printf '%s' "${completed_tasks[*]:-}")"
+  log_transition "env TRUDGER_COMPLETED=${TRUDGER_COMPLETED}"
+  export TRUDGER_COMPLETED
+  TRUDGER_NEEDS_HUMAN="$(IFS=','; printf '%s' "${needs_human_tasks[*]:-}")"
+  export TRUDGER_NEEDS_HUMAN
+
+  if [[ -n "$next_task_command" || ${#manual_tasks[@]} -gt 0 ]]; then
+    reexec_trudger
   fi
 
-  needs_human_tasks+=("$task_id")
-  log_transition "needs_human task=${task_id}"
-  run_hook "$hook_on_requires_human" "$task_id" "on_requires_human"
-  break
+  current_task_id=""
+  current_phase=""
 done
-
-TRUDGER_COMPLETED="$(IFS=','; printf '%s' "${completed_tasks[*]:-}")"
-log_transition "env TRUDGER_COMPLETED=${TRUDGER_COMPLETED}"
-export TRUDGER_COMPLETED
-TRUDGER_NEEDS_HUMAN="$(IFS=','; printf '%s' "${needs_human_tasks[*]:-}")"
-export TRUDGER_NEEDS_HUMAN
-
-reexec_path="$0"
-if command -v "$0" >/dev/null 2>&1; then
-  reexec_path="$(command -v "$0")"
-fi
-if ((${#manual_tasks[@]} == 0)) && [[ -z "$next_task_command" ]]; then
-  log_transition "idle missing_next_task_command"
-  quit "missing_next_task_command" 0
-fi
-log_transition "reexec path=${reexec_path} next_tasks=${#manual_tasks[@]}"
-parse_error=""
-if ! parse_error="$(bash -n "$reexec_path" 2>&1)"; then
-  log_transition "reexec parse_failed path=$(sanitize_log_value "$reexec_path") error=$(sanitize_log_value "$parse_error")"
-  snapshot_path="/tmp/trudger.reexec-bad.$(date -u '+%Y%m%dT%H%M%SZ').$$"
-  cp "$reexec_path" "$snapshot_path" 2>/dev/null || true
-  log_transition "reexec parse_failed_copy path=$(sanitize_log_value "$snapshot_path")"
-  quit "reexec_parse_failed" 2
-fi
-exec "$reexec_path" "${manual_tasks[@]}"
