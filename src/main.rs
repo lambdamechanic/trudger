@@ -266,6 +266,148 @@ fn run_shell_command_status(
     Ok(exit_code)
 }
 
+fn run_exec_command_status(
+    program: &str,
+    log_command: &str,
+    log_label: &str,
+    task_token: &str,
+    args: &[String],
+    env: &CommandEnv,
+    logger: &Logger,
+) -> Result<i32, String> {
+    if program.is_empty() {
+        return Ok(0);
+    }
+
+    let args_render = render_args(args);
+    logger.log_transition(&format!(
+        "cmd start label={} task={} mode=exec command={} args={}",
+        log_label,
+        task_token,
+        sanitize_log_value(log_command),
+        sanitize_log_value(&args_render)
+    ));
+
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    cmd.stdin(std::process::Stdio::inherit());
+    cmd.stdout(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::inherit());
+    env.apply(&mut cmd);
+    let status = cmd
+        .status()
+        .map_err(|err| format!("Failed to run command '{}': {}", log_command, err))?;
+
+    let exit_code = status.code().unwrap_or(1);
+    logger.log_transition(&format!(
+        "cmd exit label={} task={} exit={}",
+        log_label, task_token, exit_code
+    ));
+
+    Ok(exit_code)
+}
+
+fn hook_uses_substitution(command: &str) -> bool {
+    let chars: Vec<char> = command.chars().collect();
+    let len = chars.len();
+    let mut idx = 0;
+    while idx < len {
+        if chars[idx] == '$' && idx + 1 < len {
+            let next = chars[idx + 1];
+            if next == '{' {
+                if idx + 3 < len && chars[idx + 2] == '1' && chars[idx + 3] == '}' {
+                    return true;
+                }
+            } else if next == '1' {
+                if idx + 2 >= len || !chars[idx + 2].is_ascii_digit() {
+                    return true;
+                }
+            }
+        }
+        idx += 1;
+    }
+    false
+}
+
+fn split_shell_words(command: &str) -> Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut in_token = false;
+    let mut chars = command.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if in_single {
+            if ch == '\'' {
+                in_single = false;
+            } else {
+                current.push(ch);
+            }
+            in_token = true;
+            continue;
+        }
+        if in_double {
+            match ch {
+                '"' => {
+                    in_double = false;
+                }
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    } else {
+                        current.push('\\');
+                    }
+                }
+                _ => current.push(ch),
+            }
+            in_token = true;
+            continue;
+        }
+
+        match ch {
+            '\'' => {
+                in_single = true;
+                in_token = true;
+            }
+            '"' => {
+                in_double = true;
+                in_token = true;
+            }
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                    in_token = true;
+                } else {
+                    current.push('\\');
+                    in_token = true;
+                }
+            }
+            ch if ch.is_whitespace() => {
+                if in_token {
+                    words.push(current.clone());
+                    current.clear();
+                    in_token = false;
+                }
+            }
+            _ => {
+                current.push(ch);
+                in_token = true;
+            }
+        }
+    }
+
+    if in_single || in_double {
+        return Err("Unterminated quote in hook command.".to_string());
+    }
+
+    if in_token {
+        words.push(current);
+    }
+
+    Ok(words)
+}
+
 fn command_exists(name: &str) -> bool {
     let Some(paths) = env::var_os("PATH") else {
         return false;
@@ -799,13 +941,39 @@ fn check_interrupted(state: &RuntimeState) -> Result<(), Quit> {
 }
 
 fn run_hook(state: &RuntimeState, hook_command: &str, task_id: &str, hook_name: &str) -> Result<(), String> {
-    let exit = run_config_command_status(
-        state,
-        hook_command,
-        Some(task_id),
-        hook_name,
-        &[],
-    )?;
+    if hook_command.trim().is_empty() {
+        return Ok(());
+    }
+
+    let exit = if hook_uses_substitution(hook_command) {
+        let args = vec![task_id.to_string()];
+        run_config_command_status(
+            state,
+            hook_command,
+            Some(task_id),
+            hook_name,
+            &args,
+        )?
+    } else {
+        let argv = split_shell_words(hook_command)?;
+        if argv.is_empty() {
+            return Ok(());
+        }
+        let mut args = Vec::with_capacity(argv.len());
+        args.push(task_id.to_string());
+        args.extend(argv.iter().skip(1).cloned());
+        let env = build_command_env(state, Some(task_id), None, None);
+        run_exec_command_status(
+            &argv[0],
+            hook_command,
+            hook_name,
+            task_id,
+            &args,
+            &env,
+            &state.logger,
+        )?
+    };
+
     if exit != 0 {
         return Err(format!("hook {} failed with exit code {}", hook_name, exit));
     }
@@ -1430,8 +1598,12 @@ mod tests {
 
         let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
         assert!(
-            hook_contents.contains("hook args_count=1 args=--done"),
-            "hook should not receive task id as arg"
+            hook_contents.contains("hook args_count=2 args=tr-1 --done"),
+            "hook should receive task id as first arg"
+        );
+        assert!(
+            hook_contents.contains("hook args_count=2 args=tr-2 --human"),
+            "requires-human hook should receive task id as first arg"
         );
         assert!(
             hook_contents.contains("env TRUDGER_TASK_ID=tr-1"),
@@ -1525,6 +1697,91 @@ mod tests {
         assert!(
             !task_show_log.exists(),
             "task_show should not run when next_task exits 1"
+        );
+    }
+
+    #[test]
+    fn hook_substitution_uses_shell_with_task_id() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        reset_test_env();
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("trudger.log");
+        let next_task_log = temp.path().join("next-task.log");
+        let task_show_log = temp.path().join("task-show.log");
+        let task_status_log = temp.path().join("task-status.log");
+        let task_update_log = temp.path().join("task-update.log");
+        let hook_log = temp.path().join("hook.log");
+        let codex_log = temp.path().join("codex.log");
+
+        let next_task_queue = temp.path().join("next-task-queue.txt");
+        fs::write(&next_task_queue, "tr-55\n\n").expect("write next task queue");
+        let status_queue = temp.path().join("status-queue.txt");
+        fs::write(&status_queue, "ready\nclosed\n").expect("write status queue");
+
+        let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = env::var("PATH").unwrap_or_default();
+        env::set_var(
+            "PATH",
+            format!("{}:{}", fixtures_bin.display(), old_path),
+        );
+        env::set_var("NEXT_TASK_LOG", &next_task_log);
+        env::set_var("TASK_SHOW_LOG", &task_show_log);
+        env::set_var("TASK_STATUS_LOG", &task_status_log);
+        env::set_var("TASK_UPDATE_LOG", &task_update_log);
+        env::set_var("HOOK_MOCK_LOG", &hook_log);
+        env::set_var("CODEX_MOCK_LOG", &codex_log);
+        env::set_var("NEXT_TASK_OUTPUT_QUEUE", &next_task_queue);
+        env::set_var("TASK_STATUS_QUEUE", &status_queue);
+        env::set_var("TASK_SHOW_OUTPUT", "SHOW_PAYLOAD");
+
+        let config = Config {
+            agent_command: "codex --yolo exec --default".to_string(),
+            agent_review_command: "codex --yolo exec --review \"$@\"".to_string(),
+            commands: Commands {
+                next_task: Some("next-task\t--with-tab".to_string()),
+                task_show: "task-show \"$@\"".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update \"$@\"".to_string(),
+                reset_task: "reset-task \"$@\"".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "hook --done \"$1\"".to_string(),
+                on_requires_human: "hook --human \"$1\"".to_string(),
+            },
+            review_loop_limit: 2,
+            log_path: log_path.display().to_string(),
+        };
+
+        let mut state = RuntimeState {
+            config,
+            config_path: temp.path().join("trudger.yml"),
+            prompt_trudge: "Task context".to_string(),
+            prompt_review: "Review context".to_string(),
+            logger: Logger::new(Some(log_path)),
+            tmux: TmuxState {
+                enabled: false,
+                base_name: String::new(),
+                original_title: String::new(),
+            },
+            interrupt_flag: Arc::new(AtomicBool::new(false)),
+            manual_tasks: Vec::new(),
+            completed_tasks: Vec::new(),
+            needs_human_tasks: Vec::new(),
+            current_task_id: None,
+            current_task_show: None,
+            current_task_status: None,
+        };
+
+        let result = run_loop(&mut state).expect_err("should exit after queue drained");
+        assert_eq!(result.code, 0, "expected graceful exit");
+
+        let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+        assert!(
+            hook_contents.contains("hook args_count=2 args=--done tr-55"),
+            "hook should receive task id via $1 substitution"
         );
     }
 
