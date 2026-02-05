@@ -305,6 +305,40 @@ EOF
   [[ "$output" == *"Warning: commands.next_task is empty"* ]]
 }
 
+@test "empty commands.next_task warns when manual task provided" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/empty-next-task-manual"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  config_path="$(write_config "$temp_dir" <<'EOF'
+agent_command: 'codex --yolo exec "$@"'
+agent_review_command: 'codex --yolo exec "$@"'
+commands:
+  next_task: ''
+  task_show: 'task-show "$@"'
+  task_status: 'task-status "$@"'
+  task_update_in_progress: 'task-update "$@"'
+review_loop_limit: 5
+log_path: "./.trudger.log"
+hooks:
+  on_completed: 'hook --done "$@"'
+  on_requires_human: 'hook --needs-human "$@"'
+EOF
+)"
+
+  local status_queue="${temp_dir}/task-status.queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
+  local codex_log="${temp_dir}/codex.log"
+
+  HOME="$temp_dir" \
+    TASK_STATUS_QUEUE="$status_queue" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger -c "$config_path" tr-2
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Warning: commands.next_task is empty"* ]]
+}
+
 @test "missing commands.task_show errors" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-task-show"
@@ -799,7 +833,7 @@ EOF
   [ "$status" -ne 0 ]
 }
 
-@test "task_show preserves ampersands and backslashes" {
+@test "task_show preserves special characters" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/task-show-escape"
   mkdir -p "$temp_dir"
@@ -813,7 +847,7 @@ EOF
   printf '%s\n' 'open' 'closed' > "$status_queue"
 
   local task_show_output
-  task_show_output=$'R&D \\path'
+  task_show_output=$'R&D \\\\path "quote" $dollar & more'
 
   HOME="$temp_dir" \
     NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
@@ -824,6 +858,39 @@ EOF
 
   [ "$status" -eq 0 ]
   run grep -Fq -- "env TRUDGER_TASK_SHOW=$task_show_output" "$codex_log"
+  [ "$status" -eq 0 ]
+}
+
+@test "prompt context keeps literal tokens" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/prompt-literals"
+  mkdir -p "$temp_dir"
+
+  mkdir -p "${temp_dir}/.codex/prompts"
+  printf '%s\n' 'Prompt uses $ARGUMENTS and $TASK_SHOW' > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' 'Review uses $ARGUMENTS and $TASK_SHOW' > "${temp_dir}/.codex/prompts/trudge_review.md"
+
+  config_path="$(write_base_config "$temp_dir")"
+
+  local codex_log="${temp_dir}/codex.log"
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local status_queue="${temp_dir}/status.queue"
+  printf '%s\n' 'tr-55' '' > "$next_task_queue"
+  printf '%s\n' 'ready' 'closed' > "$status_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_SHOW_OUTPUT="SHOW_PAYLOAD" \
+    TASK_STATUS_QUEUE="$status_queue" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -eq 0 ]
+  run grep -Fq -- 'env TRUDGER_PROMPT=Prompt uses $ARGUMENTS and $TASK_SHOW' "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- 'env TRUDGER_REVIEW_PROMPT=Review uses $ARGUMENTS and $TASK_SHOW' "$codex_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- 'env TRUDGER_TASK_SHOW=SHOW_PAYLOAD' "$codex_log"
   [ "$status" -eq 0 ]
 }
 
