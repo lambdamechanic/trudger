@@ -125,6 +125,18 @@ fn render_args(args: &[String]) -> String {
     if args.is_empty() {
         return String::new();
     }
+    let output = Command::new("bash")
+        .arg("-lc")
+        .arg("printf \"%q \" \"$@\"")
+        .arg("--")
+        .args(args)
+        .output();
+    if let Ok(output) = output {
+        if output.status.success() {
+            return String::from_utf8_lossy(&output.stdout).to_string();
+        }
+    }
+
     let mut rendered = String::new();
     for arg in args {
         rendered.push_str(&escape(arg.into()).to_string());
@@ -1315,20 +1327,6 @@ fn run() -> Result<(), Quit> {
 
     let prompt_trudge = home.join(PROMPT_TRUDGE);
     let prompt_review = home.join(PROMPT_REVIEW);
-    if let Err(message) = require_file(&prompt_trudge, "prompt file") {
-        eprintln!("{}", message);
-        return Err(Quit {
-            code: 1,
-            reason: message,
-        });
-    }
-    if let Err(message) = require_file(&prompt_review, "prompt file") {
-        eprintln!("{}", message);
-        return Err(Quit {
-            code: 1,
-            reason: message,
-        });
-    }
 
     let default_config = home.join(DEFAULT_CONFIG_REL);
     let config_path = config_path.unwrap_or_else(|| default_config.clone());
@@ -1349,29 +1347,31 @@ fn run() -> Result<(), Quit> {
         reason: message,
     })?;
 
-    if let Err(message) = validate_config(&loaded.config, &manual_tasks) {
-        eprintln!("{}", message);
-        return Err(Quit {
-            code: 1,
-            reason: message,
-        });
-    }
-
-    let prompt_trudge_content = render_prompt(&prompt_trudge).map_err(|message| Quit {
-        code: 1,
-        reason: message,
-    })?;
-    let prompt_review_content = render_prompt(&prompt_review).map_err(|message| Quit {
-        code: 1,
-        reason: message,
-    })?;
-
     let log_path = loaded.config.log_path.trim();
     let logger = Logger::new(if log_path.is_empty() {
         None
     } else {
         Some(PathBuf::from(log_path))
     });
+
+    if let Err(message) = validate_config(&loaded.config, &manual_tasks) {
+        eprintln!("{}", message);
+        return Err(quit(&logger, &message, 1));
+    }
+
+    if let Err(message) = require_file(&prompt_trudge, "prompt file") {
+        eprintln!("{}", message);
+        return Err(quit(&logger, &message, 1));
+    }
+    if let Err(message) = require_file(&prompt_review, "prompt file") {
+        eprintln!("{}", message);
+        return Err(quit(&logger, &message, 1));
+    }
+
+    let prompt_trudge_content =
+        render_prompt(&prompt_trudge).map_err(|message| quit(&logger, &message, 1))?;
+    let prompt_review_content =
+        render_prompt(&prompt_review).map_err(|message| quit(&logger, &message, 1))?;
 
     let interrupt_flag = Arc::new(AtomicBool::new(false));
     if let Err(err) = ctrlc::set_handler({
@@ -1455,6 +1455,47 @@ mod tests {
         reset_test_env();
         let value = "line\ncarriage\rtab\t";
         assert_eq!(sanitize_log_value(value), "line\\ncarriage\\rtab\\t");
+    }
+
+    #[test]
+    fn log_line_matches_shell_fixture() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        reset_test_env();
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("trudger.log");
+        let logger = Logger::new(Some(log_path.clone()));
+
+        let command = "next-task\t--with-tab";
+        let args = vec![
+            "tr-1".to_string(),
+            "with space".to_string(),
+            "tab\targ".to_string(),
+            "#start".to_string(),
+            "~home".to_string(),
+            "foo$bar".to_string(),
+            "foo\"bar".to_string(),
+            "foo\\bar".to_string(),
+        ];
+        let args_render = render_args(&args);
+        logger.log_transition(&format!(
+            "cmd start label=next-task task=tr-1 mode=bash_lc command={} args={}",
+            sanitize_log_value(command),
+            sanitize_log_value(&args_render)
+        ));
+
+        let log_contents = fs::read_to_string(&log_path).expect("read log file");
+        let line = log_contents.lines().next().expect("log line");
+        let message = line.splitn(2, ' ').nth(1).unwrap_or("");
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("logs")
+            .join("command-start.txt");
+        let expected = fs::read_to_string(&fixture_path).expect("read fixture");
+        let expected = expected
+            .trim_end_matches('\n')
+            .trim_end_matches('\r');
+        assert_eq!(message, expected);
     }
 
     #[test]
