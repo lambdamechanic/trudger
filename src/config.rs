@@ -15,7 +15,7 @@ pub struct Config {
 
 #[derive(Debug, Deserialize)]
 pub struct Commands {
-    pub next_task: String,
+    pub next_task: Option<String>,
     pub task_show: String,
     pub task_status: String,
     pub task_update_in_progress: String,
@@ -30,6 +30,7 @@ pub struct Hooks {
 #[derive(Debug)]
 pub struct LoadedConfig {
     pub config: Config,
+    #[allow(dead_code)]
     pub warnings: Vec<String>,
 }
 
@@ -60,7 +61,7 @@ pub fn load_config(path: &Path) -> Result<LoadedConfig, String> {
 
 fn emit_unknown_key_warnings(keys: &[String]) {
     for key in keys {
-        eprintln!("Warning: unknown config key: {}", key);
+        eprintln!("Warning: Unknown config key: {}", key);
     }
 }
 
@@ -89,7 +90,6 @@ fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
     require_non_null(mapping, "review_loop_limit", "review_loop_limit")?;
 
     let commands = require_mapping(mapping, "commands", "commands")?;
-    require_non_empty_string(commands, "next_task", "commands.next_task")?;
     require_non_empty_string(commands, "task_show", "commands.task_show")?;
     require_non_empty_string(commands, "task_status", "commands.task_status")?;
     require_non_empty_string(
@@ -112,10 +112,7 @@ fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
 fn reject_deprecated_keys(mapping: &Mapping) -> Result<(), String> {
     let key = Value::String("codex_command".to_string());
     if mapping.contains_key(&key) {
-        return Err(
-            "codex_command is no longer supported; use agent_command and agent_review_command"
-                .to_string(),
-        );
+        return Err("Migration: codex_command is no longer supported; use agent_command and agent_review_command.".to_string());
     }
     Ok(())
 }
@@ -296,6 +293,10 @@ hooks:
         assert!(
             err.contains("agent_command"),
             "error should mention agent_command, got: {err}"
+        );
+        assert!(
+            err.contains("Migration"),
+            "error should include migration guidance, got: {err}"
         );
     }
 }
