@@ -1173,7 +1173,7 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "hooks honor shell quoting with task id substitution" {
+@test "hooks honor shell quoting with task id env var" {
   if ! should_run_codex_tests; then
     skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
   fi
@@ -1182,7 +1182,7 @@ EOF
   temp_dir="${BATS_TEST_TMPDIR}/hook-quoting"
   mkdir -p "$temp_dir"
   create_prompts "$temp_dir"
-  BASE_HOOK_ON_COMPLETED="hook --done \"\$1\"" config_path="$(write_base_config "$temp_dir")"
+  BASE_HOOK_ON_COMPLETED="hook --done \"\$TRUDGER_TASK_ID\"" config_path="$(write_base_config "$temp_dir")"
 
   local hook_log="${temp_dir}/hook.log"
   local next_task_queue="${temp_dir}/next-task.queue"

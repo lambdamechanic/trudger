@@ -7,7 +7,7 @@ The script SHALL load configuration from `~/.config/trudger.yml` and exit with a
 - **THEN** the script exits non-zero and prints bootstrap instructions for sample configs
 
 ### Requirement: Configuration validation
-The script SHALL require `codex_command`, `commands.next_task`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, `hooks.on_requires_human`, `review_loop_limit`, and `log_path` to be present and non-empty.
+The script SHALL require `agent_command`, `agent_review_command`, `commands.next_task`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, `hooks.on_requires_human`, `review_loop_limit`, and `log_path` to be present and non-empty.
 
 #### Scenario: Required config value missing
 - **WHEN** any required config value is missing or empty
@@ -28,15 +28,18 @@ The script SHALL emit a warning for unknown top-level config keys and continue.
 - **THEN** the script prints a warning naming the key and continues startup
 
 ### Requirement: Hook execution semantics
-The script SHALL execute hooks either with `$1`/`${1}` substitution or by prepending the task id as the first argument when no substitution is present.
+The script SHALL execute hooks without positional task arguments and SHALL provide task context via `TRUDGER_*` environment variables.
 
-#### Scenario: Hook uses $1 substitution
-- **WHEN** a hook command contains `$1` or `${1}`
-- **THEN** the hook is executed via a shell with the task id available as `$1`
+#### Scenario: Hook receives env vars
+- **WHEN** a hook command executes
+- **THEN** it receives `TRUDGER_TASK_ID` and other task context via environment variables
+- **AND** no positional task id argument is passed
 
-#### Scenario: Hook without substitution
-- **WHEN** a hook command does not contain `$1` or `${1}`
-- **THEN** the task id is passed as the first argument
+## RENAMED Requirements
+- FROM: `### Requirement: Codex prompt execution`
+- TO: `### Requirement: Agent prompt execution`
+- FROM: `### Requirement: Codex update verification`
+- TO: `### Requirement: Agent update verification`
 
 ## MODIFIED Requirements
 ### Requirement: Task selection
@@ -50,21 +53,27 @@ The script SHALL select the next task by running the configured `commands.next_t
 - **WHEN** `commands.next_task` returns a task whose `commands.task_status` result is not `ready` or `open`
 - **THEN** the script skips it and retries up to `TRUDGER_SKIP_NOT_READY_LIMIT` before idling
 
-### Requirement: Codex prompt execution
-For each selected task, the script SHALL start a Codex exec session using the contents of `~/.codex/prompts/trudge.md` with `$ARGUMENTS` replaced by the task id and `$TASK_SHOW` replaced by the output of `commands.task_show`, then resume the same session with `~/.codex/prompts/trudge_review.md` using the same replacements.
+### Requirement: Agent prompt execution
+For each selected task, the script SHALL execute the configured `agent_command` for the solve step and `agent_review_command` for the review step. The script SHALL load prompt content from `~/.codex/prompts/trudge.md` and `~/.codex/prompts/trudge_review.md` without performing `$ARGUMENTS` or `$TASK_SHOW` substitutions, and SHALL provide the prompt content via `TRUDGER_PROMPT` (solve) and `TRUDGER_REVIEW_PROMPT` (review) environment variables alongside task context (`TRUDGER_*`).
 
-#### Scenario: Codex solve + review
+#### Scenario: Agent solve + review
 - **WHEN** a task is selected
-- **THEN** the script invokes `codex exec` with the rendered trudge prompt
-- **AND** the script invokes `codex exec resume --last` with the rendered review prompt
+- **THEN** the script invokes `agent_command` with the trudge prompt content
+- **AND** the script invokes `agent_review_command` with the review prompt content
+
+#### Scenario: Prompt context via env vars
+- **WHEN** the agent commands run
+- **THEN** task context is provided via `TRUDGER_*` environment variables
+- **AND** the relevant prompt env var is set (`TRUDGER_PROMPT` for solve, `TRUDGER_REVIEW_PROMPT` for review) while the other is unset
+- **AND** prompt templates are not substituted by Trudger
 
 ### Requirement: Task show output handling
-The script SHALL treat `commands.task_show` output as free-form prompt content and SHALL NOT parse it for control flow decisions.
+The script SHALL treat `commands.task_show` output as free-form prompt content and SHALL NOT parse it for control flow decisions. The script SHALL provide the output via `TRUDGER_TASK_SHOW` for agent commands and hooks.
 
 #### Scenario: Show output is prompt-only
 - **GIVEN** `commands.task_show` is configured
 - **WHEN** Trudger renders prompts for a task
-- **THEN** it passes the show output to Codex without parsing task status
+- **THEN** it provides the show output via `TRUDGER_TASK_SHOW` without parsing task status
 
 ### Requirement: Task closure on success
 When the review prompt indicates the task is closed, the script SHALL invoke `hooks.on_completed`.
@@ -80,7 +89,7 @@ When the review prompt indicates the task is still open, the script SHALL invoke
 - **WHEN** `commands.task_status` does not return `closed` after the review step
 - **THEN** `hooks.on_requires_human` is executed for that task
 
-### Requirement: Codex update verification
+### Requirement: Agent update verification
 After the review step, the script SHALL verify that the task has a non-empty status (from `commands.task_status`) and error if status is missing.
 
 #### Scenario: Missing status after review

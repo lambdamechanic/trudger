@@ -278,148 +278,6 @@ fn run_shell_command_status(
     Ok(exit_code)
 }
 
-fn run_exec_command_status(
-    program: &str,
-    log_command: &str,
-    log_label: &str,
-    task_token: &str,
-    args: &[String],
-    env: &CommandEnv,
-    logger: &Logger,
-) -> Result<i32, String> {
-    if program.is_empty() {
-        return Ok(0);
-    }
-
-    let args_render = render_args(args);
-    logger.log_transition(&format!(
-        "cmd start label={} task={} mode=exec command={} args={}",
-        log_label,
-        task_token,
-        sanitize_log_value(log_command),
-        sanitize_log_value(&args_render)
-    ));
-
-    let mut cmd = Command::new(program);
-    cmd.args(args);
-    cmd.stdin(std::process::Stdio::inherit());
-    cmd.stdout(std::process::Stdio::inherit());
-    cmd.stderr(std::process::Stdio::inherit());
-    env.apply(&mut cmd);
-    let status = cmd
-        .status()
-        .map_err(|err| format!("Failed to run command '{}': {}", log_command, err))?;
-
-    let exit_code = status.code().unwrap_or(1);
-    logger.log_transition(&format!(
-        "cmd exit label={} task={} exit={}",
-        log_label, task_token, exit_code
-    ));
-
-    Ok(exit_code)
-}
-
-fn hook_uses_substitution(command: &str) -> bool {
-    let chars: Vec<char> = command.chars().collect();
-    let len = chars.len();
-    let mut idx = 0;
-    while idx < len {
-        if chars[idx] == '$' && idx + 1 < len {
-            let next = chars[idx + 1];
-            if next == '{' {
-                if idx + 3 < len && chars[idx + 2] == '1' && chars[idx + 3] == '}' {
-                    return true;
-                }
-            } else if next == '1' {
-                if idx + 2 >= len || !chars[idx + 2].is_ascii_digit() {
-                    return true;
-                }
-            }
-        }
-        idx += 1;
-    }
-    false
-}
-
-fn split_shell_words(command: &str) -> Result<Vec<String>, String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut in_token = false;
-    let mut chars = command.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if in_single {
-            if ch == '\'' {
-                in_single = false;
-            } else {
-                current.push(ch);
-            }
-            in_token = true;
-            continue;
-        }
-        if in_double {
-            match ch {
-                '"' => {
-                    in_double = false;
-                }
-                '\\' => {
-                    if let Some(next) = chars.next() {
-                        current.push(next);
-                    } else {
-                        current.push('\\');
-                    }
-                }
-                _ => current.push(ch),
-            }
-            in_token = true;
-            continue;
-        }
-
-        match ch {
-            '\'' => {
-                in_single = true;
-                in_token = true;
-            }
-            '"' => {
-                in_double = true;
-                in_token = true;
-            }
-            '\\' => {
-                if let Some(next) = chars.next() {
-                    current.push(next);
-                    in_token = true;
-                } else {
-                    current.push('\\');
-                    in_token = true;
-                }
-            }
-            ch if ch.is_whitespace() => {
-                if in_token {
-                    words.push(current.clone());
-                    current.clear();
-                    in_token = false;
-                }
-            }
-            _ => {
-                current.push(ch);
-                in_token = true;
-            }
-        }
-    }
-
-    if in_single || in_double {
-        return Err("Unterminated quote in hook command.".to_string());
-    }
-
-    if in_token {
-        words.push(current);
-    }
-
-    Ok(words)
-}
-
 fn command_exists(name: &str) -> bool {
     let Some(paths) = env::var_os("PATH") else {
         return false;
@@ -957,35 +815,7 @@ fn run_hook(state: &RuntimeState, hook_command: &str, task_id: &str, hook_name: 
         return Ok(());
     }
 
-    let exit = if hook_uses_substitution(hook_command) {
-        let args = vec![task_id.to_string()];
-        run_config_command_status(
-            state,
-            hook_command,
-            Some(task_id),
-            hook_name,
-            &args,
-        )?
-    } else {
-        let argv = split_shell_words(hook_command)?;
-        if argv.is_empty() {
-            return Ok(());
-        }
-        let mut args = Vec::with_capacity(argv.len());
-        args.push(task_id.to_string());
-        args.extend(argv.iter().skip(1).cloned());
-        let env = build_command_env(state, Some(task_id), None, None);
-        run_exec_command_status(
-            &argv[0],
-            hook_command,
-            hook_name,
-            task_id,
-            &args,
-            &env,
-            &state.logger,
-        )?
-    };
-
+    let exit = run_config_command_status(state, hook_command, Some(task_id), hook_name, &[])?;
     if exit != 0 {
         return Err(format!("hook {} failed with exit code {}", hook_name, exit));
     }
@@ -1639,12 +1469,12 @@ mod tests {
 
         let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
         assert!(
-            hook_contents.contains("hook args_count=2 args=tr-1 --done"),
-            "hook should receive task id as first arg"
+            hook_contents.contains("hook args_count=1 args=--done"),
+            "hook should not receive positional task args"
         );
         assert!(
-            hook_contents.contains("hook args_count=2 args=tr-2 --human"),
-            "requires-human hook should receive task id as first arg"
+            hook_contents.contains("hook args_count=1 args=--human"),
+            "requires-human hook should not receive positional task args"
         );
         assert!(
             hook_contents.contains("env TRUDGER_TASK_ID=tr-1"),
@@ -1742,7 +1572,7 @@ mod tests {
     }
 
     #[test]
-    fn hook_substitution_uses_shell_with_task_id() {
+    fn hook_uses_env_task_id_in_shell() {
         let _guard = ENV_MUTEX.lock().unwrap();
         reset_test_env();
         let temp = TempDir::new().expect("temp dir");
@@ -1789,8 +1619,8 @@ mod tests {
                 reset_task: "reset-task \"$@\"".to_string(),
             },
             hooks: Hooks {
-                on_completed: "hook --done \"$1\"".to_string(),
-                on_requires_human: "hook --human \"$1\"".to_string(),
+                on_completed: "hook --done \"$TRUDGER_TASK_ID\"".to_string(),
+                on_requires_human: "hook --human \"$TRUDGER_TASK_ID\"".to_string(),
             },
             review_loop_limit: 2,
             log_path: log_path.display().to_string(),
@@ -1822,7 +1652,7 @@ mod tests {
         let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
         assert!(
             hook_contents.contains("hook args_count=2 args=--done tr-55"),
-            "hook should receive task id via $1 substitution"
+            "hook should receive task id via TRUDGER_TASK_ID"
         );
     }
 

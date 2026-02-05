@@ -12,13 +12,13 @@ The script SHALL parse `~/.config/trudger.yml` using `yq`, treat null values as 
 - **THEN** the script exits non-zero with a clear parse error that names the config path
 
 ## ADDED Requirements
-### Requirement: Prompt substitution safety
-The script SHALL substitute `$ARGUMENTS` and `$TASK_SHOW` in prompt templates as literal values, preserving special characters like `&` and backslashes without mutation.
+### Requirement: Prompt context via env vars
+The script SHALL NOT substitute `$ARGUMENTS` or `$TASK_SHOW` in prompt templates. Instead, it SHALL provide task context via `TRUDGER_*` environment variables and pass prompt content via the relevant prompt env var (`TRUDGER_PROMPT` for solve, `TRUDGER_REVIEW_PROMPT` for review) to the agent command.
 
 #### Scenario: Task show output contains special characters
 - **GIVEN** `commands.task_show` returns content containing `&` or backslashes
-- **WHEN** Trudger renders a prompt
-- **THEN** the rendered prompt includes the content exactly as returned
+- **WHEN** Trudger invokes the agent command
+- **THEN** `TRUDGER_TASK_SHOW` includes the content exactly as returned
 
 ### Requirement: Execution logging
 When `log_path` is configured, the script SHALL log command start/exit and quit reasons as single-line entries, escaping control characters (newlines, carriage returns, tabs) in logged values. The script SHALL log the full configured command strings and arguments without redaction.
@@ -39,8 +39,8 @@ Unhandled errors SHALL be recorded via the same quit path used for explicit exit
 - **THEN** the script logs the quit reason and exits non-zero
 
 ### Requirement: Reexec path resolution
-After processing a task, the script SHALL re-exec itself using a resolved executable path when available, falling back to the original argv[0], and log the reexec path.
+After processing a task, the shell script implementation SHALL re-exec itself using a resolved executable path when available, falling back to the original argv[0], and log the reexec path.
 
 #### Scenario: Reexec uses resolved path
-- **WHEN** the script restarts after handling a task
+- **WHEN** the shell script restarts after handling a task
 - **THEN** it uses the resolved executable path if available and logs it
