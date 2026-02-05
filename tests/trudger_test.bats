@@ -148,6 +148,23 @@ make_minimal_path() {
   [[ "$output" == *"Missing prompt file"* ]]
 }
 
+@test "missing review prompt file errors" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/missing-review-prompt"
+  mkdir -p "$temp_dir"
+  mkdir -p "${temp_dir}/.codex/prompts"
+  printf '%s\n' "Solve prompt" > "${temp_dir}/.codex/prompts/trudge.md"
+  config_path="$(write_base_config "$temp_dir")"
+
+  HOME="$temp_dir" \
+    BR_MOCK_READY_JSON='[]' \
+    run_trudger -c "$config_path"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Missing prompt file"* ]]
+  [[ "$output" == *"trudge_review.md"* ]]
+}
+
 @test "missing config prints bootstrap instructions" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/missing-config"
@@ -789,7 +806,15 @@ EOF
     }
   ' "$codex_log"
   [ "$status" -eq 0 ]
+  run awk '
+    /^codex / {
+      if ($0 ~ /tr-42/) exit 1
+    }
+  ' "$codex_log"
+  [ "$status" -eq 0 ]
   run grep -Fq -- "next-task args_count=0 args=" "$next_task_log"
+  [ "$status" -eq 0 ]
+  run awk '/^next-task args_count=/ { if ($0 ~ /tr-42/) exit 1 }' "$next_task_log"
   [ "$status" -eq 0 ]
   run grep -Fq -- "envset TRUDGER_TASK_ID=0" "$next_task_log"
   [ "$status" -eq 0 ]
@@ -805,6 +830,8 @@ EOF
   [ "$status" -eq 0 ]
   run grep -Fq -- "task-show args_count=1 args=--json" "$task_show_log"
   [ "$status" -eq 0 ]
+  run awk '/^task-show args_count=/ { if ($0 ~ /tr-42/) exit 1 }' "$task_show_log"
+  [ "$status" -eq 0 ]
   run grep -Fq -- "envset TRUDGER_TASK_ID=1" "$task_show_log"
   [ "$status" -eq 0 ]
   run grep -Fq -- "envset TRUDGER_PROMPT=0" "$task_show_log"
@@ -813,13 +840,19 @@ EOF
   [ "$status" -eq 0 ]
   run grep -Fq -- "task-status args_count=0 args=" "$task_status_log"
   [ "$status" -eq 0 ]
+  run awk '/^task-status args_count=/ { if ($0 ~ /tr-42/) exit 1 }' "$task_status_log"
+  [ "$status" -eq 0 ]
   run grep -Fq -- "envset TRUDGER_TASK_ID=1" "$task_status_log"
   [ "$status" -eq 0 ]
   run grep -Fq -- "task-update args_count=2 args=--status in_progress" "$task_update_log"
   [ "$status" -eq 0 ]
+  run awk '/^task-update args_count=/ { if ($0 ~ /tr-42/) exit 1 }' "$task_update_log"
+  [ "$status" -eq 0 ]
   run grep -Fq -- "envset TRUDGER_TASK_ID=1" "$task_update_log"
   [ "$status" -eq 0 ]
   run grep -Fq -- "hook args_count=1 args=--done" "$hook_log"
+  [ "$status" -eq 0 ]
+  run awk '/^hook args_count=/ { if ($0 ~ /tr-42/) exit 1 }' "$hook_log"
   [ "$status" -eq 0 ]
   run grep -Fq -- "env TRUDGER_TASK_STATUS=closed" "$hook_log"
   [ "$status" -eq 0 ]
@@ -1105,10 +1138,6 @@ EOF
 }
 
 @test "uses configured codex command for solve and review" {
-  if ! should_run_codex_tests; then
-    skip "set TRUDGER_TEST_RUN_CODEX=1 to enable"
-  fi
-
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/codex-config"
   mkdir -p "$temp_dir"
