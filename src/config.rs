@@ -240,6 +240,51 @@ hooks:
     }
 
     #[test]
+    fn null_review_loop_limit_errors() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: null
+log_path: "./log"
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected null review_loop_limit");
+        assert!(
+            err.contains("review_loop_limit"),
+            "error should name review_loop_limit, got: {err}"
+        );
+    }
+
+    #[test]
+    fn null_commands_mapping_errors() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands: null
+review_loop_limit: 3
+log_path: "./log"
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected null commands");
+        assert!(
+            err.contains("commands"),
+            "error should name commands, got: {err}"
+        );
+    }
+
+    #[test]
     fn invalid_yaml_includes_path() {
         let file = write_temp_config("agent_command: [");
         let err = load_config(file.path()).expect_err("expected parse error");
