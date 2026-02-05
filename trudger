@@ -522,28 +522,9 @@ run_task_command() {
 run_task_show() {
   local task_id="$1"
   shift
-  local raw exit_code
-  local errexit_enabled=0
-  if [[ $- == *e* ]]; then
-    errexit_enabled=1
-  fi
-  local prev_err_trap=""
-  prev_err_trap="$(trap -p ERR)"
-  trap - ERR
-  set +e
+  local raw
   current_task_show_set=0
   raw="$(run_task_command "$task_show_command" "$task_id" "$@")"
-  exit_code=$?
-  if [[ -n "$prev_err_trap" ]]; then
-    eval "$prev_err_trap"
-  fi
-  if ((errexit_enabled)); then
-    set -e
-  fi
-  if [[ "$exit_code" -ne 0 ]]; then
-    printf 'task_show command failed with exit code %s.\n' "$exit_code" >&2
-    quit "task_show_failed:${exit_code}" "$exit_code"
-  fi
   set_task_show_state "$raw"
 }
 
@@ -595,28 +576,9 @@ get_next_task_id() {
 
 task_status() {
   local task_id="$1"
-  local raw exit_code status
-  local errexit_enabled=0
-  if [[ $- == *e* ]]; then
-    errexit_enabled=1
-  fi
-  local prev_err_trap=""
-  prev_err_trap="$(trap -p ERR)"
-  trap - ERR
-  set +e
+  local raw status
   current_task_status_set=0
   raw="$(run_task_status "$task_id")"
-  exit_code=$?
-  if [[ -n "$prev_err_trap" ]]; then
-    eval "$prev_err_trap"
-  fi
-  if ((errexit_enabled)); then
-    set -e
-  fi
-  if [[ "$exit_code" -ne 0 ]]; then
-    printf 'task_status command failed with exit code %s.\n' "$exit_code" >&2
-    quit "task_status_failed:${exit_code}" "$exit_code"
-  fi
   status="$(printf '%s' "$raw" | awk 'NF { print $1; exit }')"
   set_task_status_state "$status"
 }

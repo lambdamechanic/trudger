@@ -845,6 +845,52 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "task_show failure triggers err trap and quit" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/error-task-show"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+
+  local log_path="${temp_dir}/trudger.log"
+  BASE_LOG_PATH="$log_path" BASE_TASK_SHOW_COMMAND="false" config_path="$(write_base_config "$temp_dir")"
+
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local status_queue="${temp_dir}/status.queue"
+  printf '%s\n' 'tr-1' '' > "$next_task_queue"
+  printf '%s\n' 'ready' > "$status_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -ne 0 ]
+  run grep -Fq -- "quit reason=error" "$log_path"
+  [ "$status" -eq 0 ]
+}
+
+@test "task_status failure triggers err trap and quit" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/error-task-status"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+
+  local log_path="${temp_dir}/trudger.log"
+  BASE_LOG_PATH="$log_path" config_path="$(write_base_config "$temp_dir")"
+
+  local next_task_queue="${temp_dir}/next-task.queue"
+  printf '%s\n' 'tr-1' '' > "$next_task_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_STATUS_EXIT_CODE=1 \
+    run_trudger -c "$config_path"
+
+  [ "$status" -ne 0 ]
+  run grep -Fq -- "quit reason=error" "$log_path"
+  [ "$status" -eq 0 ]
+}
+
 @test "reexec logs resolved path" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/reexec-log"
