@@ -3,15 +3,17 @@ description: Work a task in the trudger loop.
 argument-hint: task-id
 ---
 
-Task ID: $ARGUMENTS
-Task details:
-$TASK_SHOW
-Work the specified task to completion in the current repo. The task details from `commands.task_show` are provided above.
+Task context is available via environment variables:
+- TRUDGER_TASK_ID
+- TRUDGER_TASK_SHOW
+- TRUDGER_TASK_STATUS
+- TRUDGER_CONFIG_PATH
+Work the specified task to completion in the current repo. The task details from `commands.task_show` are available in `TRUDGER_TASK_SHOW`.
 
 **Requirements**
 - Agent binaries available: `br`, `codex`, `jq`, `beads_rust`, `MCPShell`.
 - Follow the repo's AGENTS.md workflow and any referenced specs.
-- Trudger reads `~/.config/trudger.yml` (parsed via `yq`); required keys include `codex_command`, `review_loop_limit`, `log_path`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, and `hooks.on_requires_human`; `commands.next_task` is required unless manual task IDs are supplied.
+- Trudger reads `~/.config/trudger.yml` (parsed via `yq`); required keys include `agent_command`, `agent_review_command`, `review_loop_limit`, `log_path`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, and `hooks.on_requires_human`; `commands.next_task` is required unless manual task IDs are supplied.
 - Keep changes minimal and aligned to the task scope.
 - Run the relevant tests/quality gates.
 - Commit and push your changes.

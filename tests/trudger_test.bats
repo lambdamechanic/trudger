@@ -46,8 +46,20 @@ should_run_codex_tests() {
 create_prompts() {
   local temp_dir="$1"
   mkdir -p "${temp_dir}/.codex/prompts"
-  printf '%s\n' "Task ID: \$ARGUMENTS" "Task details:" "\$TASK_SHOW" > "${temp_dir}/.codex/prompts/trudge.md"
-  printf '%s\n' "Task ID: \$ARGUMENTS" "Task details:" "\$TASK_SHOW" > "${temp_dir}/.codex/prompts/trudge_review.md"
+  printf '%s\n' \
+    "Task context is available via environment variables:" \
+    "- TRUDGER_TASK_ID" \
+    "- TRUDGER_TASK_SHOW" \
+    "- TRUDGER_TASK_STATUS" \
+    "- TRUDGER_CONFIG_PATH" \
+    > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' \
+    "Task context is available via environment variables:" \
+    "- TRUDGER_TASK_ID" \
+    "- TRUDGER_TASK_SHOW" \
+    "- TRUDGER_TASK_STATUS" \
+    "- TRUDGER_CONFIG_PATH" \
+    > "${temp_dir}/.codex/prompts/trudge_review.md"
 }
 
 yaml_quote() {
@@ -700,9 +712,9 @@ EOF
     run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
-  run grep -Fq -- "env TRUDGER_PROMPT=Task ID: \$ARGUMENTS\\nTask details:\\n\$TASK_SHOW" "$codex_log"
+  run grep -Fq -- "env TRUDGER_PROMPT=Task context is available via environment variables:\\n- TRUDGER_TASK_ID\\n- TRUDGER_TASK_SHOW\\n- TRUDGER_TASK_STATUS\\n- TRUDGER_CONFIG_PATH" "$codex_log"
   [ "$status" -eq 0 ]
-  run grep -Fq -- "env TRUDGER_REVIEW_PROMPT=Task ID: \$ARGUMENTS\\nTask details:\\n\$TASK_SHOW" "$codex_log"
+  run grep -Fq -- "env TRUDGER_REVIEW_PROMPT=Task context is available via environment variables:\\n- TRUDGER_TASK_ID\\n- TRUDGER_TASK_SHOW\\n- TRUDGER_TASK_STATUS\\n- TRUDGER_CONFIG_PATH" "$codex_log"
   [ "$status" -eq 0 ]
   run grep -Fq -- "env TRUDGER_TASK_SHOW=SHOW_PAYLOAD" "$codex_log"
   [ "$status" -eq 0 ]
