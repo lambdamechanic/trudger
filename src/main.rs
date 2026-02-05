@@ -6,6 +6,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 mod config;
 
@@ -471,6 +473,7 @@ struct RuntimeState {
     prompt_review: String,
     logger: Logger,
     tmux: TmuxState,
+    interrupt_flag: Arc<AtomicBool>,
     manual_tasks: Vec<String>,
     completed_tasks: Vec<String>,
     needs_human_tasks: Vec<String>,
@@ -547,6 +550,9 @@ fn validate_config(config: &Config, manual_tasks: &[String]) -> Result<(), Strin
     }
     if config.commands.task_update_in_progress.trim().is_empty() {
         return Err("commands.task_update_in_progress must not be empty.".to_string());
+    }
+    if config.commands.reset_task.trim().is_empty() {
+        return Err("commands.reset_task must not be empty.".to_string());
     }
     if config.hooks.on_completed.trim().is_empty() {
         return Err("hooks.on_completed must not be empty.".to_string());
@@ -749,6 +755,49 @@ fn update_in_progress(state: &RuntimeState, task_id: &str) -> Result<(), String>
     Ok(())
 }
 
+fn reset_task(state: &RuntimeState, task_id: &str) -> Result<(), String> {
+    let exit = run_config_command_status(
+        state,
+        &state.config.commands.reset_task,
+        Some(task_id),
+        "reset_task",
+        &[],
+    )?;
+    if exit != 0 {
+        return Err(format!("reset_task failed with exit code {}", exit));
+    }
+    Ok(())
+}
+
+fn reset_task_on_exit(state: &RuntimeState, result: &Result<(), Quit>) {
+    if result.is_ok() {
+        return;
+    }
+    let Some(task_id) = state.current_task_id.as_deref() else {
+        return;
+    };
+    match reset_task(state, task_id) {
+        Ok(()) => state
+            .logger
+            .log_transition(&format!("reset_task task={}", task_id)),
+        Err(err) => {
+            eprintln!("Failed to reset task {}: {}", task_id, err);
+            state.logger.log_transition(&format!(
+                "reset_task_failed task={} err={}",
+                task_id,
+                sanitize_log_value(&err)
+            ));
+        }
+    }
+}
+
+fn check_interrupted(state: &RuntimeState) -> Result<(), Quit> {
+    if state.interrupt_flag.load(Ordering::SeqCst) {
+        return Err(quit(&state.logger, "interrupted", 130));
+    }
+    Ok(())
+}
+
 fn run_hook(state: &RuntimeState, hook_command: &str, task_id: &str, hook_name: &str) -> Result<(), String> {
     let exit = run_config_command_status(
         state,
@@ -795,13 +844,16 @@ fn run_agent_review(state: &RuntimeState) -> Result<(), String> {
 }
 
 fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
+    check_interrupted(state)?;
     if !state.manual_tasks.is_empty() {
         for task_id in &state.manual_tasks.clone() {
+            check_interrupted(state)?;
             ensure_task_ready(state, task_id)?;
         }
     }
 
     loop {
+        check_interrupted(state)?;
         let task_id = if !state.manual_tasks.is_empty() {
             state.manual_tasks.remove(0)
         } else {
@@ -819,6 +871,7 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
 
             let mut skip_count = 0usize;
             let selected = loop {
+                check_interrupted(state)?;
                 let task_id = get_next_task_id(state)?;
                 if task_id.trim().is_empty() {
                     state.logger.log_transition("idle no_task");
@@ -864,6 +917,7 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         let review_loops = 0;
 
         loop {
+            check_interrupted(state)?;
             state.tmux.update_name(
                 "SOLVING",
                 &task_id,
@@ -885,6 +939,7 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 return Err(quit(&state.logger, &format!("error:{err}"), 1));
             }
 
+            check_interrupted(state)?;
             if let Err(err) = run_task_show(state, &task_id, &["--json".to_string()]) {
                 state.tmux.update_name(
                     "ERROR",
@@ -896,6 +951,7 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 return Err(quit(&state.logger, &format!("error:{err}"), 1));
             }
 
+            check_interrupted(state)?;
             if let Err(_err) = run_agent_solve(state) {
                 state.tmux.update_name(
                     "ERROR",
@@ -925,6 +981,7 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 task_id, review_loops
             ));
 
+            check_interrupted(state)?;
             if let Err(err) = run_task_show(state, &task_id, &["--json".to_string()]) {
                 state.tmux.update_name(
                     "ERROR",
@@ -935,6 +992,7 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 return Err(quit(&state.logger, &format!("error:{err}"), 1));
             }
 
+            check_interrupted(state)?;
             if let Err(_err) = run_agent_review(state) {
                 state.tmux.update_name(
                     "ERROR",
@@ -953,6 +1011,7 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 ));
             }
 
+            check_interrupted(state)?;
             run_task_status(state, &task_id)
                 .map_err(|err| quit(&state.logger, &format!("task_status_failed:{err}"), 1))?;
             let status = state.current_task_status.clone().unwrap_or_default();
@@ -1146,6 +1205,16 @@ fn run() -> Result<(), Quit> {
         Some(PathBuf::from(log_path))
     });
 
+    let interrupt_flag = Arc::new(AtomicBool::new(false));
+    if let Err(err) = ctrlc::set_handler({
+        let interrupt_flag = Arc::clone(&interrupt_flag);
+        move || {
+            interrupt_flag.store(true, Ordering::SeqCst);
+        }
+    }) {
+        eprintln!("Failed to set interrupt handler: {}", err);
+    }
+
     let mut state = RuntimeState {
         config: loaded.config,
         config_path,
@@ -1153,6 +1222,7 @@ fn run() -> Result<(), Quit> {
         prompt_review: prompt_review_content,
         logger,
         tmux: TmuxState::new(),
+        interrupt_flag,
         manual_tasks,
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
@@ -1166,6 +1236,7 @@ fn run() -> Result<(), Quit> {
     }
 
     let result = run_loop(&mut state);
+    reset_task_on_exit(&state, &result);
     state.tmux.restore();
     result
 }
@@ -1256,6 +1327,7 @@ mod tests {
                 task_show: "task-show \"$@\"".to_string(),
                 task_status: "task-status".to_string(),
                 task_update_in_progress: "task-update \"$@\"".to_string(),
+                reset_task: "reset-task \"$@\"".to_string(),
             },
             hooks: Hooks {
                 on_completed: "hook --done".to_string(),
@@ -1276,6 +1348,7 @@ mod tests {
                 base_name: String::new(),
                 original_title: String::new(),
             },
+            interrupt_flag: Arc::new(AtomicBool::new(false)),
             manual_tasks: Vec::new(),
             completed_tasks: Vec::new(),
             needs_human_tasks: Vec::new(),
@@ -1346,6 +1419,77 @@ mod tests {
         assert!(
             !raw_tab,
             "log should not include raw tab characters, got:\n{log_contents}"
+        );
+    }
+
+    #[test]
+    fn reset_task_runs_on_exit_with_active_task() {
+        let temp = TempDir::new().expect("temp dir");
+        let reset_task_log = temp.path().join("reset-task.log");
+
+        let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = env::var("PATH").unwrap_or_default();
+        env::set_var(
+            "PATH",
+            format!("{}:{}", fixtures_bin.display(), old_path),
+        );
+        env::set_var("RESET_TASK_LOG", &reset_task_log);
+
+        let config = Config {
+            agent_command: "codex --yolo exec --default".to_string(),
+            agent_review_command: "codex --yolo exec --review \"$@\"".to_string(),
+            commands: Commands {
+                next_task: Some("next-task".to_string()),
+                task_show: "task-show \"$@\"".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update \"$@\"".to_string(),
+                reset_task: "reset-task \"$@\"".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "hook --done".to_string(),
+                on_requires_human: "hook --human".to_string(),
+            },
+            review_loop_limit: 2,
+            log_path: temp.path().join("trudger.log").display().to_string(),
+        };
+
+        let state = RuntimeState {
+            config,
+            config_path: temp.path().join("trudger.yml"),
+            prompt_trudge: "Task context".to_string(),
+            prompt_review: "Review context".to_string(),
+            logger: Logger::new(None),
+            tmux: TmuxState {
+                enabled: false,
+                base_name: String::new(),
+                original_title: String::new(),
+            },
+            interrupt_flag: Arc::new(AtomicBool::new(false)),
+            manual_tasks: Vec::new(),
+            completed_tasks: Vec::new(),
+            needs_human_tasks: Vec::new(),
+            current_task_id: Some("tr-1".to_string()),
+            current_task_show: None,
+            current_task_status: None,
+        };
+
+        let result = Err(Quit {
+            code: 1,
+            reason: "error".to_string(),
+        });
+        reset_task_on_exit(&state, &result);
+
+        let contents = fs::read_to_string(&reset_task_log).expect("read reset task log");
+        assert!(
+            contents.contains("reset-task args_count=0 args="),
+            "reset-task should run without args"
+        );
+        assert!(
+            contents.contains("env TRUDGER_TASK_ID=tr-1"),
+            "reset-task should receive task id in env"
         );
     }
 }

@@ -19,6 +19,7 @@ pub struct Commands {
     pub task_show: String,
     pub task_status: String,
     pub task_update_in_progress: String,
+    pub reset_task: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,6 +98,7 @@ fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
         "task_update_in_progress",
         "commands.task_update_in_progress",
     )?;
+    require_non_empty_string(commands, "reset_task", "commands.reset_task")?;
 
     let hooks = require_mapping(mapping, "hooks", "hooks")?;
     require_non_empty_string(hooks, "on_completed", "hooks.on_completed")?;
@@ -176,6 +178,7 @@ commands:
   task_show: "show"
   task_status: "status"
   task_update_in_progress: "update"
+  reset_task: "reset"
 review_loop_limit: 3
 log_path: "./log"
 hooks:
@@ -196,6 +199,7 @@ commands:
   task_show: "show"
   task_status: "status"
   task_update_in_progress: "update"
+  reset_task: "reset"
 review_loop_limit: 3
 log_path: "./log"
 hooks:
@@ -220,6 +224,7 @@ commands:
   task_show: "show"
   task_status: "status"
   task_update_in_progress: "update"
+  reset_task: "reset"
 review_loop_limit: 3
 log_path: "./log"
 hooks:
@@ -255,6 +260,7 @@ commands:
   task_show: "show"
   task_status: "status"
   task_update_in_progress: "update"
+  reset_task: "reset"
 review_loop_limit: 3
 log_path: "./log"
 hooks:
@@ -278,6 +284,7 @@ commands:
   task_show: "show"
   task_status: "status"
   task_update_in_progress: "update"
+  reset_task: "reset"
 review_loop_limit: 3
 log_path: "./log"
 hooks:
