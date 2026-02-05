@@ -867,8 +867,8 @@ EOF
   mkdir -p "$temp_dir"
 
   mkdir -p "${temp_dir}/.codex/prompts"
-  printf '%s\n' 'Prompt uses $ARGUMENTS and $TASK_SHOW' > "${temp_dir}/.codex/prompts/trudge.md"
-  printf '%s\n' 'Review uses $ARGUMENTS and $TASK_SHOW' > "${temp_dir}/.codex/prompts/trudge_review.md"
+  printf '%s\n' "Prompt uses \\$ARGUMENTS and \\$TASK_SHOW" > "${temp_dir}/.codex/prompts/trudge.md"
+  printf '%s\n' "Review uses \\$ARGUMENTS and \\$TASK_SHOW" > "${temp_dir}/.codex/prompts/trudge_review.md"
 
   config_path="$(write_base_config "$temp_dir")"
 
@@ -886,9 +886,9 @@ EOF
     run_trudger -c "$config_path"
 
   [ "$status" -eq 0 ]
-  run grep -Fq -- 'env TRUDGER_PROMPT=Prompt uses $ARGUMENTS and $TASK_SHOW' "$codex_log"
+  run grep -Fq -- "env TRUDGER_PROMPT=Prompt uses \\$ARGUMENTS and \\$TASK_SHOW" "$codex_log"
   [ "$status" -eq 0 ]
-  run grep -Fq -- 'env TRUDGER_REVIEW_PROMPT=Review uses $ARGUMENTS and $TASK_SHOW' "$codex_log"
+  run grep -Fq -- "env TRUDGER_REVIEW_PROMPT=Review uses \\$ARGUMENTS and \\$TASK_SHOW" "$codex_log"
   [ "$status" -eq 0 ]
   run grep -Fq -- 'env TRUDGER_TASK_SHOW=SHOW_PAYLOAD' "$codex_log"
   [ "$status" -eq 0 ]
