@@ -418,7 +418,8 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
             reset_task: "reset-task \"$@\"".to_string(),
         },
         hooks: Hooks {
-            on_completed: "hook --done".to_string(),
+            // Keep the hook running briefly so the interrupter can reliably observe its log.
+            on_completed: "hook --done; sleep 0.05".to_string(),
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
@@ -457,13 +458,26 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
     };
 
     let result = run_loop(&mut state).expect_err("interrupter should stop the loop");
-    let _ = interrupter.join();
+    interrupter.join().expect("interrupter thread");
     assert_eq!(result.code, 130, "expected interrupt exit");
     assert_eq!(state.completed_tasks, vec!["tr-1"]);
 
     assert!(
         !next_task_log.exists(),
         "next-task should not run when manual tasks are provided"
+    );
+
+    assert!(
+        task_show_log.exists(),
+        "task-show should run for manual tasks"
+    );
+    assert!(
+        task_update_log.exists(),
+        "task-update should run for manual tasks"
+    );
+    assert!(
+        task_status_log.exists(),
+        "task-status should run for manual tasks"
     );
 
     let codex_contents = fs::read_to_string(&codex_log).expect("read codex log");
