@@ -771,8 +771,8 @@ fn ensure_task_ready(state: &mut RuntimeState, task_id: &str) -> Result<(), Quit
     ))
 }
 
-fn update_in_progress(state: &RuntimeState, task_id: &str) -> Result<(), String> {
-    let args = vec!["--status".to_string(), "in_progress".to_string()];
+fn update_task_status(state: &RuntimeState, task_id: &str, status: &str) -> Result<(), String> {
+    let args = vec!["--status".to_string(), status.to_string()];
     let exit = run_config_command_status(
         state,
         &state.config.commands.task_update_in_progress,
@@ -781,9 +781,16 @@ fn update_in_progress(state: &RuntimeState, task_id: &str) -> Result<(), String>
         &args,
     )?;
     if exit != 0 {
-        return Err(format!("task_update_in_progress failed with exit code {}", exit));
+        return Err(format!(
+            "task_update_in_progress failed to set status {} (exit code {})",
+            status, exit
+        ));
     }
     Ok(())
+}
+
+fn update_in_progress(state: &RuntimeState, task_id: &str) -> Result<(), String> {
+    update_task_status(state, task_id, "in_progress")
 }
 
 fn reset_task(state: &RuntimeState, task_id: &str) -> Result<(), String> {
@@ -841,14 +848,14 @@ fn run_hook(state: &RuntimeState, hook_command: &str, task_id: &str, hook_name: 
     Ok(())
 }
 
-fn run_agent_solve(state: &RuntimeState) -> Result<(), String> {
+fn run_agent_solve(state: &RuntimeState, args: &[String]) -> Result<(), String> {
     let exit = run_agent_command(
         state,
         &state.config.agent_command,
         "agent_solve",
         Some(state.prompt_trudge.clone()),
         None,
-        &[],
+        args,
     )?;
     if exit != 0 {
         return Err(format!("agent_solve failed with exit code {}", exit));
@@ -943,7 +950,8 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         state.current_task_id = Some(task_id.clone());
         state.current_task_show = None;
         state.current_task_status = None;
-        let review_loops = 0;
+        let resume_args = vec!["resume".to_string(), "--last".to_string()];
+        let mut review_loops: u64 = 0;
 
         loop {
             check_interrupted(state)?;
@@ -981,7 +989,12 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             }
 
             check_interrupted(state)?;
-            if let Err(_err) = run_agent_solve(state) {
+            let solve_args: &[String] = if review_loops == 0 {
+                &[]
+            } else {
+                &resume_args
+            };
+            if let Err(_err) = run_agent_solve(state, solve_args) {
                 state.tmux.update_name(
                     "ERROR",
                     &task_id,
@@ -1076,6 +1089,46 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 }
                 break;
             }
+
+            if status == "blocked" {
+                state.needs_human_tasks.push(task_id.clone());
+                state
+                    .logger
+                    .log_transition(&format!("needs_human task={}", task_id));
+                if let Err(err) = run_hook(
+                    state,
+                    &state.config.hooks.on_requires_human,
+                    &task_id,
+                    "on_requires_human",
+                ) {
+                    return Err(quit(&state.logger, &format!("error:{err}"), 1));
+                }
+                break;
+            }
+
+            review_loops += 1;
+            if review_loops < state.config.review_loop_limit {
+                state.logger.log_transition(&format!(
+                    "review_loop_retry task={} loop={} limit={}",
+                    task_id, review_loops, state.config.review_loop_limit
+                ));
+                continue;
+            }
+
+            state.logger.log_transition(&format!(
+                "review_loop_exhausted task={} loops={} limit={}",
+                task_id, review_loops, state.config.review_loop_limit
+            ));
+            if let Err(err) = update_task_status(state, &task_id, "blocked") {
+                state.tmux.update_name(
+                    "ERROR",
+                    &task_id,
+                    &state.completed_tasks,
+                    &state.needs_human_tasks,
+                );
+                return Err(quit(&state.logger, &format!("error:{err}"), 1));
+            }
+            state.current_task_status = Some("blocked".to_string());
 
             state.needs_human_tasks.push(task_id.clone());
             state
@@ -1484,7 +1537,7 @@ mod tests {
         let next_task_queue = temp.path().join("next-task-queue.txt");
         fs::write(&next_task_queue, "tr-1\ntr-2\n\n").expect("write next task queue");
         let status_queue = temp.path().join("status-queue.txt");
-        fs::write(&status_queue, "ready\nclosed\nready\nopen\n").expect("write status queue");
+        fs::write(&status_queue, "ready\nclosed\nready\nblocked\n").expect("write status queue");
 
         let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
@@ -1610,6 +1663,192 @@ mod tests {
         assert!(
             !raw_tab,
             "log should not include raw tab characters, got:\n{log_contents}"
+        );
+    }
+
+    #[test]
+    fn review_loop_limit_retries_until_closed() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        reset_test_env();
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("trudger.log");
+        let task_update_log = temp.path().join("task-update.log");
+        let hook_log = temp.path().join("hook.log");
+
+        let next_task_queue = temp.path().join("next-task-queue.txt");
+        fs::write(&next_task_queue, "tr-1\n\n").expect("write next task queue");
+        let status_queue = temp.path().join("status-queue.txt");
+        fs::write(&status_queue, "ready\nopen\nclosed\n").expect("write status queue");
+
+        let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = env::var("PATH").unwrap_or_default();
+        env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        env::set_var("NEXT_TASK_OUTPUT_QUEUE", &next_task_queue);
+        env::set_var("TASK_STATUS_QUEUE", &status_queue);
+        env::set_var("TASK_SHOW_OUTPUT", "SHOW_PAYLOAD");
+        env::set_var("TASK_UPDATE_LOG", &task_update_log);
+        env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+        let config = Config {
+            agent_command: "codex --yolo exec --default".to_string(),
+            agent_review_command: "codex --yolo exec --review \"$@\"".to_string(),
+            commands: Commands {
+                next_task: Some("next-task".to_string()),
+                task_show: "task-show \"$@\"".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update \"$@\"".to_string(),
+                reset_task: "reset-task \"$@\"".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "hook --done".to_string(),
+                on_requires_human: "hook --human".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 2,
+            log_path: log_path.display().to_string(),
+        };
+
+        let mut state = RuntimeState {
+            config,
+            config_path: temp.path().join("trudger.yml"),
+            prompt_trudge: "Task context".to_string(),
+            prompt_review: "Review context".to_string(),
+            logger: Logger::new(Some(log_path)),
+            tmux: TmuxState {
+                enabled: false,
+                base_name: String::new(),
+                original_title: String::new(),
+            },
+            interrupt_flag: Arc::new(AtomicBool::new(false)),
+            manual_tasks: Vec::new(),
+            completed_tasks: Vec::new(),
+            needs_human_tasks: Vec::new(),
+            current_task_id: None,
+            current_task_show: None,
+            current_task_status: None,
+        };
+
+        let result = run_loop(&mut state).expect_err("should exit after queue drained");
+        assert_eq!(result.code, 0, "expected graceful exit");
+
+        let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+        assert!(
+            hook_contents.contains("hook args_count=1 args=--done"),
+            "expected completed hook"
+        );
+        assert!(
+            !hook_contents.contains("--human"),
+            "requires-human hook should not run when closed within limit, got:\n{hook_contents}"
+        );
+
+        let update_contents = fs::read_to_string(&task_update_log).expect("read task-update log");
+        assert_eq!(
+            update_contents.matches("args=--status in_progress").count(),
+            2,
+            "expected task_update_in_progress to run once per solve loop, got:\n{update_contents}"
+        );
+        assert!(
+            !update_contents.contains("args=--status blocked"),
+            "should not block task when closed within limit, got:\n{update_contents}"
+        );
+    }
+
+    #[test]
+    fn review_loop_limit_exhaustion_marks_blocked_and_requires_human() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        reset_test_env();
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("trudger.log");
+        let task_update_log = temp.path().join("task-update.log");
+        let hook_log = temp.path().join("hook.log");
+
+        let next_task_queue = temp.path().join("next-task-queue.txt");
+        fs::write(&next_task_queue, "tr-1\n\n").expect("write next task queue");
+        let status_queue = temp.path().join("status-queue.txt");
+        fs::write(&status_queue, "ready\nopen\nopen\n").expect("write status queue");
+
+        let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = env::var("PATH").unwrap_or_default();
+        env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        env::set_var("NEXT_TASK_OUTPUT_QUEUE", &next_task_queue);
+        env::set_var("TASK_STATUS_QUEUE", &status_queue);
+        env::set_var("TASK_SHOW_OUTPUT", "SHOW_PAYLOAD");
+        env::set_var("TASK_UPDATE_LOG", &task_update_log);
+        env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+        let config = Config {
+            agent_command: "codex --yolo exec --default".to_string(),
+            agent_review_command: "codex --yolo exec --review \"$@\"".to_string(),
+            commands: Commands {
+                next_task: Some("next-task".to_string()),
+                task_show: "task-show \"$@\"".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update \"$@\"".to_string(),
+                reset_task: "reset-task \"$@\"".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "hook --done".to_string(),
+                on_requires_human: "hook --human".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 2,
+            log_path: log_path.display().to_string(),
+        };
+
+        let mut state = RuntimeState {
+            config,
+            config_path: temp.path().join("trudger.yml"),
+            prompt_trudge: "Task context".to_string(),
+            prompt_review: "Review context".to_string(),
+            logger: Logger::new(Some(log_path)),
+            tmux: TmuxState {
+                enabled: false,
+                base_name: String::new(),
+                original_title: String::new(),
+            },
+            interrupt_flag: Arc::new(AtomicBool::new(false)),
+            manual_tasks: Vec::new(),
+            completed_tasks: Vec::new(),
+            needs_human_tasks: Vec::new(),
+            current_task_id: None,
+            current_task_show: None,
+            current_task_status: None,
+        };
+
+        let result = run_loop(&mut state).expect_err("should exit after queue drained");
+        assert_eq!(result.code, 0, "expected graceful exit");
+        assert_eq!(state.needs_human_tasks, vec!["tr-1"]);
+        assert!(state.completed_tasks.is_empty());
+
+        let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+        assert!(
+            hook_contents.contains("hook args_count=1 args=--human"),
+            "expected requires-human hook after exhaustion, got:\n{hook_contents}"
+        );
+        assert!(
+            hook_contents.contains("env TRUDGER_TASK_STATUS=blocked"),
+            "expected hook to see blocked status after exhaustion, got:\n{hook_contents}"
+        );
+        assert!(
+            !hook_contents.contains("--done"),
+            "completed hook should not run after exhaustion, got:\n{hook_contents}"
+        );
+
+        let update_contents = fs::read_to_string(&task_update_log).expect("read task-update log");
+        assert_eq!(
+            update_contents.matches("args=--status in_progress").count(),
+            2,
+            "expected task_update_in_progress to run once per solve loop, got:\n{update_contents}"
+        );
+        assert!(
+            update_contents.contains("args=--status blocked"),
+            "expected task to be marked blocked after exhaustion, got:\n{update_contents}"
         );
     }
 

@@ -797,35 +797,39 @@ while true; do
     update_tmux_name "$current_phase" "$task_id"
     log_transition "state=SOLVING task=${task_id} loop=${review_loops}"
 
-  run_task_command "$task_update_in_progress_command" "$task_id" --status in_progress
-  run_task_show "$task_id" --json
-  if ! run_agent_command "$agent_command" "agent_solve" "$prompt_trudge_content" ""; then
-    update_tmux_name "ERROR" "$task_id"
-    log_transition "solve_failed task=${task_id}"
-    printf 'Agent solve failed for task %s.\n' "$task_id" >&2
-    quit "solve_failed:${task_id}" 1
-  fi
-  current_phase="REVIEWING"
-  update_tmux_name "$current_phase" "$task_id"
-  log_transition "state=REVIEWING task=${task_id} loop=${review_loops}"
-  run_task_show "$task_id" --json
-  if ! run_agent_command "$agent_review_command" "agent_review" "" "$prompt_review_content" "${review_args[@]}"; then
-    update_tmux_name "ERROR" "$task_id"
-    log_transition "review_failed task=${task_id}"
-    printf 'Agent review failed for task %s.\n' "$task_id" >&2
-    quit "review_failed:${task_id}" 1
-  fi
+    run_task_command "$task_update_in_progress_command" "$task_id" --status in_progress
+    run_task_show "$task_id" --json
+    solve_args=()
+    if ((review_loops > 0)); then
+      solve_args=("${review_args[@]}")
+    fi
+    if ! run_agent_command "$agent_command" "agent_solve" "$prompt_trudge_content" "" "${solve_args[@]}"; then
+      update_tmux_name "ERROR" "$task_id"
+      log_transition "solve_failed task=${task_id}"
+      printf 'Agent solve failed for task %s.\n' "$task_id" >&2
+      quit "solve_failed:${task_id}" 1
+    fi
+    current_phase="REVIEWING"
+    update_tmux_name "$current_phase" "$task_id"
+    log_transition "state=REVIEWING task=${task_id} loop=${review_loops}"
+    run_task_show "$task_id" --json
+    if ! run_agent_command "$agent_review_command" "agent_review" "" "$prompt_review_content" "${review_args[@]}"; then
+      update_tmux_name "ERROR" "$task_id"
+      log_transition "review_failed task=${task_id}"
+      printf 'Agent review failed for task %s.\n' "$task_id" >&2
+      quit "review_failed:${task_id}" 1
+    fi
 
-  task_status "$task_id"
-  status="$current_task_status"
-  log_transition "review_state task=${task_id} status=${status:-unknown}"
+    task_status "$task_id"
+    status="$current_task_status"
+    log_transition "review_state task=${task_id} status=${status:-unknown}"
 
-  if [[ -z "$status" ]]; then
-    update_tmux_name "ERROR" "$task_id"
-    log_transition "review_state_missing task=${task_id}"
-    printf 'Task %s missing status after review.\n' "$task_id" >&2
-    quit "task_missing_status_after_review:${task_id}" 1
-  fi
+    if [[ -z "$status" ]]; then
+      update_tmux_name "ERROR" "$task_id"
+      log_transition "review_state_missing task=${task_id}"
+      printf 'Task %s missing status after review.\n' "$task_id" >&2
+      quit "task_missing_status_after_review:${task_id}" 1
+    fi
 
     if [[ "$status" == "closed" ]]; then
       completed_tasks+=("$task_id")
@@ -834,6 +838,22 @@ while true; do
       break
     fi
 
+    if [[ "$status" == "blocked" ]]; then
+      needs_human_tasks+=("$task_id")
+      log_transition "needs_human task=${task_id}"
+      run_hook "$hook_on_requires_human" "$task_id" "on_requires_human"
+      break
+    fi
+
+    review_loops=$((review_loops + 1))
+    if ((review_loops < review_loop_limit)); then
+      log_transition "review_loop_retry task=${task_id} loop=${review_loops} limit=${review_loop_limit}"
+      continue
+    fi
+
+    log_transition "review_loop_exhausted task=${task_id} loops=${review_loops} limit=${review_loop_limit}"
+    run_task_command "$task_update_in_progress_command" "$task_id" --status blocked
+    set_task_status_state "blocked"
     needs_human_tasks+=("$task_id")
     log_transition "needs_human task=${task_id}"
     run_hook "$hook_on_requires_human" "$task_id" "on_requires_human"

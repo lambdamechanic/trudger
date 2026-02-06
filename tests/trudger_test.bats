@@ -866,6 +866,102 @@ EOF
   [ "$status" -ne 0 ]
 }
 
+@test "review_loop_limit retries solve/review until closed" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/review-loop-retry"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  BASE_REVIEW_LOOP_LIMIT="2" config_path="$(write_base_config "$temp_dir")"
+
+  local codex_log="${temp_dir}/codex.log"
+  local task_update_log="${temp_dir}/task-update.log"
+  local hook_log="${temp_dir}/hook.log"
+
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
+  printf '%s\n' 'tr-11' '' > "$next_task_queue"
+  printf '%s\n' \
+    'SHOW_PAYLOAD' \
+    'SHOW_PAYLOAD' \
+    'SHOW_PAYLOAD' \
+    'SHOW_PAYLOAD' \
+    > "$show_queue"
+  printf '%s\n' 'ready' 'open' 'closed' > "$status_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
+    TASK_UPDATE_LOG="$task_update_log" \
+    HOOK_MOCK_LOG="$hook_log" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "hook args_count=1 args=--done" "$hook_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "task-update args_count=2 args=--status in_progress" "$task_update_log"
+  [ "$status" -eq 0 ]
+  run awk '
+    /task-update args_count=2 args=--status in_progress/ { count++ }
+    END { if (count != 2) exit 1 }
+  ' "$task_update_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "args=--status blocked" "$task_update_log"
+  [ "$status" -ne 0 ]
+  run grep -Fq -- "args=--needs-human" "$hook_log"
+  [ "$status" -ne 0 ]
+}
+
+@test "review_loop_limit exhaustion marks blocked and requires-human" {
+  local temp_dir
+  temp_dir="${BATS_TEST_TMPDIR}/review-loop-exhausted"
+  mkdir -p "$temp_dir"
+  create_prompts "$temp_dir"
+  BASE_REVIEW_LOOP_LIMIT="2" config_path="$(write_base_config "$temp_dir")"
+
+  local codex_log="${temp_dir}/codex.log"
+  local task_update_log="${temp_dir}/task-update.log"
+  local hook_log="${temp_dir}/hook.log"
+
+  local next_task_queue="${temp_dir}/next-task.queue"
+  local show_queue="${temp_dir}/show.queue"
+  local status_queue="${temp_dir}/status.queue"
+  printf '%s\n' 'tr-12' '' > "$next_task_queue"
+  printf '%s\n' \
+    'SHOW_PAYLOAD' \
+    'SHOW_PAYLOAD' \
+    'SHOW_PAYLOAD' \
+    'SHOW_PAYLOAD' \
+    > "$show_queue"
+  printf '%s\n' 'ready' 'open' 'open' > "$status_queue"
+
+  HOME="$temp_dir" \
+    NEXT_TASK_OUTPUT_QUEUE="$next_task_queue" \
+    TASK_SHOW_QUEUE="$show_queue" \
+    TASK_STATUS_QUEUE="$status_queue" \
+    TASK_UPDATE_LOG="$task_update_log" \
+    HOOK_MOCK_LOG="$hook_log" \
+    CODEX_MOCK_LOG="$codex_log" \
+    run_trudger -c "$config_path"
+
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "hook args_count=1 args=--needs-human" "$hook_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "env TRUDGER_TASK_STATUS=blocked" "$hook_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "task-update args_count=2 args=--status blocked" "$task_update_log"
+  [ "$status" -eq 0 ]
+  run awk '
+    /task-update args_count=2 args=--status in_progress/ { count++ }
+    END { if (count != 2) exit 1 }
+  ' "$task_update_log"
+  [ "$status" -eq 0 ]
+  run grep -Fq -- "args=--done" "$hook_log"
+  [ "$status" -ne 0 ]
+}
+
 @test "task_show preserves special characters" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/task-show-escape"
@@ -1264,9 +1360,9 @@ EOF
   printf '%s\n' '[{"id":"tr-2"}]' '[]' > "$ready_queue"
   printf '%s\n' \
     '[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
-    '[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
-    '[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
-    '[{"id":"tr-2","status":"open","labels":["trudgeable","requires-human"]}]' \
+    '[{"id":"tr-2","status":"blocked","labels":["trudgeable","requires-human"]}]' \
+    '[{"id":"tr-2","status":"blocked","labels":["trudgeable","requires-human"]}]' \
+    '[{"id":"tr-2","status":"blocked","labels":["trudgeable","requires-human"]}]' \
     > "$show_queue"
 
   HOME="$temp_dir" \

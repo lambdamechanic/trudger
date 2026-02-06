@@ -73,7 +73,7 @@ commands:
   next_task: 'task_id=$(br ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
   task_show: 'br show "$TRUDGER_TASK_ID"'
   task_status: 'br show "$TRUDGER_TASK_ID" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
-  task_update_in_progress: 'br update "$TRUDGER_TASK_ID" --status in_progress'
+  task_update_in_progress: 'br update "$TRUDGER_TASK_ID" "$@"'
   reset_task: 'br update "$TRUDGER_TASK_ID" --status open'
 review_loop_limit: 5
 log_path: "./.trudger.log"
@@ -98,7 +98,7 @@ Notes:
 - `commands.task_update_in_progress` runs in `bash -lc`; output is ignored.
 - `hooks.on_completed` and `hooks.on_requires_human` are required; label updates must happen in hooks if you want them.
 - Commands and hooks receive task context via environment variables instead of positional arguments.
-- Trudger may append extra arguments to some commands (for example `commands.task_show` receives `--json` and `commands.task_update_in_progress` receives `--status in_progress`); include `$@` in the command string if you need them, but task id is always provided via `TRUDGER_TASK_ID`.
+- Trudger may append extra arguments to some commands (for example `commands.task_show` receives `--json` and `commands.task_update_in_progress` receives `--status in_progress` or `--status blocked`); include `$@` in the command string if you need them, but task id is always provided via `TRUDGER_TASK_ID`.
 - Environment variables available to commands/hooks include `TRUDGER_TASK_ID` (set when a task is selected), `TRUDGER_TASK_SHOW` (set after `commands.task_show`), `TRUDGER_TASK_STATUS` (set after `commands.task_status`), `TRUDGER_CONFIG_PATH` (always set), `TRUDGER_PROMPT` (solve prompt only; unset during review), and `TRUDGER_REVIEW_PROMPT` (review prompt only; unset during solve).
 
 ## Install
