@@ -7,7 +7,9 @@ use std::path::Path;
 use crate::config::Config;
 use crate::logger::Logger;
 use crate::run_loop::{is_ready_status, quit, validate_config, Quit};
-use crate::shell::{run_shell_command_capture, run_shell_command_status, CommandEnv};
+use crate::shell::{
+    run_shell_command_capture, run_shell_command_status, CommandEnv, CommandResult,
+};
 
 #[derive(Debug, serde::Deserialize)]
 struct DoctorIssueSnapshot {
@@ -49,42 +51,106 @@ fn load_doctor_issue_statuses(path: &Path) -> Result<BTreeMap<String, String>, S
     Ok(latest)
 }
 
-fn build_doctor_env(
-    config_path: &Path,
-    scratch_path: &str,
-    cwd: &Path,
-    task_id: Option<&str>,
-    task_show: Option<&str>,
-    task_status: Option<&str>,
-) -> CommandEnv {
-    CommandEnv {
-        cwd: Some(cwd.to_path_buf()),
-        config_path: config_path.display().to_string(),
-        scratch_dir: Some(scratch_path.to_string()),
-        task_id: task_id.map(|value| value.to_string()),
-        task_show: task_show.map(|value| value.to_string()),
-        task_status: task_status.map(|value| value.to_string()),
-        prompt: None,
-        review_prompt: None,
-        completed: None,
-        needs_human: None,
+#[derive(Clone, Copy, Debug)]
+struct DoctorTaskEnv<'a> {
+    task_id: Option<&'a str>,
+    task_show: Option<&'a str>,
+    task_status: Option<&'a str>,
+}
+
+impl<'a> DoctorTaskEnv<'a> {
+    fn none() -> Self {
+        Self {
+            task_id: None,
+            task_show: None,
+            task_status: None,
+        }
+    }
+
+    fn for_task(task_id: &'a str) -> Self {
+        Self {
+            task_id: Some(task_id),
+            task_show: None,
+            task_status: None,
+        }
     }
 }
 
-fn doctor_run_next_task(
-    config: &Config,
-    config_path: &Path,
-    scratch_dir: &Path,
-    scratch_path: &str,
-    logger: &Logger,
-) -> Result<(), String> {
-    let next_task = config.commands.next_task.as_deref().unwrap_or("").trim();
+#[derive(Debug)]
+struct DoctorHookTask<'a> {
+    id: &'a str,
+    show: &'a str,
+    status: &'a str,
+}
+
+#[derive(Debug)]
+struct DoctorCtx<'a> {
+    config: &'a Config,
+    config_path: &'a Path,
+    scratch_dir: &'a Path,
+    scratch_path: &'a str,
+    logger: &'a Logger,
+}
+
+impl DoctorCtx<'_> {
+    fn env(&self, task: DoctorTaskEnv<'_>) -> CommandEnv {
+        CommandEnv {
+            cwd: Some(self.scratch_dir.to_path_buf()),
+            config_path: self.config_path.display().to_string(),
+            scratch_dir: Some(self.scratch_path.to_string()),
+            task_id: task.task_id.map(|value| value.to_string()),
+            task_show: task.task_show.map(|value| value.to_string()),
+            task_status: task.task_status.map(|value| value.to_string()),
+            prompt: None,
+            review_prompt: None,
+            completed: None,
+            needs_human: None,
+        }
+    }
+
+    fn run_capture(
+        &self,
+        command: &str,
+        log_label: &str,
+        task_token: &str,
+        args: &[String],
+        task: DoctorTaskEnv<'_>,
+    ) -> Result<CommandResult, String> {
+        let env = self.env(task);
+        run_shell_command_capture(command, log_label, task_token, args, &env, self.logger)
+    }
+
+    fn run_status(
+        &self,
+        command: &str,
+        log_label: &str,
+        task_token: &str,
+        args: &[String],
+        task: DoctorTaskEnv<'_>,
+    ) -> Result<i32, String> {
+        let env = self.env(task);
+        run_shell_command_status(command, log_label, task_token, args, &env, self.logger)
+    }
+}
+
+fn doctor_run_next_task(ctx: &DoctorCtx<'_>) -> Result<(), String> {
+    let next_task = ctx
+        .config
+        .commands
+        .next_task
+        .as_deref()
+        .unwrap_or("")
+        .trim();
     if next_task.is_empty() {
         return Err("commands.next_task must not be empty.".to_string());
     }
-    let env = build_doctor_env(config_path, scratch_path, scratch_dir, None, None, None);
-    let output =
-        run_shell_command_capture(next_task, "doctor-next-task", "none", &[], &env, logger)?;
+    let output = ctx.run_capture(
+        next_task,
+        "doctor-next-task",
+        "none",
+        &[],
+        DoctorTaskEnv::none(),
+    )?;
     match output.exit_code {
         0 => {
             // Empty output is valid ("no tasks") in Trudger semantics.
@@ -100,29 +166,13 @@ fn doctor_run_next_task(
     Ok(())
 }
 
-fn doctor_run_task_show(
-    config: &Config,
-    config_path: &Path,
-    scratch_dir: &Path,
-    scratch_path: &str,
-    task_id: &str,
-    logger: &Logger,
-) -> Result<String, String> {
-    let env = build_doctor_env(
-        config_path,
-        scratch_path,
-        scratch_dir,
-        Some(task_id),
-        None,
-        None,
-    );
-    let output = run_shell_command_capture(
-        &config.commands.task_show,
+fn doctor_run_task_show(ctx: &DoctorCtx<'_>, task_id: &str) -> Result<String, String> {
+    let output = ctx.run_capture(
+        &ctx.config.commands.task_show,
         "doctor-task-show",
         task_id,
         &[],
-        &env,
-        logger,
+        DoctorTaskEnv::for_task(task_id),
     )?;
     if output.exit_code != 0 {
         return Err(format!(
@@ -133,29 +183,13 @@ fn doctor_run_task_show(
     Ok(output.stdout)
 }
 
-fn doctor_run_task_status(
-    config: &Config,
-    config_path: &Path,
-    scratch_dir: &Path,
-    scratch_path: &str,
-    task_id: &str,
-    logger: &Logger,
-) -> Result<String, String> {
-    let env = build_doctor_env(
-        config_path,
-        scratch_path,
-        scratch_dir,
-        Some(task_id),
-        None,
-        None,
-    );
-    let output = run_shell_command_capture(
-        &config.commands.task_status,
+fn doctor_run_task_status(ctx: &DoctorCtx<'_>, task_id: &str) -> Result<String, String> {
+    let output = ctx.run_capture(
+        &ctx.config.commands.task_status,
         "doctor-task-status",
         task_id,
         &[],
-        &env,
-        logger,
+        DoctorTaskEnv::for_task(task_id),
     )?;
     if output.exit_code != 0 {
         return Err(format!(
@@ -176,30 +210,17 @@ fn doctor_run_task_status(
 }
 
 fn doctor_run_task_update_status(
-    config: &Config,
-    config_path: &Path,
-    scratch_dir: &Path,
-    scratch_path: &str,
+    ctx: &DoctorCtx<'_>,
     task_id: &str,
     status: &str,
-    logger: &Logger,
 ) -> Result<(), String> {
-    let env = build_doctor_env(
-        config_path,
-        scratch_path,
-        scratch_dir,
-        Some(task_id),
-        None,
-        None,
-    );
     let args = vec!["--status".to_string(), status.to_string()];
-    let exit = run_shell_command_status(
-        &config.commands.task_update_in_progress,
+    let exit = ctx.run_status(
+        &ctx.config.commands.task_update_in_progress,
         "doctor-task-update",
         task_id,
         &args,
-        &env,
-        logger,
+        DoctorTaskEnv::for_task(task_id),
     )?;
     if exit != 0 {
         return Err(format!(
@@ -210,29 +231,13 @@ fn doctor_run_task_update_status(
     Ok(())
 }
 
-fn doctor_run_reset_task(
-    config: &Config,
-    config_path: &Path,
-    scratch_dir: &Path,
-    scratch_path: &str,
-    task_id: &str,
-    logger: &Logger,
-) -> Result<(), String> {
-    let env = build_doctor_env(
-        config_path,
-        scratch_path,
-        scratch_dir,
-        Some(task_id),
-        None,
-        None,
-    );
-    let exit = run_shell_command_status(
-        &config.commands.reset_task,
+fn doctor_run_reset_task(ctx: &DoctorCtx<'_>, task_id: &str) -> Result<(), String> {
+    let exit = ctx.run_status(
+        &ctx.config.commands.reset_task,
         "doctor-reset-task",
         task_id,
         &[],
-        &env,
-        logger,
+        DoctorTaskEnv::for_task(task_id),
     )?;
     if exit != 0 {
         return Err(format!(
@@ -243,41 +248,26 @@ fn doctor_run_reset_task(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn doctor_run_hook(
     hook_command: &str,
-    config_path: &Path,
-    scratch_dir: &Path,
-    scratch_path: &str,
-    task_id: &str,
-    task_show: &str,
-    task_status: &str,
+    ctx: &DoctorCtx<'_>,
     hook_name: &str,
-    logger: &Logger,
+    task: DoctorHookTask<'_>,
 ) -> Result<(), String> {
-    let env = build_doctor_env(
-        config_path,
-        scratch_path,
-        scratch_dir,
-        Some(task_id),
-        Some(task_show),
-        Some(task_status),
-    );
-    let exit = run_shell_command_status(hook_command, hook_name, task_id, &[], &env, logger)?;
+    let env = DoctorTaskEnv {
+        task_id: Some(task.id),
+        task_show: Some(task.show),
+        task_status: Some(task.status),
+    };
+    let exit = ctx.run_status(hook_command, hook_name, task.id, &[], env)?;
     if exit != 0 {
         return Err(format!("hook {} failed with exit code {}", hook_name, exit));
     }
     Ok(())
 }
 
-fn run_doctor_checks(
-    config: &Config,
-    config_path: &Path,
-    scratch_dir: &Path,
-    scratch_path: &str,
-    logger: &Logger,
-) -> Result<(), String> {
-    let beads_dir = scratch_dir.join(".beads");
+fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
+    let beads_dir = ctx.scratch_dir.join(".beads");
     let issues_path = beads_dir.join("issues.jsonl");
     if !issues_path.is_file() {
         return Err(format!(
@@ -286,7 +276,7 @@ fn run_doctor_checks(
         ));
     }
 
-    doctor_run_next_task(config, config_path, scratch_dir, scratch_path, logger)?;
+    doctor_run_next_task(ctx)?;
 
     let statuses = load_doctor_issue_statuses(&issues_path)?;
     let any_task_id = statuses
@@ -314,22 +304,8 @@ fn run_doctor_checks(
     });
 
     // Verify reset -> ready/open parsing.
-    doctor_run_reset_task(
-        config,
-        config_path,
-        scratch_dir,
-        scratch_path,
-        &task_id,
-        logger,
-    )?;
-    let status = doctor_run_task_status(
-        config,
-        config_path,
-        scratch_dir,
-        scratch_path,
-        &task_id,
-        logger,
-    )?;
+    doctor_run_reset_task(ctx, &task_id)?;
+    let status = doctor_run_task_status(ctx, &task_id)?;
     if !is_ready_status(&status) {
         return Err(format!(
             "doctor expected commands.task_status to return ready/open after reset_task, got '{}'.",
@@ -338,33 +314,11 @@ fn run_doctor_checks(
     }
 
     // Verify show runs successfully (content is prompt-only in run mode).
-    let show = doctor_run_task_show(
-        config,
-        config_path,
-        scratch_dir,
-        scratch_path,
-        &task_id,
-        logger,
-    )?;
+    let show = doctor_run_task_show(ctx, &task_id)?;
 
     // Verify update -> in_progress parsing.
-    doctor_run_task_update_status(
-        config,
-        config_path,
-        scratch_dir,
-        scratch_path,
-        &task_id,
-        "in_progress",
-        logger,
-    )?;
-    let status = doctor_run_task_status(
-        config,
-        config_path,
-        scratch_dir,
-        scratch_path,
-        &task_id,
-        logger,
-    )?;
+    doctor_run_task_update_status(ctx, &task_id, "in_progress")?;
+    let status = doctor_run_task_status(ctx, &task_id)?;
     if status != "in_progress" {
         return Err(format!(
             "doctor expected commands.task_status to return 'in_progress' after task_update_in_progress, got '{}'.",
@@ -373,22 +327,8 @@ fn run_doctor_checks(
     }
 
     // Verify reset works again and yields ready/open.
-    doctor_run_reset_task(
-        config,
-        config_path,
-        scratch_dir,
-        scratch_path,
-        &task_id,
-        logger,
-    )?;
-    let status = doctor_run_task_status(
-        config,
-        config_path,
-        scratch_dir,
-        scratch_path,
-        &task_id,
-        logger,
-    )?;
+    doctor_run_reset_task(ctx, &task_id)?;
+    let status = doctor_run_task_status(ctx, &task_id)?;
     if !is_ready_status(&status) {
         return Err(format!(
             "doctor expected commands.task_status to return ready/open after reset_task, got '{}'.",
@@ -398,39 +338,30 @@ fn run_doctor_checks(
 
     // Verify completion/escalation hooks are runnable in the scratch DB environment.
     doctor_run_hook(
-        &config.hooks.on_completed,
-        config_path,
-        scratch_dir,
-        scratch_path,
-        &task_id,
-        &show,
-        &status,
+        &ctx.config.hooks.on_completed,
+        ctx,
         "doctor-hook-on-completed",
-        logger,
+        DoctorHookTask {
+            id: &task_id,
+            show: &show,
+            status: &status,
+        },
     )?;
     doctor_run_hook(
-        &config.hooks.on_requires_human,
-        config_path,
-        scratch_dir,
-        scratch_path,
-        &task_id,
-        &show,
-        &status,
+        &ctx.config.hooks.on_requires_human,
+        ctx,
         "doctor-hook-on-requires-human",
-        logger,
+        DoctorHookTask {
+            id: &task_id,
+            show: &show,
+            status: &status,
+        },
     )?;
 
     // Verify closed parsing.
     match closed_task_id {
         Some(closed_task_id) => {
-            let closed_status = doctor_run_task_status(
-                config,
-                config_path,
-                scratch_dir,
-                scratch_path,
-                &closed_task_id,
-                logger,
-            )?;
+            let closed_status = doctor_run_task_status(ctx, &closed_task_id)?;
             if closed_status != "closed" {
                 return Err(format!(
                     "doctor expected commands.task_status to return 'closed' for task {}, got '{}'.",
@@ -439,23 +370,8 @@ fn run_doctor_checks(
             }
         }
         None => {
-            doctor_run_task_update_status(
-                config,
-                config_path,
-                scratch_dir,
-                scratch_path,
-                &task_id,
-                "closed",
-                logger,
-            )?;
-            let closed_status = doctor_run_task_status(
-                config,
-                config_path,
-                scratch_dir,
-                scratch_path,
-                &task_id,
-                logger,
-            )?;
+            doctor_run_task_update_status(ctx, &task_id, "closed")?;
+            let closed_status = doctor_run_task_status(ctx, &task_id)?;
             if closed_status != "closed" {
                 return Err(format!(
                     "doctor expected commands.task_status to return 'closed' after setting status closed, got '{}'.",
@@ -525,7 +441,16 @@ pub(crate) fn run_doctor_mode(
     };
 
     let doctor_result = match hook_result {
-        Ok(()) => run_doctor_checks(config, config_path, &scratch_dir, &scratch_path, logger),
+        Ok(()) => {
+            let ctx = DoctorCtx {
+                config,
+                config_path,
+                scratch_dir: &scratch_dir,
+                scratch_path: &scratch_path,
+                logger,
+            };
+            run_doctor_checks(&ctx)
+        }
         Err(err) => Err(err),
     };
 
@@ -587,6 +512,22 @@ mod tests {
         fs::create_dir_all(&beads_dir).expect("create beads dir");
         fs::write(beads_dir.join("issues.jsonl"), contents).expect("write issues.jsonl");
         scratch
+    }
+
+    fn doctor_ctx<'a>(
+        config: &'a Config,
+        config_path: &'a Path,
+        scratch: &'a TempDir,
+        scratch_path: &'a str,
+        logger: &'a Logger,
+    ) -> DoctorCtx<'a> {
+        DoctorCtx {
+            config,
+            config_path,
+            scratch_dir: scratch.path(),
+            scratch_path,
+            logger,
+        }
     }
 
     #[test]
@@ -652,14 +593,16 @@ mod tests {
         let mut config = base_config();
         config.commands.next_task = None;
         let logger = Logger::new(None);
-        let err = doctor_run_next_task(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected empty next_task error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_next_task(&ctx).expect_err("expected empty next_task error");
         assert!(err.contains("commands.next_task must not be empty"));
     }
 
@@ -673,14 +616,16 @@ mod tests {
         let mut config = base_config();
         config.commands.next_task = Some("exit 1".to_string());
         let logger = Logger::new(None);
-        doctor_run_next_task(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect("exit 1 should be ok");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        doctor_run_next_task(&ctx).expect("exit 1 should be ok");
     }
 
     #[test]
@@ -693,14 +638,16 @@ mod tests {
         let mut config = base_config();
         config.commands.next_task = Some("exit 2".to_string());
         let logger = Logger::new(None);
-        let err = doctor_run_next_task(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected exit code error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_next_task(&ctx).expect_err("expected exit code error");
         assert!(err.contains("exit code 2"));
     }
 
@@ -717,14 +664,16 @@ mod tests {
         let logger = Logger::new(None);
 
         env::set_var("PATH", temp.path());
-        let err = doctor_run_next_task(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected spawn error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_next_task(&ctx).expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -740,15 +689,16 @@ mod tests {
         let mut config = base_config();
         config.commands.task_show = "exit 2".to_string();
         let logger = Logger::new(None);
-        let err = doctor_run_task_show(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            &logger,
-        )
-        .expect_err("expected task_show error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_task_show(&ctx, "tr-1").expect_err("expected task_show error");
         assert!(err.contains("commands.task_show failed"));
     }
 
@@ -765,15 +715,16 @@ mod tests {
         let logger = Logger::new(None);
 
         env::set_var("PATH", temp.path());
-        let err = doctor_run_task_show(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            &logger,
-        )
-        .expect_err("expected spawn error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_task_show(&ctx, "tr-1").expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -789,15 +740,16 @@ mod tests {
         let mut config = base_config();
         config.commands.task_status = "exit 2".to_string();
         let logger = Logger::new(None);
-        let err = doctor_run_task_status(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            &logger,
-        )
-        .expect_err("expected task_status error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_task_status(&ctx, "tr-1").expect_err("expected task_status error");
         assert!(err.contains("commands.task_status failed"));
     }
 
@@ -811,15 +763,16 @@ mod tests {
         let mut config = base_config();
         config.commands.task_status = "true".to_string();
         let logger = Logger::new(None);
-        let err = doctor_run_task_status(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            &logger,
-        )
-        .expect_err("expected empty status error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_task_status(&ctx, "tr-1").expect_err("expected empty status error");
         assert!(err.contains("returned an empty status"));
     }
 
@@ -836,15 +789,16 @@ mod tests {
         let logger = Logger::new(None);
 
         env::set_var("PATH", temp.path());
-        let err = doctor_run_task_status(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            &logger,
-        )
-        .expect_err("expected spawn error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_task_status(&ctx, "tr-1").expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -860,16 +814,17 @@ mod tests {
         let mut config = base_config();
         config.commands.task_update_in_progress = "exit 2".to_string();
         let logger = Logger::new(None);
-        let err = doctor_run_task_update_status(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            "closed",
-            &logger,
-        )
-        .expect_err("expected update error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_task_update_status(&ctx, "tr-1", "closed")
+            .expect_err("expected update error");
         assert!(err.contains("failed to set status"));
     }
 
@@ -886,16 +841,17 @@ mod tests {
         let logger = Logger::new(None);
 
         env::set_var("PATH", temp.path());
-        let err = doctor_run_task_update_status(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            "closed",
-            &logger,
-        )
-        .expect_err("expected spawn error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_task_update_status(&ctx, "tr-1", "closed")
+            .expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -911,15 +867,16 @@ mod tests {
         let mut config = base_config();
         config.commands.reset_task = "exit 2".to_string();
         let logger = Logger::new(None);
-        let err = doctor_run_reset_task(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            &logger,
-        )
-        .expect_err("expected reset error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_reset_task(&ctx, "tr-1").expect_err("expected reset error");
         assert!(err.contains("commands.reset_task failed"));
     }
 
@@ -936,15 +893,16 @@ mod tests {
         let logger = Logger::new(None);
 
         env::set_var("PATH", temp.path());
-        let err = doctor_run_reset_task(
-            &config,
-            &temp.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            &logger,
-        )
-        .expect_err("expected spawn error");
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        let err = doctor_run_reset_task(&ctx, "tr-1").expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -956,17 +914,26 @@ mod tests {
         crate::unit_tests::reset_test_env();
 
         let scratch = TempDir::new().expect("scratch");
+        let scratch_path = scratch.path().display().to_string();
+        let config = base_config();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
         let err = doctor_run_hook(
             "exit 2",
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            "show",
-            "open",
+            &ctx,
             "doctor-hook",
-            &logger,
+            DoctorHookTask {
+                id: "tr-1",
+                show: "show",
+                status: "open",
+            },
         )
         .expect_err("expected hook error");
         assert!(err.contains("hook doctor-hook failed"));
@@ -980,19 +947,28 @@ mod tests {
 
         let temp = TempDir::new().expect("temp dir");
         let scratch = TempDir::new().expect("scratch");
+        let scratch_path = scratch.path().display().to_string();
+        let config = base_config();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
 
         env::set_var("PATH", temp.path());
         let err = doctor_run_hook(
             "hook",
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            "tr-1",
-            "show",
-            "open",
+            &ctx,
             "doctor-hook",
-            &logger,
+            DoctorHookTask {
+                id: "tr-1",
+                show: "show",
+                status: "open",
+            },
         )
         .expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
@@ -1029,15 +1005,11 @@ mod tests {
         let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"open\"}\n");
         let mut config = base_config();
         config.commands.next_task = None;
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected next_task error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected next_task error");
         assert!(err.contains("commands.next_task must not be empty"));
     }
 
@@ -1048,15 +1020,11 @@ mod tests {
 
         let scratch = scratch_with_issues("{bad json}\n");
         let config = base_config();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected parse error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected parse error");
         assert!(err.contains("doctor failed to parse issues"));
     }
 
@@ -1067,15 +1035,11 @@ mod tests {
 
         let scratch = scratch_with_issues("\n\n");
         let config = base_config();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected empty db error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected empty db error");
         assert!(err.contains("doctor scratch DB has no issues"));
     }
 
@@ -1087,15 +1051,11 @@ mod tests {
         let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"blocked\"}\n");
         let mut config = base_config();
         config.commands.reset_task = "exit 2".to_string();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected reset_task error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected reset_task error");
         assert!(err.contains("commands.reset_task failed"));
     }
 
@@ -1107,15 +1067,11 @@ mod tests {
         let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"open\"}\n");
         let mut config = base_config();
         config.commands.task_status = "printf 'blocked\\n'".to_string();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected status mismatch error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected status mismatch error");
         assert!(err.contains("expected commands.task_status to return ready/open"));
     }
 
@@ -1127,15 +1083,11 @@ mod tests {
         let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"open\"}\n");
         let mut config = base_config();
         config.commands.task_status = "exit 2".to_string();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected task_status error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected task_status error");
         assert!(err.contains("commands.task_status failed"));
     }
 
@@ -1149,15 +1101,11 @@ mod tests {
         fs::write(&queue_path, "open\nopen\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected in_progress mismatch error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected in_progress mismatch error");
         assert!(err.contains("expected commands.task_status to return 'in_progress'"));
     }
 
@@ -1171,15 +1119,11 @@ mod tests {
         fs::write(&queue_path, "open\nFAIL\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_or_fail_command(&queue_path);
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected task_status error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected task_status error");
         assert!(err.contains("commands.task_status failed"));
     }
 
@@ -1199,15 +1143,11 @@ mod tests {
         config.commands.task_status = status_queue_command(&queue_path);
         config.commands.reset_task =
             format!("if [ -f '{marker_path}' ]; then exit 2; fi; touch '{marker_path}'; exit 0");
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected reset_task error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected reset_task error");
         assert!(err.contains("commands.reset_task failed"));
     }
 
@@ -1221,15 +1161,11 @@ mod tests {
         fs::write(&queue_path, "open\nin_progress\nFAIL\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_or_fail_command(&queue_path);
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected task_status error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected task_status error");
         assert!(err.contains("commands.task_status failed"));
     }
 
@@ -1243,15 +1179,11 @@ mod tests {
         fs::write(&queue_path, "open\nin_progress\nblocked\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected status mismatch error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected status mismatch error");
         assert!(err.contains("expected commands.task_status to return ready/open"));
     }
 
@@ -1263,15 +1195,11 @@ mod tests {
         let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"open\"}\n");
         let mut config = base_config();
         config.commands.reset_task = "exit 2".to_string();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected reset_task error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected reset_task error");
         assert!(err.contains("commands.reset_task failed"));
     }
 
@@ -1284,15 +1212,11 @@ mod tests {
         let mut config = base_config();
         config.commands.task_status = "printf 'open\\n'".to_string();
         config.commands.task_show = "exit 2".to_string();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected task_show error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected task_show error");
         assert!(err.contains("commands.task_show failed"));
     }
 
@@ -1306,15 +1230,11 @@ mod tests {
         config.commands.task_status = "printf 'open\\n'".to_string();
         config.commands.task_show = "printf 'SHOW'".to_string();
         config.commands.task_update_in_progress = "exit 2".to_string();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected update error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected update error");
         assert!(err.contains("task_update_in_progress failed"));
     }
 
@@ -1329,15 +1249,11 @@ mod tests {
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
         config.hooks.on_completed = "exit 2".to_string();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected hook error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected hook error");
         assert!(err.contains("doctor-hook-on-completed"));
     }
 
@@ -1352,15 +1268,11 @@ mod tests {
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
         config.hooks.on_requires_human = "exit 2".to_string();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected hook error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected hook error");
         assert!(err.contains("doctor-hook-on-requires-human"));
     }
 
@@ -1378,15 +1290,11 @@ mod tests {
         fs::write(&queue_path, "open\nin_progress\nopen\nopen\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected closed status mismatch");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected closed status mismatch");
         assert!(err.contains("expected commands.task_status to return 'closed'"));
     }
 
@@ -1400,15 +1308,11 @@ mod tests {
         fs::write(&queue_path, "open\nin_progress\nopen\nopen\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected closed status mismatch");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected closed status mismatch");
         assert!(err.contains("doctor expected commands.task_status to return 'closed'"));
     }
 
@@ -1426,15 +1330,11 @@ mod tests {
         fs::write(&queue_path, "open\nin_progress\nopen\nFAIL\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_or_fail_command(&queue_path);
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected task_status error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected task_status error");
         assert!(err.contains("commands.task_status failed"));
     }
 
@@ -1453,15 +1353,11 @@ mod tests {
         config.commands.task_status = status_queue_command(&queue_path);
         config.commands.task_update_in_progress =
             format!("if [ -f '{marker_path}' ]; then exit 2; fi; touch '{marker_path}'; exit 0");
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected task_update_in_progress error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected task_update_in_progress error");
         assert!(err.contains("failed to set status closed"));
     }
 
@@ -1475,15 +1371,11 @@ mod tests {
         fs::write(&queue_path, "open\nin_progress\nopen\nFAIL\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_or_fail_command(&queue_path);
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        let err = run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect_err("expected task_status error");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected task_status error");
         assert!(err.contains("commands.task_status failed"));
     }
 
@@ -1497,15 +1389,11 @@ mod tests {
         fs::write(&queue_path, "open\nin_progress\nopen\nclosed\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
-        run_doctor_checks(
-            &config,
-            &scratch.path().join("trudger.yml"),
-            scratch.path(),
-            &scratch.path().display().to_string(),
-            &logger,
-        )
-        .expect("expected doctor checks to pass");
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        run_doctor_checks(&ctx).expect("expected doctor checks to pass");
     }
 
     #[test]
