@@ -1264,10 +1264,8 @@ fn doctor_run_next_task(
         run_shell_command_capture(next_task, "doctor-next-task", "none", &[], &env, logger)?;
     match output.exit_code {
         0 => {
-            let task_id = output.stdout.split_whitespace().next().unwrap_or("").to_string();
-            if task_id.is_empty() {
-                return Err("commands.next_task returned an empty task id.".to_string());
-            }
+            // Empty output is valid ("no tasks") in Trudger semantics.
+            let _task_id = output.stdout.split_whitespace().next().unwrap_or("");
         }
         1 => {
             // Exit 1 means "no selectable tasks" in Trudger semantics.
