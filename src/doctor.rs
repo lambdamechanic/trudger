@@ -295,8 +295,11 @@ fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
         })
         .unwrap_or_else(|| any_task_id.clone());
 
+    // If the scratch DB only contains closed tasks, we may end up mutating a closed task
+    // (reset -> open, update -> in_progress, etc.). Don't reuse that same task for the "closed
+    // parsing" verification.
     let closed_task_id = statuses.iter().find_map(|(id, status)| {
-        if status == "closed" {
+        if status == "closed" && id != &task_id {
             Some(id.clone())
         } else {
             None
@@ -528,6 +531,34 @@ mod tests {
             scratch_path,
             logger,
         }
+    }
+
+    #[test]
+    fn run_doctor_checks_succeeds_when_only_closed_issue_exists() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"closed\"}\n");
+        let status_path = scratch.path().join("status.txt");
+        fs::write(&status_path, "closed\n").expect("write status");
+
+        let status_path_str = status_path.display().to_string();
+        let mut config = base_config();
+        config.commands.next_task = Some("exit 1".to_string());
+        config.commands.task_show = "printf 'SHOW'".to_string();
+        config.commands.task_status = format!("cat \"{}\"", status_path_str);
+        config.commands.reset_task = format!("printf 'open\\n' > \"{}\"", status_path_str);
+        config.commands.task_update_in_progress = format!(
+            "if [[ \"$1\" != \"--status\" || -z \"$2\" ]]; then exit 2; fi; printf '%s\\n' \"$2\" > \"{}\"",
+            status_path_str
+        );
+
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
+        let logger = Logger::new(None);
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+
+        run_doctor_checks(&ctx).expect("expected doctor checks to succeed");
     }
 
     #[test]
