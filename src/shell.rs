@@ -77,19 +77,23 @@ pub(crate) struct CommandResult {
     pub(crate) exit_code: i32,
 }
 
-pub(crate) fn run_shell_command_capture(
+#[derive(Clone, Copy, Debug)]
+enum ShellCommandStdioMode {
+    Capture,
+    Inherit,
+}
+
+fn run_shell_command_bash_lc(
     command: &str,
     log_label: &str,
     task_token: &str,
     args: &[String],
     env: &CommandEnv,
     logger: &Logger,
-) -> Result<CommandResult, String> {
+    stdio_mode: ShellCommandStdioMode,
+) -> Result<(i32, Option<String>), String> {
     if command.is_empty() {
-        return Ok(CommandResult {
-            stdout: String::new(),
-            exit_code: 0,
-        });
+        return Ok((0, None));
     }
 
     let args_render = render_args(args);
@@ -107,19 +111,66 @@ pub(crate) fn run_shell_command_capture(
         cmd.arg("--");
         cmd.args(args);
     }
-    env.apply(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|err| format!("Failed to run command '{}': {}", command, err))?;
 
-    let exit_code = output.status.code().unwrap_or(1);
+    match stdio_mode {
+        ShellCommandStdioMode::Capture => {}
+        ShellCommandStdioMode::Inherit => {
+            cmd.stdin(std::process::Stdio::inherit());
+            cmd.stdout(std::process::Stdio::inherit());
+            cmd.stderr(std::process::Stdio::inherit());
+        }
+    }
+
+    env.apply(&mut cmd);
+
+    let (exit_code, stdout) = match stdio_mode {
+        ShellCommandStdioMode::Capture => {
+            let output = cmd
+                .output()
+                .map_err(|err| format!("Failed to run command '{}': {}", command, err))?;
+
+            let exit_code = output.status.code().unwrap_or(1);
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            (exit_code, Some(stdout))
+        }
+        ShellCommandStdioMode::Inherit => {
+            let status = cmd
+                .status()
+                .map_err(|err| format!("Failed to run command '{}': {}", command, err))?;
+
+            let exit_code = status.code().unwrap_or(1);
+            (exit_code, None)
+        }
+    };
+
     logger.log_transition(&format!(
         "cmd exit label={} task={} exit={}",
         log_label, task_token, exit_code
     ));
 
+    Ok((exit_code, stdout))
+}
+
+pub(crate) fn run_shell_command_capture(
+    command: &str,
+    log_label: &str,
+    task_token: &str,
+    args: &[String],
+    env: &CommandEnv,
+    logger: &Logger,
+) -> Result<CommandResult, String> {
+    let (exit_code, stdout) = run_shell_command_bash_lc(
+        command,
+        log_label,
+        task_token,
+        args,
+        env,
+        logger,
+        ShellCommandStdioMode::Capture,
+    )?;
+
     Ok(CommandResult {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stdout: stdout.unwrap_or_default(),
         exit_code,
     })
 }
@@ -132,38 +183,15 @@ pub(crate) fn run_shell_command_status(
     env: &CommandEnv,
     logger: &Logger,
 ) -> Result<i32, String> {
-    if command.is_empty() {
-        return Ok(0);
-    }
-
-    let args_render = render_args(args);
-    logger.log_transition(&format!(
-        "cmd start label={} task={} mode=bash_lc command={} args={}",
+    let (exit_code, _stdout) = run_shell_command_bash_lc(
+        command,
         log_label,
         task_token,
-        sanitize_log_value(command),
-        sanitize_log_value(&args_render)
-    ));
-
-    let mut cmd = Command::new("bash");
-    cmd.arg("-lc").arg(command);
-    if !args.is_empty() {
-        cmd.arg("--");
-        cmd.args(args);
-    }
-    cmd.stdin(std::process::Stdio::inherit());
-    cmd.stdout(std::process::Stdio::inherit());
-    cmd.stderr(std::process::Stdio::inherit());
-    env.apply(&mut cmd);
-    let status = cmd
-        .status()
-        .map_err(|err| format!("Failed to run command '{}': {}", command, err))?;
-
-    let exit_code = status.code().unwrap_or(1);
-    logger.log_transition(&format!(
-        "cmd exit label={} task={} exit={}",
-        log_label, task_token, exit_code
-    ));
+        args,
+        env,
+        logger,
+        ShellCommandStdioMode::Inherit,
+    )?;
 
     Ok(exit_code)
 }
