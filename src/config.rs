@@ -45,12 +45,7 @@ pub fn load_config(path: &Path) -> Result<LoadedConfig, String> {
         .map_err(|err| format!("Failed to parse config {}: {}", path.display(), err))?;
     let mapping = match value {
         Value::Mapping(mapping) => mapping,
-        _ => {
-            return Err(format!(
-                "Config {} must be a YAML mapping",
-                path.display()
-            ))
-        }
+        _ => return Err(format!("Config {} must be a YAML mapping", path.display())),
     };
 
     let warnings = unknown_config_keys(&mapping);
@@ -140,11 +135,7 @@ fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
 
     let hooks = require_mapping(mapping, "hooks", "hooks")?;
     require_non_empty_string(hooks, "on_completed", "hooks.on_completed")?;
-    require_non_empty_string(
-        hooks,
-        "on_requires_human",
-        "hooks.on_requires_human",
-    )?;
+    require_non_empty_string(hooks, "on_requires_human", "hooks.on_requires_human")?;
     validate_optional_non_empty_string(hooks, "on_doctor_setup", "hooks.on_doctor_setup")?;
 
     Ok(())

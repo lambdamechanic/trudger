@@ -5,8 +5,8 @@ use shell_escape::unix::escape;
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::io::Write;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -112,12 +112,11 @@ fn sanitize_log_value(value: &str) -> String {
 fn render_prompt(path: &Path) -> Result<String, String> {
     let content = fs::read_to_string(path)
         .map_err(|err| format!("Failed to read prompt {}: {}", path.display(), err))?;
-    let mut lines = content.lines();
     let mut out = String::new();
     let mut in_frontmatter = false;
     let mut first_line = true;
 
-    while let Some(line) = lines.next() {
+    for line in content.lines() {
         if first_line && line == "---" {
             in_frontmatter = true;
             first_line = false;
@@ -157,7 +156,7 @@ fn render_args(args: &[String]) -> String {
 
     let mut rendered = String::new();
     for arg in args {
-        rendered.push_str(&escape(arg.into()).to_string());
+        rendered.push_str(escape(arg.into()).as_ref());
         rendered.push(' ');
     }
     rendered
@@ -381,7 +380,13 @@ impl TmuxState {
             .status();
     }
 
-    fn update_name(&self, phase: &str, task_id: &str, completed: &[String], needs_human: &[String]) {
+    fn update_name(
+        &self,
+        phase: &str,
+        task_id: &str,
+        completed: &[String],
+        needs_human: &[String],
+    ) {
         if !self.enabled {
             return;
         }
@@ -431,23 +436,20 @@ fn default_tmux_base_name() -> String {
         })
         .filter(|value| !value.is_empty())
         .or_else(|| {
-            Command::new("hostname")
-                .output()
-                .ok()
-                .and_then(|output| {
-                    if output.status.success() {
-                        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-                    } else {
-                        None
-                    }
-                })
+            Command::new("hostname").output().ok().and_then(|output| {
+                if output.status.success() {
+                    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
         })
         .unwrap_or_else(|| "host".to_string());
 
     let folder = env::current_dir()
         .ok()
         .and_then(|path| path.file_name().map(|v| v.to_string_lossy().to_string()))
-        .unwrap_or_else(|| "".to_string());
+        .unwrap_or_default();
     let command = env::args().next().unwrap_or_else(|| "trudger".to_string());
     let command = Path::new(&command)
         .file_name()
@@ -558,12 +560,7 @@ fn validate_config(config: &Config, manual_tasks: &[String]) -> Result<(), Strin
         ));
     }
 
-    let next_task = config
-        .commands
-        .next_task
-        .as_deref()
-        .unwrap_or("")
-        .trim();
+    let next_task = config.commands.next_task.as_deref().unwrap_or("").trim();
     if next_task.is_empty() {
         if manual_tasks.is_empty() {
             return Err(
@@ -688,7 +685,10 @@ fn run_task_show(state: &mut RuntimeState, task_id: &str, args: &[String]) -> Re
         args,
     )?;
     if output.exit_code != 0 {
-        return Err(format!("task_show failed with exit code {}", output.exit_code));
+        return Err(format!(
+            "task_show failed with exit code {}",
+            output.exit_code
+        ));
     }
     state.current_task_show = Some(output.stdout);
     Ok(())
@@ -704,7 +704,10 @@ fn run_task_status(state: &mut RuntimeState, task_id: &str) -> Result<(), String
         &[],
     )?;
     if output.exit_code != 0 {
-        return Err(format!("task_status failed with exit code {}", output.exit_code));
+        return Err(format!(
+            "task_status failed with exit code {}",
+            output.exit_code
+        ));
     }
     let status = output
         .stdout
@@ -712,19 +715,18 @@ fn run_task_status(state: &mut RuntimeState, task_id: &str) -> Result<(), String
         .next()
         .unwrap_or("")
         .to_string();
-    state.current_task_status = if status.is_empty() { None } else { Some(status) };
+    state.current_task_status = if status.is_empty() {
+        None
+    } else {
+        Some(status)
+    };
     Ok(())
 }
 
 fn get_next_task_id(state: &RuntimeState) -> Result<String, Quit> {
     let output = run_config_command(
         state,
-        state
-            .config
-            .commands
-            .next_task
-            .as_deref()
-            .unwrap_or(""),
+        state.config.commands.next_task.as_deref().unwrap_or(""),
         None,
         "next-task",
         &[],
@@ -840,7 +842,12 @@ fn check_interrupted(state: &RuntimeState) -> Result<(), Quit> {
     Ok(())
 }
 
-fn run_hook(state: &RuntimeState, hook_command: &str, task_id: &str, hook_name: &str) -> Result<(), String> {
+fn run_hook(
+    state: &RuntimeState,
+    hook_command: &str,
+    task_id: &str,
+    hook_name: &str,
+) -> Result<(), String> {
     if hook_command.trim().is_empty() {
         return Ok(());
     }
@@ -899,11 +906,13 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         } else {
             let next_task_cmd = state.config.commands.next_task.as_deref().unwrap_or("");
             if next_task_cmd.trim().is_empty() {
-                state.logger.log_transition("idle missing_next_task_command");
+                state
+                    .logger
+                    .log_transition("idle missing_next_task_command");
                 return Err(quit(&state.logger, "missing_next_task_command", 0));
             }
 
-        let skip_limit = env::var("TRUDGER_SKIP_NOT_READY_LIMIT")
+            let skip_limit = env::var("TRUDGER_SKIP_NOT_READY_LIMIT")
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())
                 .filter(|value| *value >= 1)
@@ -931,9 +940,10 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 if is_ready_status(&status) {
                     break task_id;
                 }
-                state
-                    .logger
-                    .log_transition(&format!("skip_not_ready task={} status={}", task_id, status));
+                state.logger.log_transition(&format!(
+                    "skip_not_ready task={} status={}",
+                    task_id, status
+                ));
                 skip_count += 1;
                 if skip_count >= skip_limit {
                     state
@@ -988,16 +998,14 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                     &state.completed_tasks,
                     &state.needs_human_tasks,
                 );
-                state.logger.log_transition(&format!("error task={}", task_id));
+                state
+                    .logger
+                    .log_transition(&format!("error task={}", task_id));
                 return Err(quit(&state.logger, &format!("error:{err}"), 1));
             }
 
             check_interrupted(state)?;
-            let solve_args: &[String] = if review_loops == 0 {
-                &[]
-            } else {
-                &resume_args
-            };
+            let solve_args: &[String] = if review_loops == 0 { &[] } else { &resume_args };
             if let Err(_err) = run_agent_solve(state, solve_args) {
                 state.tmux.update_name(
                     "ERROR",
@@ -1009,11 +1017,7 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                     .logger
                     .log_transition(&format!("solve_failed task={}", task_id));
                 eprintln!("Agent solve failed for task {}.", task_id);
-                return Err(quit(
-                    &state.logger,
-                    &format!("solve_failed:{}", task_id),
-                    1,
-                ));
+                return Err(quit(&state.logger, &format!("solve_failed:{}", task_id), 1));
             }
 
             state.tmux.update_name(
@@ -1088,7 +1092,12 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 state
                     .logger
                     .log_transition(&format!("completed task={}", task_id));
-                if let Err(err) = run_hook(state, &state.config.hooks.on_completed, &task_id, "on_completed") {
+                if let Err(err) = run_hook(
+                    state,
+                    &state.config.hooks.on_completed,
+                    &task_id,
+                    "on_completed",
+                ) {
                     return Err(quit(&state.logger, &format!("error:{err}"), 1));
                 }
                 break;
@@ -1285,7 +1294,14 @@ fn doctor_run_task_show(
     task_id: &str,
     logger: &Logger,
 ) -> Result<String, String> {
-    let env = build_doctor_env(config_path, scratch_path, scratch_dir, Some(task_id), None, None);
+    let env = build_doctor_env(
+        config_path,
+        scratch_path,
+        scratch_dir,
+        Some(task_id),
+        None,
+        None,
+    );
     let output = run_shell_command_capture(
         &config.commands.task_show,
         "doctor-task-show",
@@ -1295,7 +1311,10 @@ fn doctor_run_task_show(
         logger,
     )?;
     if output.exit_code != 0 {
-        return Err(format!("commands.task_show failed with exit code {}", output.exit_code));
+        return Err(format!(
+            "commands.task_show failed with exit code {}",
+            output.exit_code
+        ));
     }
     Ok(output.stdout)
 }
@@ -1308,7 +1327,14 @@ fn doctor_run_task_status(
     task_id: &str,
     logger: &Logger,
 ) -> Result<String, String> {
-    let env = build_doctor_env(config_path, scratch_path, scratch_dir, Some(task_id), None, None);
+    let env = build_doctor_env(
+        config_path,
+        scratch_path,
+        scratch_dir,
+        Some(task_id),
+        None,
+        None,
+    );
     let output = run_shell_command_capture(
         &config.commands.task_status,
         "doctor-task-status",
@@ -1344,7 +1370,14 @@ fn doctor_run_task_update_status(
     status: &str,
     logger: &Logger,
 ) -> Result<(), String> {
-    let env = build_doctor_env(config_path, scratch_path, scratch_dir, Some(task_id), None, None);
+    let env = build_doctor_env(
+        config_path,
+        scratch_path,
+        scratch_dir,
+        Some(task_id),
+        None,
+        None,
+    );
     let args = vec!["--status".to_string(), status.to_string()];
     let exit = run_shell_command_status(
         &config.commands.task_update_in_progress,
@@ -1371,7 +1404,14 @@ fn doctor_run_reset_task(
     task_id: &str,
     logger: &Logger,
 ) -> Result<(), String> {
-    let env = build_doctor_env(config_path, scratch_path, scratch_dir, Some(task_id), None, None);
+    let env = build_doctor_env(
+        config_path,
+        scratch_path,
+        scratch_dir,
+        Some(task_id),
+        None,
+        None,
+    );
     let exit = run_shell_command_status(
         &config.commands.reset_task,
         "doctor-reset-task",
@@ -1381,11 +1421,15 @@ fn doctor_run_reset_task(
         logger,
     )?;
     if exit != 0 {
-        return Err(format!("commands.reset_task failed with exit code {}", exit));
+        return Err(format!(
+            "commands.reset_task failed with exit code {}",
+            exit
+        ));
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn doctor_run_hook(
     hook_command: &str,
     config_path: &Path,
@@ -1456,8 +1500,22 @@ fn run_doctor_checks(
     });
 
     // Verify reset -> ready/open parsing.
-    doctor_run_reset_task(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
-    let status = doctor_run_task_status(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
+    doctor_run_reset_task(
+        config,
+        config_path,
+        scratch_dir,
+        scratch_path,
+        &task_id,
+        logger,
+    )?;
+    let status = doctor_run_task_status(
+        config,
+        config_path,
+        scratch_dir,
+        scratch_path,
+        &task_id,
+        logger,
+    )?;
     if !is_ready_status(&status) {
         return Err(format!(
             "doctor expected commands.task_status to return ready/open after reset_task, got '{}'.",
@@ -1466,7 +1524,14 @@ fn run_doctor_checks(
     }
 
     // Verify show runs successfully (content is prompt-only in run mode).
-    let show = doctor_run_task_show(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
+    let show = doctor_run_task_show(
+        config,
+        config_path,
+        scratch_dir,
+        scratch_path,
+        &task_id,
+        logger,
+    )?;
 
     // Verify update -> in_progress parsing.
     doctor_run_task_update_status(
@@ -1478,7 +1543,14 @@ fn run_doctor_checks(
         "in_progress",
         logger,
     )?;
-    let status = doctor_run_task_status(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
+    let status = doctor_run_task_status(
+        config,
+        config_path,
+        scratch_dir,
+        scratch_path,
+        &task_id,
+        logger,
+    )?;
     if status != "in_progress" {
         return Err(format!(
             "doctor expected commands.task_status to return 'in_progress' after task_update_in_progress, got '{}'.",
@@ -1487,8 +1559,22 @@ fn run_doctor_checks(
     }
 
     // Verify reset works again and yields ready/open.
-    doctor_run_reset_task(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
-    let status = doctor_run_task_status(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
+    doctor_run_reset_task(
+        config,
+        config_path,
+        scratch_dir,
+        scratch_path,
+        &task_id,
+        logger,
+    )?;
+    let status = doctor_run_task_status(
+        config,
+        config_path,
+        scratch_dir,
+        scratch_path,
+        &task_id,
+        logger,
+    )?;
     if !is_ready_status(&status) {
         return Err(format!(
             "doctor expected commands.task_status to return ready/open after reset_task, got '{}'.",
@@ -1613,7 +1699,10 @@ fn run_doctor_mode(config: &Config, config_path: &Path, logger: &Logger) -> Resu
     let hook_exit = run_shell_command_status(&hook, "doctor-setup", "none", &[], &env, logger);
     let hook_result = match hook_exit {
         Ok(0) => Ok(()),
-        Ok(exit) => Err(format!("hooks.on_doctor_setup failed with exit code {}", exit)),
+        Ok(exit) => Err(format!(
+            "hooks.on_doctor_setup failed with exit code {}",
+            exit
+        )),
         Err(err) => Err(err),
     };
 
@@ -1874,16 +1963,14 @@ mod tests {
 
         let log_contents = fs::read_to_string(&log_path).expect("read log file");
         let line = log_contents.lines().next().expect("log line");
-        let message = line.splitn(2, ' ').nth(1).unwrap_or("");
+        let message = line.split_once(' ').map(|x| x.1).unwrap_or("");
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("fixtures")
             .join("logs")
             .join("command-start.txt");
         let expected = fs::read_to_string(&fixture_path).expect("read fixture");
-        let expected = expected
-            .trim_end_matches('\n')
-            .trim_end_matches('\r');
+        let expected = expected.trim_end_matches('\n').trim_end_matches('\r');
         assert_eq!(message, expected);
     }
 
@@ -1892,11 +1979,7 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         reset_test_env();
         let mut file = NamedTempFile::new().expect("temp file");
-        writeln!(
-            file,
-            "---\nname: test\n---\nHello\nWorld"
-        )
-        .expect("write");
+        writeln!(file, "---\nname: test\n---\nHello\nWorld").expect("write");
         let rendered = render_prompt(file.path()).expect("render");
         assert_eq!(rendered, "Hello\nWorld");
     }
@@ -1937,10 +2020,7 @@ mod tests {
             .join("fixtures")
             .join("bin");
         let old_path = env::var("PATH").unwrap_or_default();
-        env::set_var(
-            "PATH",
-            format!("{}:{}", fixtures_bin.display(), old_path),
-        );
+        env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
         env::set_var("NEXT_TASK_LOG", &next_task_log);
         env::set_var("TASK_SHOW_LOG", &task_show_log);
         env::set_var("TASK_STATUS_LOG", &task_status_log);
@@ -2259,10 +2339,7 @@ mod tests {
             .join("fixtures")
             .join("bin");
         let old_path = env::var("PATH").unwrap_or_default();
-        env::set_var(
-            "PATH",
-            format!("{}:{}", fixtures_bin.display(), old_path),
-        );
+        env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
         env::set_var("NEXT_TASK_EXIT_CODE", "1");
         env::set_var("TASK_SHOW_LOG", &task_show_log);
         env::set_var("CODEX_MOCK_LOG", &codex_log);
@@ -2341,10 +2418,7 @@ mod tests {
             .join("fixtures")
             .join("bin");
         let old_path = env::var("PATH").unwrap_or_default();
-        env::set_var(
-            "PATH",
-            format!("{}:{}", fixtures_bin.display(), old_path),
-        );
+        env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
         env::set_var("NEXT_TASK_LOG", &next_task_log);
         env::set_var("TASK_SHOW_LOG", &task_show_log);
         env::set_var("TASK_STATUS_LOG", &task_status_log);
@@ -2423,10 +2497,7 @@ mod tests {
             .join("fixtures")
             .join("bin");
         let old_path = env::var("PATH").unwrap_or_default();
-        env::set_var(
-            "PATH",
-            format!("{}:{}", fixtures_bin.display(), old_path),
-        );
+        env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
         env::set_var("NEXT_TASK_OUTPUT_QUEUE", &next_task_queue);
         env::set_var("TASK_STATUS_QUEUE", &status_queue);
         env::set_var("TASK_SHOW_LOG", &task_show_log);
@@ -2503,10 +2574,7 @@ mod tests {
             .join("fixtures")
             .join("bin");
         let old_path = env::var("PATH").unwrap_or_default();
-        env::set_var(
-            "PATH",
-            format!("{}:{}", fixtures_bin.display(), old_path),
-        );
+        env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
         env::set_var("NEXT_TASK_OUTPUT_QUEUE", &next_task_queue);
         env::set_var("TASK_STATUS_QUEUE", &status_queue);
         env::set_var("TASK_SHOW_OUTPUT", "SHOW_PAYLOAD");
@@ -2554,9 +2622,7 @@ mod tests {
         let result = run_loop(&mut state).expect_err("should error on missing status");
         assert_eq!(result.code, 1);
         assert!(
-            result
-                .reason
-                .contains("task_missing_status_after_review"),
+            result.reason.contains("task_missing_status_after_review"),
             "expected missing status reason, got: {}",
             result.reason
         );
@@ -2574,10 +2640,7 @@ mod tests {
             .join("fixtures")
             .join("bin");
         let old_path = env::var("PATH").unwrap_or_default();
-        env::set_var(
-            "PATH",
-            format!("{}:{}", fixtures_bin.display(), old_path),
-        );
+        env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
         env::set_var("RESET_TASK_LOG", &reset_task_log);
 
         let config = Config {
@@ -2641,14 +2704,11 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         reset_test_env();
 
-        let tasks = parse_manual_tasks(&vec![
-            " tr-1, tr-2 ".to_string(),
-            "tr-3".to_string(),
-        ])
-        .expect("parse tasks");
+        let tasks = parse_manual_tasks(&[" tr-1, tr-2 ".to_string(), "tr-3".to_string()])
+            .expect("parse tasks");
         assert_eq!(tasks, vec!["tr-1", "tr-2", "tr-3"]);
 
-        let err = parse_manual_tasks(&vec!["tr-1,,tr-2".to_string()]).expect_err("should error");
+        let err = parse_manual_tasks(&["tr-1,,tr-2".to_string()]).expect_err("should error");
         assert!(
             err.contains("empty segment"),
             "expected empty segment error, got: {err}"
@@ -2662,7 +2722,10 @@ mod tests {
             matches!(cli.command, Some(CliCommand::Doctor)),
             "expected doctor subcommand"
         );
-        assert!(cli.positional.is_empty(), "doctor should have no positionals");
+        assert!(
+            cli.positional.is_empty(),
+            "doctor should have no positionals"
+        );
 
         let cli = Cli::try_parse_from(["trudger", "doctor", "-t", "tr-1"]).expect("parse doctor");
         assert!(
@@ -2672,7 +2735,10 @@ mod tests {
         assert_eq!(cli.task, vec!["tr-1"], "expected task flag capture");
 
         let cli = Cli::try_parse_from(["trudger", "tr-1"]).expect("parse positional");
-        assert!(cli.command.is_none(), "positional should not be a subcommand");
+        assert!(
+            cli.command.is_none(),
+            "positional should not be a subcommand"
+        );
         assert_eq!(cli.positional, vec!["tr-1"]);
     }
 
@@ -2743,10 +2809,7 @@ mod tests {
             .join("fixtures")
             .join("bin");
         let old_path = env::var("PATH").unwrap_or_default();
-        env::set_var(
-            "PATH",
-            format!("{}:{}", fixtures_bin.display(), old_path),
-        );
+        env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
 
         let beads_dir = invocation.join(".beads");
         fs::create_dir_all(&beads_dir).expect("create .beads dir");
@@ -2901,7 +2964,9 @@ hooks:
             "reset-task should run from scratch dir, got:\n{reset_task_contents}"
         );
         assert_eq!(
-            reset_task_contents.matches("reset-task args_count=0 args=").count(),
+            reset_task_contents
+                .matches("reset-task args_count=0 args=")
+                .count(),
             2,
             "expected reset-task to run twice, got:\n{reset_task_contents}"
         );

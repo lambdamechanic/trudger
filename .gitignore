@@ -4,3 +4,7 @@
 state/
 
 target/
+
+# Local profiling output
+perf.data
+perf.data.*
