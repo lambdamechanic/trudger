@@ -5,6 +5,8 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::{NamedTempFile, TempDir};
 
 use crate::app::{render_prompt, require_file, run_with_cli};
@@ -14,7 +16,7 @@ use crate::doctor::run_doctor_mode;
 use crate::logger::{sanitize_log_value, Logger};
 use crate::run_loop::{reset_task_on_exit, run_loop, validate_config, Quit, RuntimeState};
 use crate::shell::render_args;
-use crate::tmux::TmuxState;
+use crate::tmux::{build_tmux_name, TmuxState};
 
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
 static ORIGINAL_PATH: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
@@ -121,6 +123,35 @@ fn require_file_reports_missing() {
     assert!(
         err.contains("Missing prompt file"),
         "error should mention missing prompt file, got: {err}"
+    );
+}
+
+#[test]
+fn build_tmux_name_trims_fg_and_codex_suffixes() {
+    assert_eq!(build_tmux_name("host: fg", "", "tr-1", &[], &[]), "host");
+    assert_eq!(build_tmux_name("host: codex", "", "tr-1", &[], &[]), "host");
+    assert_eq!(
+        build_tmux_name("host: other", "", "tr-1", &[], &[]),
+        "host: other"
+    );
+}
+
+#[test]
+fn build_tmux_name_formats_task_lists_and_phase_suffixes() {
+    let completed = vec!["tr-1".to_string(), "tr-2".to_string()];
+    let needs_human = vec!["tr-3".to_string()];
+
+    assert_eq!(
+        build_tmux_name("base", "SOLVING", "tr-9", &completed, &needs_human),
+        "base COMPLETED [tr-1, tr-2] NEEDS_HUMAN [tr-3] SOLVING tr-9"
+    );
+    assert_eq!(
+        build_tmux_name("base", "REVIEWING", "tr-9", &[], &needs_human),
+        "base NEEDS_HUMAN [tr-3] REVIEWING tr-9"
+    );
+    assert_eq!(
+        build_tmux_name("base", "ERROR", "tr-9", &completed, &[]),
+        "base COMPLETED [tr-1, tr-2] HALTED ON ERROR tr-9"
     );
 }
 
@@ -259,6 +290,200 @@ fn run_loop_executes_commands_and_hooks_with_env() {
     assert!(
         !raw_tab,
         "log should not include raw tab characters, got:\n{log_contents}"
+    );
+}
+
+#[test]
+fn manual_task_not_ready_fails_fast_without_invoking_next_task() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let next_task_log = temp.path().join("next-task.log");
+    let task_status_log = temp.path().join("task-status.log");
+    let task_show_log = temp.path().join("task-show.log");
+    let task_update_log = temp.path().join("task-update.log");
+    let hook_log = temp.path().join("hook.log");
+    let codex_log = temp.path().join("codex.log");
+
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "blocked\n").expect("write status queue");
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+
+    env::set_var("NEXT_TASK_LOG", &next_task_log);
+    env::set_var("TASK_STATUS_LOG", &task_status_log);
+    env::set_var("TASK_SHOW_LOG", &task_show_log);
+    env::set_var("TASK_UPDATE_LOG", &task_update_log);
+    env::set_var("HOOK_MOCK_LOG", &hook_log);
+    env::set_var("CODEX_MOCK_LOG", &codex_log);
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+
+    let config = Config {
+        agent_command: "codex --yolo exec --default".to_string(),
+        agent_review_command: "codex --yolo exec --review \"$@\"".to_string(),
+        commands: Commands {
+            next_task: Some("next-task".to_string()),
+            task_show: "task-show \"$@\"".to_string(),
+            task_status: "task-status".to_string(),
+            task_update_in_progress: "task-update \"$@\"".to_string(),
+            reset_task: "reset-task \"$@\"".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "hook --done".to_string(),
+            on_requires_human: "hook --human".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: temp.path().join("trudger.log").display().to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: vec!["tr-1".to_string()],
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let result = run_loop(&mut state).expect_err("manual blocked task should fail fast");
+    assert_eq!(result.code, 1);
+    assert_eq!(result.reason, "task_not_ready:tr-1");
+
+    assert!(!next_task_log.exists(), "next-task should not run");
+    assert!(!task_show_log.exists(), "task-show should not run");
+    assert!(!task_update_log.exists(), "task-update should not run");
+    assert!(!hook_log.exists(), "hooks should not run");
+    assert!(!codex_log.exists(), "agent should not run");
+    assert!(
+        task_status_log.exists(),
+        "task-status should run for readiness check"
+    );
+}
+
+#[test]
+fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let log_path = temp.path().join("trudger.log");
+    let next_task_log = temp.path().join("next-task.log");
+    let task_show_log = temp.path().join("task-show.log");
+    let task_status_log = temp.path().join("task-status.log");
+    let task_update_log = temp.path().join("task-update.log");
+    let hook_log = temp.path().join("hook.log");
+    let codex_log = temp.path().join("codex.log");
+
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "ready\nclosed\n").expect("write status queue");
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    env::set_var("NEXT_TASK_EXIT_CODE", "1");
+    env::set_var("NEXT_TASK_LOG", &next_task_log);
+    env::set_var("TASK_SHOW_LOG", &task_show_log);
+    env::set_var("TASK_STATUS_LOG", &task_status_log);
+    env::set_var("TASK_UPDATE_LOG", &task_update_log);
+    env::set_var("HOOK_MOCK_LOG", &hook_log);
+    env::set_var("CODEX_MOCK_LOG", &codex_log);
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+    env::set_var("TASK_SHOW_OUTPUT", "SHOW_PAYLOAD");
+
+    let config = Config {
+        agent_command: "codex --yolo exec --default".to_string(),
+        agent_review_command: "codex --yolo exec --review \"$@\"".to_string(),
+        commands: Commands {
+            next_task: Some("next-task".to_string()),
+            task_show: "task-show \"$@\"".to_string(),
+            task_status: "task-status".to_string(),
+            task_update_in_progress: "task-update \"$@\"".to_string(),
+            reset_task: "reset-task \"$@\"".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "hook --done".to_string(),
+            on_requires_human: "hook --human".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: log_path.display().to_string(),
+    };
+
+    let interrupt_flag = Arc::new(AtomicBool::new(false));
+    let interrupter_flag = Arc::clone(&interrupt_flag);
+    let interrupter_hook_log = hook_log.clone();
+    let interrupter = thread::spawn(move || {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            if interrupter_hook_log.exists() {
+                interrupter_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(Some(log_path)),
+        tmux: TmuxState::disabled(),
+        interrupt_flag,
+        manual_tasks: vec!["tr-1".to_string()],
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let result = run_loop(&mut state).expect_err("interrupter should stop the loop");
+    let _ = interrupter.join();
+    assert_eq!(result.code, 130, "expected interrupt exit");
+    assert_eq!(state.completed_tasks, vec!["tr-1"]);
+
+    assert!(
+        !next_task_log.exists(),
+        "next-task should not run when manual tasks are provided"
+    );
+
+    let codex_contents = fs::read_to_string(&codex_log).expect("read codex log");
+    assert!(
+        codex_contents.contains("envset TRUDGER_PROMPT=1"),
+        "agent solve should receive TRUDGER_PROMPT"
+    );
+    assert!(
+        codex_contents.contains("envset TRUDGER_REVIEW_PROMPT=1"),
+        "agent review should receive TRUDGER_REVIEW_PROMPT"
+    );
+
+    let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+    assert!(
+        hook_contents.contains("hook args_count=1 args=--done"),
+        "expected completed hook, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("env TRUDGER_TASK_ID=tr-1"),
+        "hook should see task id in env, got:\n{hook_contents}"
     );
 }
 
