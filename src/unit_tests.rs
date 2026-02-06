@@ -460,6 +460,7 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
     let result = run_loop(&mut state).expect_err("interrupter should stop the loop");
     interrupter.join().expect("interrupter thread");
     assert_eq!(result.code, 130, "expected interrupt exit");
+    assert_eq!(result.reason, "interrupted");
     assert_eq!(state.completed_tasks, vec!["tr-1"]);
 
     assert!(
