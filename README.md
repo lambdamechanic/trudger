@@ -104,7 +104,13 @@ Notes:
 
 ## Install
 
-Assuming you want `trudger` on your PATH via `~/.local/bin`:
+Install the Rust binary with cargo (installs to `~/.cargo/bin` by default):
+
+```bash
+cargo install --path . --locked
+```
+
+Install prompt files under `~/.codex/prompts/`:
 
 ```bash
 ./install.sh
@@ -122,6 +128,8 @@ To see help:
 trudger --help
 ```
 
+Legacy: the historical Bash implementation and its old BATS test suite live under `historical/bash/` (deprecated; kept for reference only).
+
 ## Prompts
 
 The prompt sources live in `prompts/` and are installed by `./install.sh`.
@@ -129,7 +137,7 @@ The prompt sources live in `prompts/` and are installed by `./install.sh`.
 
 ## Development
 
-Enable the repo git hooks (runs `shellcheck` and `bats` on pre-push):
+Enable the repo git hooks (runs `shellcheck`, `cargo fmt`, `cargo clippy`, and `cargo test` on pre-push):
 
 ```bash
 git config core.hooksPath .githooks

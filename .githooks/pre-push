@@ -11,15 +11,18 @@ require_cmd() {
 }
 
 require_cmd shellcheck
-require_cmd bats
+require_cmd cargo
 
 printf 'pre-push: running shellcheck...\n'
 shellcheck \
   "${root_dir}/trudger" \
-  "${root_dir}/tests/trudger_test.bats" \
-  "${root_dir}/tests/fixtures/bin/br" \
-  "${root_dir}/tests/fixtures/bin/bv" \
-  "${root_dir}/tests/fixtures/bin/codex"
+  "${root_dir}/install.sh"
 
-printf 'pre-push: running bats...\n'
-bats "${root_dir}/tests/trudger_test.bats"
+printf 'pre-push: running cargo fmt...\n'
+cargo fmt --check
+
+printf 'pre-push: running cargo clippy...\n'
+cargo clippy --all-targets -- -D warnings
+
+printf 'pre-push: running cargo test...\n'
+cargo test

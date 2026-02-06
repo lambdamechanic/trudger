@@ -22,6 +22,6 @@ The Rust implementation has become the source of truth for Trudger behavior, but
 
 ## Open Questions
 - How should the shim locate the Rust binary?
-  - Options: build/install to a known location via `install.sh`, or require users to run `cargo build --release`.
+  - Decision: prefer (1) explicit `TRUDGER_RUST_BIN`, then (2) repo-local `target/release/trudger`, then (3) repo-local `target/debug/trudger`, then (4) an installed `trudger` found on `PATH` (for example via `cargo install`).
 - What is the preferred distribution mechanism?
-  - Options: build from source (cargo), or publish prebuilt binaries and update `install.sh` to fetch them.
+  - Decision: rely on standard `cargo install` workflows for installing the Rust binary; `install.sh` exists only to install prompt files.
