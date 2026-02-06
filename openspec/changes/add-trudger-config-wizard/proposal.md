@@ -9,8 +9,9 @@ Sample configs are static and force users to edit YAML by hand to swap agents or
 - Introduce data-driven template files stored in the repo and embedded into the binary at build time; the wizard reads templates from embedded data, not hard-coded strings.
 - Support re-running the wizard: when a config exists, the wizard preselects best matches and, when values differ from the selected templates, shows per-key diffs and asks whether to replace each key individually.
 - When overwriting an existing config file, create a timestamped backup.
-- Comment out unknown/custom top-level keys from an existing config in the generated output and warn the user (so data is not silently dropped).
-- Use embedded defaults for `review_loop_limit` and `log_path` (no wizard prompts for these fields).
+- Comment out unknown/custom keys (top-level and under `commands`/`hooks`) from an existing config in the generated output and warn the user (so data is not silently dropped).
+- If an existing config is invalid YAML, warn and overwrite it with a backup (no per-key merge).
+- Use embedded defaults for `review_loop_limit` and `log_path` when missing (no wizard prompts for these fields; preserve existing values when present).
 - Fail fast in non-interactive contexts (wizard requires a TTY).
 - Retire or repurpose `sample_configuration/` in favor of wizard templates (no more sample-config bootstrap).
 
