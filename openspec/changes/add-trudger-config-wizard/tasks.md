@@ -1,5 +1,5 @@
 ## 1. Template Data
-- [ ] 1.1 Define the template data format and add agent templates (`codex`, `claude`, `pi`) plus tracking templates (`br-next-task`, `bd-labels`) and defaults.
+- [x] 1.1 Define the template data format and add agent templates (`codex`, `claude`, `pi`) plus tracking templates (`br-next-task`, `bd-labels`) and defaults.
 - [ ] 1.2 Embed template data into the binary and add a loader that parses the embedded files at runtime.
 - [ ] 1.3 Validate at startup (wizard path) that required templates are present and error clearly if the embedded data is missing expected templates.
 
