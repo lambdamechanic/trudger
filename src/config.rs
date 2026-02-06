@@ -53,7 +53,7 @@ pub fn load_config(path: &Path) -> Result<LoadedConfig, String> {
         }
     };
 
-    let warnings = unknown_top_level_keys(&mapping);
+    let warnings = unknown_config_keys(&mapping);
     emit_unknown_key_warnings(&warnings);
     validate_required_fields(&mapping)?;
 
@@ -83,6 +83,41 @@ fn unknown_top_level_keys(mapping: &Mapping) -> Vec<String> {
         .keys()
         .filter_map(|key| key.as_str().map(|value| value.to_string()))
         .filter(|key| !allowed.contains(&key.as_str()))
+        .collect()
+}
+
+fn unknown_config_keys(mapping: &Mapping) -> Vec<String> {
+    let mut keys = unknown_top_level_keys(mapping);
+    keys.extend(unknown_nested_keys(
+        mapping,
+        "commands",
+        &[
+            "next_task",
+            "task_show",
+            "task_status",
+            "task_update_in_progress",
+            "reset_task",
+        ],
+    ));
+    keys.extend(unknown_nested_keys(
+        mapping,
+        "hooks",
+        &["on_completed", "on_requires_human", "on_doctor_setup"],
+    ));
+    keys
+}
+
+fn unknown_nested_keys(mapping: &Mapping, mapping_key: &str, allowed: &[&str]) -> Vec<String> {
+    let key = Value::String(mapping_key.to_string());
+    let Some(Value::Mapping(nested)) = mapping.get(&key) else {
+        return Vec::new();
+    };
+
+    nested
+        .keys()
+        .filter_map(|key| key.as_str().map(|value| value.to_string()))
+        .filter(|key| !allowed.contains(&key.as_str()))
+        .map(|key| format!("{}.{}", mapping_key, key))
         .collect()
 }
 
@@ -350,6 +385,35 @@ extra_key: true
         let file = write_temp_config(config);
         let loaded = load_config(file.path()).expect("config should load");
         assert_eq!(loaded.warnings, vec!["extra_key".to_string()]);
+    }
+
+    #[test]
+    fn unknown_nested_keys_reported() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+  extra_command_key: "mystery"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+  extra_hook_key: "mystery"
+"#;
+        let file = write_temp_config(config);
+        let loaded = load_config(file.path()).expect("config should load");
+        assert_eq!(
+            loaded.warnings,
+            vec![
+                "commands.extra_command_key".to_string(),
+                "hooks.extra_hook_key".to_string()
+            ]
+        );
     }
 
     #[test]

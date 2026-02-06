@@ -53,7 +53,7 @@ trudger doctor
 ## Configuration
 
 Trudger requires `~/.config/trudger.yml` on startup unless `-c/--config` is provided, which overrides the default path. If the file is missing, it prints curl commands for sample configs and exits non-zero.
-Configuration is parsed natively in Rust; unknown top-level keys are logged as warnings and ignored.
+Configuration is parsed natively in Rust; unknown keys at top-level and under `commands`/`hooks` are logged as warnings and ignored.
 
 Sample configs:
 - `sample_configuration/trudgeable-with-hooks.yml`
