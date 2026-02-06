@@ -1892,12 +1892,18 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use crate::config::{Commands, Hooks};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::{NamedTempFile, TempDir};
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
+    static ORIGINAL_PATH: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
 
     fn reset_test_env() {
+        let original_path = ORIGINAL_PATH.get_or_init(|| env::var_os("PATH"));
+        match original_path {
+            Some(value) => env::set_var("PATH", value),
+            None => env::remove_var("PATH"),
+        }
         for key in [
             "NEXT_TASK_EXIT_CODE",
             "NEXT_TASK_OUTPUT_QUEUE",
