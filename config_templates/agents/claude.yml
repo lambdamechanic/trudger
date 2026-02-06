@@ -1,0 +1,5 @@
+id: claude
+label: Claude
+description: Use the claude CLI for solve and review.
+agent_command: 'claude --model sonnet --prompt "$TRUDGER_PROMPT"'
+agent_review_command: 'claude --model sonnet --prompt "$TRUDGER_REVIEW_PROMPT" "$@"'

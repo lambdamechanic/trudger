@@ -1,0 +1,13 @@
+id: bd-labels
+label: bd labels
+description: Legacy tracking template that uses `bd` instead of `br`.
+commands:
+  next_task: 'task_id=$(bd ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
+  task_show: 'bd show "$TRUDGER_TASK_ID"'
+  task_status: 'bd show "$TRUDGER_TASK_ID" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
+  task_update_in_progress: 'bd update "$TRUDGER_TASK_ID" "$@"'
+  reset_task: 'bd update "$TRUDGER_TASK_ID" --status open'
+hooks:
+  on_completed: 'bd label remove "$TRUDGER_TASK_ID" "trudgeable"'
+  on_requires_human: 'bd label remove "$TRUDGER_TASK_ID" "trudgeable"; bd label add "$TRUDGER_TASK_ID" "human-required"'
+  on_doctor_setup: 'rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'
