@@ -44,7 +44,7 @@ Use a specific config file:
 trudger --config ./sample_configuration/trudgeable-with-hooks.yml
 ```
 
-Doctor mode (runs `hooks.on_doctor_setup` against a temporary scratch directory):
+Doctor mode (runs `hooks.on_doctor_setup` and validates configured commands against a temporary scratch DB):
 
 ```bash
 trudger doctor

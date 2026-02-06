@@ -29,16 +29,19 @@ if [[ -n "${log_path}" ]]; then
   }
   {
     printf 'task-show args_count=%s args=%s\n' "$#" "$*"
+    printf 'cwd %s\n' "$(pwd -P)"
     log_env_flag "TRUDGER_PROMPT"
     log_env_flag "TRUDGER_REVIEW_PROMPT"
     log_env_flag "TRUDGER_TASK_ID"
     log_env_flag "TRUDGER_TASK_SHOW"
     log_env_flag "TRUDGER_TASK_STATUS"
     log_env_flag "TRUDGER_CONFIG_PATH"
+    log_env_flag "TRUDGER_DOCTOR_SCRATCH_DIR"
     log_env_value "TRUDGER_TASK_ID"
     log_env_value "TRUDGER_TASK_SHOW"
     log_env_value "TRUDGER_TASK_STATUS"
     log_env_value "TRUDGER_CONFIG_PATH"
+    log_env_value "TRUDGER_DOCTOR_SCRATCH_DIR"
   } >> "${log_path}"
 fi
 

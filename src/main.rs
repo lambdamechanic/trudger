@@ -2,8 +2,10 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use regex::Regex;
 use shell_escape::unix::escape;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -163,6 +165,7 @@ fn render_args(args: &[String]) -> String {
 
 #[derive(Debug, Clone)]
 struct CommandEnv {
+    cwd: Option<PathBuf>,
     config_path: String,
     scratch_dir: Option<String>,
     task_id: Option<String>,
@@ -176,6 +179,9 @@ struct CommandEnv {
 
 impl CommandEnv {
     fn apply(&self, cmd: &mut Command) {
+        if let Some(cwd) = &self.cwd {
+            cmd.current_dir(cwd);
+        }
         cmd.env("TRUDGER_CONFIG_PATH", &self.config_path);
         Self::apply_optional(cmd, "TRUDGER_DOCTOR_SCRATCH_DIR", &self.scratch_dir);
         Self::apply_optional(cmd, "TRUDGER_TASK_ID", &self.task_id);
@@ -609,6 +615,7 @@ fn build_command_env(
     };
 
     CommandEnv {
+        cwd: None,
         config_path: state.config_path.display().to_string(),
         scratch_dir: None,
         task_id: task_id
@@ -1179,6 +1186,390 @@ fn parse_manual_tasks(raw_values: &[String]) -> Result<Vec<String>, String> {
     Ok(tasks)
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct DoctorIssueSnapshot {
+    id: String,
+    #[serde(default)]
+    status: String,
+}
+
+fn load_doctor_issue_statuses(path: &Path) -> Result<BTreeMap<String, String>, String> {
+    let file = fs::File::open(path)
+        .map_err(|err| format!("doctor failed to read issues {}: {}", path.display(), err))?;
+    let reader = BufReader::new(file);
+    let mut latest: BTreeMap<String, String> = BTreeMap::new();
+
+    for (index, line) in reader.lines().enumerate() {
+        let line = line.map_err(|err| {
+            format!(
+                "doctor failed to read issues {} line {}: {}",
+                path.display(),
+                index + 1,
+                err
+            )
+        })?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let snapshot: DoctorIssueSnapshot = serde_json::from_str(trimmed).map_err(|err| {
+            format!(
+                "doctor failed to parse issues {} line {}: {}",
+                path.display(),
+                index + 1,
+                err
+            )
+        })?;
+        latest.insert(snapshot.id, snapshot.status);
+    }
+
+    Ok(latest)
+}
+
+fn build_doctor_env(
+    config_path: &Path,
+    scratch_path: &str,
+    cwd: &Path,
+    task_id: Option<&str>,
+    task_show: Option<&str>,
+    task_status: Option<&str>,
+) -> CommandEnv {
+    CommandEnv {
+        cwd: Some(cwd.to_path_buf()),
+        config_path: config_path.display().to_string(),
+        scratch_dir: Some(scratch_path.to_string()),
+        task_id: task_id.map(|value| value.to_string()),
+        task_show: task_show.map(|value| value.to_string()),
+        task_status: task_status.map(|value| value.to_string()),
+        prompt: None,
+        review_prompt: None,
+        completed: None,
+        needs_human: None,
+    }
+}
+
+fn doctor_run_next_task(
+    config: &Config,
+    config_path: &Path,
+    scratch_dir: &Path,
+    scratch_path: &str,
+    logger: &Logger,
+) -> Result<(), String> {
+    let next_task = config.commands.next_task.as_deref().unwrap_or("").trim();
+    if next_task.is_empty() {
+        return Err("commands.next_task must not be empty.".to_string());
+    }
+    let env = build_doctor_env(config_path, scratch_path, scratch_dir, None, None, None);
+    let output =
+        run_shell_command_capture(next_task, "doctor-next-task", "none", &[], &env, logger)?;
+    match output.exit_code {
+        0 => {
+            let task_id = output.stdout.split_whitespace().next().unwrap_or("").to_string();
+            if task_id.is_empty() {
+                return Err("commands.next_task returned an empty task id.".to_string());
+            }
+        }
+        1 => {
+            // Exit 1 means "no selectable tasks" in Trudger semantics.
+        }
+        code => {
+            return Err(format!("commands.next_task failed with exit code {}", code));
+        }
+    }
+    Ok(())
+}
+
+fn doctor_run_task_show(
+    config: &Config,
+    config_path: &Path,
+    scratch_dir: &Path,
+    scratch_path: &str,
+    task_id: &str,
+    logger: &Logger,
+) -> Result<String, String> {
+    let env = build_doctor_env(config_path, scratch_path, scratch_dir, Some(task_id), None, None);
+    let output = run_shell_command_capture(
+        &config.commands.task_show,
+        "doctor-task-show",
+        task_id,
+        &[],
+        &env,
+        logger,
+    )?;
+    if output.exit_code != 0 {
+        return Err(format!("commands.task_show failed with exit code {}", output.exit_code));
+    }
+    Ok(output.stdout)
+}
+
+fn doctor_run_task_status(
+    config: &Config,
+    config_path: &Path,
+    scratch_dir: &Path,
+    scratch_path: &str,
+    task_id: &str,
+    logger: &Logger,
+) -> Result<String, String> {
+    let env = build_doctor_env(config_path, scratch_path, scratch_dir, Some(task_id), None, None);
+    let output = run_shell_command_capture(
+        &config.commands.task_status,
+        "doctor-task-status",
+        task_id,
+        &[],
+        &env,
+        logger,
+    )?;
+    if output.exit_code != 0 {
+        return Err(format!(
+            "commands.task_status failed with exit code {}",
+            output.exit_code
+        ));
+    }
+    let status = output
+        .stdout
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string();
+    if status.is_empty() {
+        return Err("commands.task_status returned an empty status.".to_string());
+    }
+    Ok(status)
+}
+
+fn doctor_run_task_update_status(
+    config: &Config,
+    config_path: &Path,
+    scratch_dir: &Path,
+    scratch_path: &str,
+    task_id: &str,
+    status: &str,
+    logger: &Logger,
+) -> Result<(), String> {
+    let env = build_doctor_env(config_path, scratch_path, scratch_dir, Some(task_id), None, None);
+    let args = vec!["--status".to_string(), status.to_string()];
+    let exit = run_shell_command_status(
+        &config.commands.task_update_in_progress,
+        "doctor-task-update",
+        task_id,
+        &args,
+        &env,
+        logger,
+    )?;
+    if exit != 0 {
+        return Err(format!(
+            "commands.task_update_in_progress failed to set status {} (exit code {})",
+            status, exit
+        ));
+    }
+    Ok(())
+}
+
+fn doctor_run_reset_task(
+    config: &Config,
+    config_path: &Path,
+    scratch_dir: &Path,
+    scratch_path: &str,
+    task_id: &str,
+    logger: &Logger,
+) -> Result<(), String> {
+    let env = build_doctor_env(config_path, scratch_path, scratch_dir, Some(task_id), None, None);
+    let exit = run_shell_command_status(
+        &config.commands.reset_task,
+        "doctor-reset-task",
+        task_id,
+        &[],
+        &env,
+        logger,
+    )?;
+    if exit != 0 {
+        return Err(format!("commands.reset_task failed with exit code {}", exit));
+    }
+    Ok(())
+}
+
+fn doctor_run_hook(
+    hook_command: &str,
+    config_path: &Path,
+    scratch_dir: &Path,
+    scratch_path: &str,
+    task_id: &str,
+    task_show: &str,
+    task_status: &str,
+    hook_name: &str,
+    logger: &Logger,
+) -> Result<(), String> {
+    let env = build_doctor_env(
+        config_path,
+        scratch_path,
+        scratch_dir,
+        Some(task_id),
+        Some(task_show),
+        Some(task_status),
+    );
+    let exit = run_shell_command_status(hook_command, hook_name, task_id, &[], &env, logger)?;
+    if exit != 0 {
+        return Err(format!("hook {} failed with exit code {}", hook_name, exit));
+    }
+    Ok(())
+}
+
+fn run_doctor_checks(
+    config: &Config,
+    config_path: &Path,
+    scratch_dir: &Path,
+    scratch_path: &str,
+    logger: &Logger,
+) -> Result<(), String> {
+    let beads_dir = scratch_dir.join(".beads");
+    let issues_path = beads_dir.join("issues.jsonl");
+    if !issues_path.is_file() {
+        return Err(format!(
+            "doctor scratch DB is missing {}.\nExpected hooks.on_doctor_setup to create $TRUDGER_DOCTOR_SCRATCH_DIR/.beads with issues.jsonl.",
+            issues_path.display()
+        ));
+    }
+
+    doctor_run_next_task(config, config_path, scratch_dir, scratch_path, logger)?;
+
+    let statuses = load_doctor_issue_statuses(&issues_path)?;
+    let any_task_id = statuses
+        .keys()
+        .next()
+        .cloned()
+        .ok_or_else(|| "doctor scratch DB has no issues in issues.jsonl.".to_string())?;
+    let task_id = statuses
+        .iter()
+        .find_map(|(id, status)| {
+            if is_ready_status(status) {
+                Some(id.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| any_task_id.clone());
+
+    let closed_task_id = statuses.iter().find_map(|(id, status)| {
+        if status == "closed" {
+            Some(id.clone())
+        } else {
+            None
+        }
+    });
+
+    // Verify reset -> ready/open parsing.
+    doctor_run_reset_task(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
+    let status = doctor_run_task_status(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
+    if !is_ready_status(&status) {
+        return Err(format!(
+            "doctor expected commands.task_status to return ready/open after reset_task, got '{}'.",
+            status
+        ));
+    }
+
+    // Verify show runs successfully (content is prompt-only in run mode).
+    let show = doctor_run_task_show(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
+
+    // Verify update -> in_progress parsing.
+    doctor_run_task_update_status(
+        config,
+        config_path,
+        scratch_dir,
+        scratch_path,
+        &task_id,
+        "in_progress",
+        logger,
+    )?;
+    let status = doctor_run_task_status(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
+    if status != "in_progress" {
+        return Err(format!(
+            "doctor expected commands.task_status to return 'in_progress' after task_update_in_progress, got '{}'.",
+            status
+        ));
+    }
+
+    // Verify reset works again and yields ready/open.
+    doctor_run_reset_task(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
+    let status = doctor_run_task_status(config, config_path, scratch_dir, scratch_path, &task_id, logger)?;
+    if !is_ready_status(&status) {
+        return Err(format!(
+            "doctor expected commands.task_status to return ready/open after reset_task, got '{}'.",
+            status
+        ));
+    }
+
+    // Verify completion/escalation hooks are runnable in the scratch DB environment.
+    doctor_run_hook(
+        &config.hooks.on_completed,
+        config_path,
+        scratch_dir,
+        scratch_path,
+        &task_id,
+        &show,
+        &status,
+        "doctor-hook-on-completed",
+        logger,
+    )?;
+    doctor_run_hook(
+        &config.hooks.on_requires_human,
+        config_path,
+        scratch_dir,
+        scratch_path,
+        &task_id,
+        &show,
+        &status,
+        "doctor-hook-on-requires-human",
+        logger,
+    )?;
+
+    // Verify closed parsing.
+    match closed_task_id {
+        Some(closed_task_id) => {
+            let closed_status = doctor_run_task_status(
+                config,
+                config_path,
+                scratch_dir,
+                scratch_path,
+                &closed_task_id,
+                logger,
+            )?;
+            if closed_status != "closed" {
+                return Err(format!(
+                    "doctor expected commands.task_status to return 'closed' for task {}, got '{}'.",
+                    closed_task_id, closed_status
+                ));
+            }
+        }
+        None => {
+            doctor_run_task_update_status(
+                config,
+                config_path,
+                scratch_dir,
+                scratch_path,
+                &task_id,
+                "closed",
+                logger,
+            )?;
+            let closed_status = doctor_run_task_status(
+                config,
+                config_path,
+                scratch_dir,
+                scratch_path,
+                &task_id,
+                logger,
+            )?;
+            if closed_status != "closed" {
+                return Err(format!(
+                    "doctor expected commands.task_status to return 'closed' after setting status closed, got '{}'.",
+                    closed_status
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn run_doctor_mode(config: &Config, config_path: &Path, logger: &Logger) -> Result<(), Quit> {
     let invocation_cwd = env::current_dir()
         .map_err(|err| quit(logger, &format!("doctor_invocation_cwd_failed:{err}"), 1))?;
@@ -1205,9 +1596,11 @@ fn run_doctor_mode(config: &Config, config_path: &Path, logger: &Logger) -> Resu
         .prefix("trudger-doctor-")
         .tempdir()
         .map_err(|err| quit(logger, &format!("doctor_scratch_create_failed:{err}"), 1))?;
-    let scratch_path = scratch.path().display().to_string();
+    let scratch_dir = scratch.path().to_path_buf();
+    let scratch_path = scratch_dir.display().to_string();
 
     let env = CommandEnv {
+        cwd: Some(invocation_cwd.clone()),
         config_path: config_path.display().to_string(),
         scratch_dir: Some(scratch_path.clone()),
         task_id: None,
@@ -1223,6 +1616,11 @@ fn run_doctor_mode(config: &Config, config_path: &Path, logger: &Logger) -> Resu
     let hook_result = match hook_exit {
         Ok(0) => Ok(()),
         Ok(exit) => Err(format!("hooks.on_doctor_setup failed with exit code {}", exit)),
+        Err(err) => Err(err),
+    };
+
+    let doctor_result = match hook_result {
+        Ok(()) => run_doctor_checks(config, config_path, &scratch_dir, &scratch_path, logger),
         Err(err) => Err(err),
     };
 
@@ -1243,7 +1641,7 @@ fn run_doctor_mode(config: &Config, config_path: &Path, logger: &Logger) -> Resu
         return Err(quit(logger, &message, 1));
     }
 
-    if let Err(err) = hook_result {
+    if let Err(err) = doctor_result {
         eprintln!("{}", err);
         return Err(quit(logger, &err, 1));
     }
@@ -2323,7 +2721,17 @@ mod tests {
         env::set_current_dir(&invocation).expect("set cwd");
 
         let hook_log = temp.path().join("hook.log");
+        let next_task_log = temp.path().join("next-task.log");
+        let task_show_log = temp.path().join("task-show.log");
+        let task_status_log = temp.path().join("task-status.log");
+        let task_update_log = temp.path().join("task-update.log");
+        let reset_task_log = temp.path().join("reset-task.log");
         env::set_var("HOOK_MOCK_LOG", &hook_log);
+        env::set_var("NEXT_TASK_LOG", &next_task_log);
+        env::set_var("TASK_SHOW_LOG", &task_show_log);
+        env::set_var("TASK_STATUS_LOG", &task_status_log);
+        env::set_var("TASK_UPDATE_LOG", &task_update_log);
+        env::set_var("RESET_TASK_LOG", &reset_task_log);
 
         // Ensure the setup hook sees these as unset even if present in the parent process env.
         env::set_var("TRUDGER_TASK_ID", "PARENT_TASK");
@@ -2342,6 +2750,22 @@ mod tests {
             format!("{}:{}", fixtures_bin.display(), old_path),
         );
 
+        let beads_dir = invocation.join(".beads");
+        fs::create_dir_all(&beads_dir).expect("create .beads dir");
+        fs::write(
+            beads_dir.join("issues.jsonl"),
+            r#"{"id":"tr-open","status":"open"}
+{"id":"tr-closed","status":"closed"}
+"#,
+        )
+        .expect("write issues.jsonl");
+
+        env::set_var("NEXT_TASK_OUTPUT", "tr-open");
+        env::set_var("TASK_SHOW_OUTPUT", "SHOW_PAYLOAD");
+        let status_queue = temp.path().join("status-queue.txt");
+        fs::write(&status_queue, "open\nin_progress\nopen\nclosed\n").expect("write status queue");
+        env::set_var("TASK_STATUS_QUEUE", &status_queue);
+
         let config_path = temp.path().join("trudger.yml");
         fs::write(
             &config_path,
@@ -2352,14 +2776,14 @@ commands:
   next_task: "next-task"
   task_show: "task-show"
   task_status: "task-status"
-  task_update_in_progress: "task-update"
+  task_update_in_progress: "task-update \"$@\""
   reset_task: "reset-task"
 review_loop_limit: 2
 log_path: "./.trudger.log"
 hooks:
-  on_completed: "true"
-  on_requires_human: "true"
-  on_doctor_setup: "hook --doctor-setup"
+  on_completed: "hook --done"
+  on_requires_human: "hook --human"
+  on_doctor_setup: 'hook --doctor-setup; rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'
 "#,
         )
         .expect("write config");
@@ -2418,6 +2842,84 @@ hooks:
             .trim()
             .to_string();
         assert!(!scratch_dir.is_empty(), "missing scratch dir in hook log");
+
+        let next_task_contents = fs::read_to_string(&next_task_log).expect("read next-task log");
+        assert!(
+            next_task_contents.contains(&format!("cwd {}", scratch_dir)),
+            "next-task should run from scratch dir, got:\n{next_task_contents}"
+        );
+        assert!(
+            next_task_contents.contains("envset TRUDGER_DOCTOR_SCRATCH_DIR=1"),
+            "next-task should receive TRUDGER_DOCTOR_SCRATCH_DIR"
+        );
+        assert!(
+            next_task_contents.contains("envset TRUDGER_TASK_ID=0"),
+            "next-task should not receive TRUDGER_TASK_ID, got:\n{next_task_contents}"
+        );
+
+        let task_show_contents = fs::read_to_string(&task_show_log).expect("read task-show log");
+        assert!(
+            task_show_contents.contains(&format!("cwd {}", scratch_dir)),
+            "task-show should run from scratch dir, got:\n{task_show_contents}"
+        );
+        assert!(
+            task_show_contents.contains("env TRUDGER_TASK_ID=tr-open"),
+            "task-show should receive TRUDGER_TASK_ID=tr-open, got:\n{task_show_contents}"
+        );
+        assert!(
+            task_show_contents.contains("envset TRUDGER_PROMPT=0"),
+            "task-show should not receive TRUDGER_PROMPT, got:\n{task_show_contents}"
+        );
+
+        let task_status_contents =
+            fs::read_to_string(&task_status_log).expect("read task-status log");
+        assert!(
+            task_status_contents.contains(&format!("cwd {}", scratch_dir)),
+            "task-status should run from scratch dir, got:\n{task_status_contents}"
+        );
+        assert!(
+            task_status_contents.contains("env TRUDGER_TASK_ID=tr-open"),
+            "task-status should run for tr-open, got:\n{task_status_contents}"
+        );
+        assert!(
+            task_status_contents.contains("env TRUDGER_TASK_ID=tr-closed"),
+            "task-status should run for tr-closed (closed parsing), got:\n{task_status_contents}"
+        );
+
+        let task_update_contents =
+            fs::read_to_string(&task_update_log).expect("read task-update log");
+        assert!(
+            task_update_contents.contains(&format!("cwd {}", scratch_dir)),
+            "task-update should run from scratch dir, got:\n{task_update_contents}"
+        );
+        assert!(
+            task_update_contents.contains("args_count=2 args=--status in_progress"),
+            "task-update should set in_progress, got:\n{task_update_contents}"
+        );
+
+        let reset_task_contents = fs::read_to_string(&reset_task_log).expect("read reset-task log");
+        assert!(
+            reset_task_contents.contains(&format!("cwd {}", scratch_dir)),
+            "reset-task should run from scratch dir, got:\n{reset_task_contents}"
+        );
+        assert_eq!(
+            reset_task_contents.matches("reset-task args_count=0 args=").count(),
+            2,
+            "expected reset-task to run twice, got:\n{reset_task_contents}"
+        );
+
+        assert!(
+            hook_contents.contains(&format!("cwd {}", scratch_dir)),
+            "hooks should run from scratch dir after setup, got:\n{hook_contents}"
+        );
+        assert!(
+            hook_contents.contains("hook args_count=1 args=--done"),
+            "doctor should execute hooks.on_completed, got:\n{hook_contents}"
+        );
+        assert!(
+            hook_contents.contains("hook args_count=1 args=--human"),
+            "doctor should execute hooks.on_requires_human, got:\n{hook_contents}"
+        );
         assert!(
             !Path::new(&scratch_dir).exists(),
             "scratch dir should be cleaned up: {scratch_dir}"
