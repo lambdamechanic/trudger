@@ -1584,7 +1584,12 @@ fn sample_configs_load_and_validate() {
 fn main_function_runs_under_test_harness_args() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
-    let _ = crate::main();
+    // Simulate test-harness flags. Calling `crate::main()` directly can end up running
+    // the real Trudger loop if the test binary has no args.
+    let _ = main_with_args(vec![
+        std::ffi::OsString::from("trudger"),
+        std::ffi::OsString::from("--nocapture"),
+    ]);
 }
 
 #[test]
