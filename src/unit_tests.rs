@@ -56,6 +56,65 @@ fn reset_test_env() {
     }
 }
 
+#[cfg(unix)]
+fn capture_stderr<F: FnOnce()>(f: F) -> String {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::raw::c_int;
+
+    extern "C" {
+        fn pipe(fds: *mut c_int) -> c_int;
+        fn dup(fd: c_int) -> c_int;
+        fn dup2(oldfd: c_int, newfd: c_int) -> c_int;
+        fn close(fd: c_int) -> c_int;
+    }
+
+    unsafe {
+        let mut fds = [0 as c_int; 2];
+        if pipe(fds.as_mut_ptr()) != 0 {
+            panic!("pipe failed");
+        }
+        let read_fd = fds[0];
+        let write_fd = fds[1];
+
+        let stderr_fd = std::io::stderr().as_raw_fd();
+        let saved_stderr_fd = dup(stderr_fd);
+        if saved_stderr_fd < 0 {
+            let _ = close(read_fd);
+            let _ = close(write_fd);
+            panic!("dup stderr failed");
+        }
+
+        if dup2(write_fd, stderr_fd) < 0 {
+            let _ = close(saved_stderr_fd);
+            let _ = close(read_fd);
+            let _ = close(write_fd);
+            panic!("dup2 stderr failed");
+        }
+        let _ = close(write_fd);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+
+        if dup2(saved_stderr_fd, stderr_fd) < 0 {
+            let _ = close(saved_stderr_fd);
+            let _ = close(read_fd);
+            panic!("dup2 restore stderr failed");
+        }
+        let _ = close(saved_stderr_fd);
+
+        let mut output = Vec::new();
+        let mut reader = std::fs::File::from_raw_fd(read_fd);
+        reader.read_to_end(&mut output).expect("read stderr");
+        let output = String::from_utf8_lossy(&output).into_owned();
+
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+
+        output
+    }
+}
+
 #[test]
 fn sanitize_log_value_replaces_controls() {
     let _guard = ENV_MUTEX.lock().unwrap();
@@ -101,6 +160,46 @@ fn log_line_matches_shell_fixture() {
     let expected = fs::read_to_string(&fixture_path).expect("read fixture");
     let expected = expected.trim_end_matches('\n').trim_end_matches('\r');
     assert_eq!(message, expected);
+}
+
+#[cfg(unix)]
+#[test]
+fn log_transition_warns_once_and_disables_after_error() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+    let temp = TempDir::new().expect("temp dir");
+    let log_dir = temp.path().join("missing-log-dir");
+    let log_path = log_dir.join("trudger.log");
+    let logger = Logger::new(Some(log_path.clone()));
+
+    let stderr = capture_stderr(|| {
+        logger.log_transition("first");
+        fs::create_dir(&log_dir).expect("create log dir");
+        logger.log_transition("second");
+    });
+
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(lines.len(), 1, "expected one warning line, got: {stderr:?}");
+    assert!(
+        lines[0].contains("log_path="),
+        "warning should include log_path=, got: {stderr:?}"
+    );
+    assert!(
+        lines[0].contains(&log_path.display().to_string()),
+        "warning should include the log path, got: {stderr:?}"
+    );
+    assert!(
+        lines[0].contains("io_error="),
+        "warning should include io_error=, got: {stderr:?}"
+    );
+    assert!(
+        !log_path.exists(),
+        "logging should be disabled after first error; log file unexpectedly exists at {}",
+        log_path.display()
+    );
 }
 
 #[test]
