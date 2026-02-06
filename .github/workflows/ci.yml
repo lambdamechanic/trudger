@@ -25,6 +25,9 @@ jobs:
       - name: Install br (beads_rust)
         run: cargo install --git https://github.com/Dicklesworthstone/beads_rust --locked --bin br
 
+      - name: Run Rust tests
+        run: cargo test
+
       - name: ShellCheck scripts
         run: |
           shellcheck trudger \
