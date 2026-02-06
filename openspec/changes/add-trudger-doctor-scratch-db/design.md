@@ -17,15 +17,16 @@ Doctor checks need a safe place to run task system commands. We want a scratch d
 - Add a new hook `hooks.on_doctor_setup` executed by `trudger doctor`.
 - `trudger doctor` creates a temporary scratch directory and runs the setup hook from the invocation working directory, setting `TRUDGER_DOCTOR_SCRATCH_DIR` to the scratch path.
 - Doctor checks (implemented separately) run from the scratch directory as working directory.
+- Doctor mode performs full configuration validation (same rules as task-processing mode) before invoking `hooks.on_doctor_setup`.
 - The hook runs via the same command execution mechanism as other hooks; `TRUDGER_CONFIG_PATH` is set, `TRUDGER_DOCTOR_SCRATCH_DIR` is set, and `TRUDGER_TASK_*`, `TRUDGER_PROMPT`, and `TRUDGER_REVIEW_PROMPT` are unset; non-zero exit aborts doctor mode.
-- Doctor mode cleans up the temporary scratch directory on both success and failure.
+- Doctor mode cleans up the temporary scratch directory on both success and failure, and errors if cleanup fails.
 
 ## Risks / Trade-offs
 - Introducing a new hook can confuse existing configs; we will require it only when `trudger doctor` runs.
-- Scratch cleanup might fail; doctor should only remove paths it created.
+- Scratch cleanup failure is treated as an error; doctor must only remove paths it created.
 
 ## Migration Plan
-- Update sample configs to include `hooks.on_doctor_setup` that rebuilds a scratch DB using local context (working directory = scratch dir).
+- Update sample configs to include `hooks.on_doctor_setup` that rebuilds a scratch DB using local context (working directory = invocation dir; target path via `TRUDGER_DOCTOR_SCRATCH_DIR`).
 - Add docs covering the doctor hook and env vars.
 - Implement a minimal doctor entrypoint that runs the hook; full checks follow in the next change.
 

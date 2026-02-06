@@ -20,12 +20,21 @@ The system SHALL support a `hooks.on_doctor_setup` command used to initialize a 
 - **THEN** it executes `hooks.on_doctor_setup` before any doctor checks
 
 ### Requirement: Doctor check working directory
-When doctor mode runs doctor checks, the system SHALL execute those checks with the scratch directory as the working directory.
+When doctor mode runs doctor checks, the system SHALL execute those checks with the scratch directory as the working directory. Doctor checks SHALL NOT require `TRUDGER_DOCTOR_SCRATCH_DIR` to be set and SHALL assume the scratch directory is their working directory.
 
 #### Scenario: Checks run from scratch directory
 - **GIVEN** doctor checks are executed
 - **WHEN** Trudger runs in doctor mode after setup
 - **THEN** doctor checks are executed from the scratch directory as the working directory
+
+### Requirement: Doctor mode configuration validation
+When running `trudger doctor`, the system SHALL load and validate configuration using the same validation rules as task-processing mode before invoking `hooks.on_doctor_setup`.
+
+#### Scenario: Doctor config validation uses main rules
+- **GIVEN** the configuration is missing a required value for task-processing mode
+- **WHEN** a user runs `trudger doctor`
+- **THEN** the system exits non-zero with a clear error naming the missing field
+- **AND** it does not invoke `hooks.on_doctor_setup`
 
 ### Requirement: Doctor setup environment
 When doctor mode runs, the system SHALL set `TRUDGER_DOCTOR_SCRATCH_DIR` to the scratch directory path, SHALL set `TRUDGER_CONFIG_PATH`, and SHALL ensure `TRUDGER_TASK_ID`, `TRUDGER_TASK_SHOW`, `TRUDGER_TASK_STATUS`, `TRUDGER_PROMPT`, and `TRUDGER_REVIEW_PROMPT` are unset before invoking `hooks.on_doctor_setup`.
@@ -53,7 +62,7 @@ If `hooks.on_doctor_setup` exits non-zero, the system SHALL exit non-zero and pr
 - **THEN** it exits non-zero and prints an error naming `hooks.on_doctor_setup` and its exit code to stderr
 
 ### Requirement: Doctor scratch cleanup
-The system SHALL clean up the temporary scratch directory created for doctor mode on both success and failure.
+The system SHALL clean up the temporary scratch directory created for doctor mode on both success and failure, and SHALL exit non-zero if scratch cleanup fails.
 
 #### Scenario: Doctor cleanup on success
 - **GIVEN** `hooks.on_doctor_setup` exits with code 0
@@ -64,6 +73,11 @@ The system SHALL clean up the temporary scratch directory created for doctor mod
 - **GIVEN** `hooks.on_doctor_setup` exits non-zero
 - **WHEN** Trudger runs in doctor mode
 - **THEN** it removes the temporary scratch directory before exiting
+
+#### Scenario: Doctor cleanup failure errors
+- **GIVEN** the temporary scratch directory cannot be removed
+- **WHEN** Trudger runs in doctor mode
+- **THEN** it exits non-zero and prints a clear error to stderr indicating scratch cleanup failed
 
 ## MODIFIED Requirements
 ### Requirement: Prompt file presence
