@@ -484,7 +484,7 @@ EOF
   [[ "$output" == *"codex_command is no longer supported"* ]]
 }
 
-@test "empty log_path errors" {
+@test "empty log_path disables logging" {
   local temp_dir
   temp_dir="${BATS_TEST_TMPDIR}/empty-log-path"
   mkdir -p "$temp_dir"
@@ -494,8 +494,8 @@ EOF
   HOME="$temp_dir" \
     run_trudger -c "$config_path"
 
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"log_path must not be empty"* ]]
+  [ "$status" -eq 0 ]
+  [[ ! -e "${temp_dir}/.trudger.log" ]]
 }
 
 @test "log command entries escape control characters" {

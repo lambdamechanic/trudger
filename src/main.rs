@@ -545,9 +545,6 @@ fn validate_config(config: &Config, manual_tasks: &[String]) -> Result<(), Strin
     if config.agent_review_command.trim().is_empty() {
         return Err("agent_review_command must not be empty.".to_string());
     }
-    if config.log_path.trim().is_empty() {
-        return Err("log_path must not be empty.".to_string());
-    }
     if config.review_loop_limit < 1 {
         return Err(format!(
             "review_loop_limit must be a positive integer (got {}).",

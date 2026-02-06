@@ -10,6 +10,7 @@ pub struct Config {
     pub commands: Commands,
     pub hooks: Hooks,
     pub review_loop_limit: u64,
+    #[serde(default)]
     pub log_path: String,
 }
 
@@ -89,8 +90,8 @@ fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
     reject_deprecated_keys(mapping)?;
     require_non_empty_string(mapping, "agent_command", "agent_command")?;
     require_non_empty_string(mapping, "agent_review_command", "agent_review_command")?;
-    require_non_empty_string(mapping, "log_path", "log_path")?;
     require_non_null(mapping, "review_loop_limit", "review_loop_limit")?;
+    validate_optional_string(mapping, "log_path", "log_path")?;
 
     let commands = require_mapping(mapping, "commands", "commands")?;
     require_non_empty_string(commands, "task_show", "commands.task_show")?;
@@ -177,6 +178,16 @@ fn validate_optional_non_empty_string(
                 Ok(())
             }
         }
+        Some(_) => Err(format!("{} must be a string", label)),
+    }
+}
+
+fn validate_optional_string(mapping: &Mapping, key_name: &str, label: &str) -> Result<(), String> {
+    let key = Value::String(key_name.to_string());
+    match mapping.get(&key) {
+        None => Ok(()),
+        Some(Value::Null) => Err(format!("{} must not be null", label)),
+        Some(Value::String(_)) => Ok(()),
         Some(_) => Err(format!("{} must be a string", label)),
     }
 }
@@ -372,6 +383,74 @@ hooks:
         assert!(
             err.contains("Migration"),
             "error should include migration guidance, got: {err}"
+        );
+    }
+
+    #[test]
+    fn missing_log_path_is_allowed() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let loaded = load_config(file.path()).expect("config should load");
+        assert_eq!(loaded.config.log_path, "");
+    }
+
+    #[test]
+    fn empty_log_path_is_allowed() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+log_path: ""
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let loaded = load_config(file.path()).expect("config should load");
+        assert_eq!(loaded.config.log_path, "");
+    }
+
+    #[test]
+    fn null_log_path_errors() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+log_path: null
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected null log_path");
+        assert!(
+            err.contains("log_path"),
+            "error should name log_path, got: {err}"
         );
     }
 }

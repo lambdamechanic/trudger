@@ -350,10 +350,6 @@ validate_config() {
     printf 'hooks.on_requires_human must not be empty.\n' >&2
     quit "missing_hook_on_requires_human" 1
   fi
-  if [[ -z "$trudger_log_path" ]]; then
-    printf 'log_path must not be empty.\n' >&2
-    quit "missing_log_path" 1
-  fi
   if ! [[ "$review_loop_limit" =~ ^[0-9]+$ ]] || ((review_loop_limit < 1)); then
     printf 'review_loop_limit must be a positive integer (got %s).\n' "$review_loop_limit" >&2
     quit "invalid_review_loop_limit" 1

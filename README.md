@@ -87,7 +87,8 @@ hooks:
 Notes:
 - All configured commands are executed via `bash -lc`.
 - `agent_command` is used for solve; `agent_review_command` is used for review (Trudger appends `resume --last` to the review command arguments).
-- Required keys (non-empty, non-null): `agent_command`, `agent_review_command`, `review_loop_limit`, `log_path`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `commands.reset_task`, `hooks.on_completed`, `hooks.on_requires_human`.
+- Required keys (non-empty, non-null): `agent_command`, `agent_review_command`, `review_loop_limit`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `commands.reset_task`, `hooks.on_completed`, `hooks.on_requires_human`.
+- `log_path` is optional; omit it or set it to an empty string to disable logging.
 - `commands.next_task` is required when no manual task ids are provided.
 - `hooks.on_doctor_setup` is required only for `trudger doctor`.
 - Null values are treated as validation errors for required keys.
