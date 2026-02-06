@@ -21,12 +21,26 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
 
       - name: Install br (beads_rust)
         run: cargo install --git https://github.com/Dicklesworthstone/beads_rust --locked --bin br
 
+      - name: Rust fmt
+        run: cargo fmt --check
+
+      - name: Rust clippy
+        run: cargo clippy --all-targets -- -D warnings
+
       - name: Run Rust tests
         run: cargo test
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Rust coverage (lines + regions)
+        run: cargo llvm-cov --all-targets --ignore-filename-regex 'unit_tests\.rs$' --fail-under-lines 100 --fail-under-regions 100
 
       - name: ShellCheck scripts
         run: |

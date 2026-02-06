@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::{NamedTempFile, TempDir};
 
-use crate::app::{render_prompt, require_file, run_with_cli};
+use crate::app::{main_with_args, render_prompt, require_file, run_with_args, run_with_cli};
 use crate::cli::{parse_manual_tasks, Cli, CliCommand};
 use crate::config::{load_config, Commands, Config, Hooks};
 use crate::doctor::run_doctor_mode;
@@ -18,10 +18,10 @@ use crate::run_loop::{reset_task_on_exit, run_loop, validate_config, Quit, Runti
 use crate::shell::render_args;
 use crate::tmux::{build_tmux_name, TmuxState};
 
-static ENV_MUTEX: Mutex<()> = Mutex::new(());
+pub(crate) static ENV_MUTEX: Mutex<()> = Mutex::new(());
 static ORIGINAL_PATH: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
 
-fn reset_test_env() {
+pub(crate) fn reset_test_env() {
     let original_path = ORIGINAL_PATH.get_or_init(|| env::var_os("PATH"));
     match original_path {
         Some(value) => env::set_var("PATH", value),
@@ -202,6 +202,45 @@ fn log_transition_warns_once_and_disables_after_error() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn log_transition_warns_once_under_concurrency() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+    let temp = TempDir::new().expect("temp dir");
+    let log_dir = temp.path().join("missing-log-dir");
+    let log_path = log_dir.join("trudger.log");
+    let logger = Arc::new(Logger::new(Some(log_path.clone())));
+
+    let threads = 16;
+    let barrier = Arc::new(std::sync::Barrier::new(threads));
+
+    let stderr = capture_stderr(|| {
+        let mut handles = Vec::new();
+        for index in 0..threads {
+            let logger = Arc::clone(&logger);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                logger.log_transition(&format!("msg-{index}"));
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("join");
+        }
+    });
+
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "expected exactly one warning under concurrency, got: {stderr:?}"
+    );
+}
+
 #[test]
 fn render_prompt_strips_frontmatter() {
     let _guard = ENV_MUTEX.lock().unwrap();
@@ -210,6 +249,29 @@ fn render_prompt_strips_frontmatter() {
     writeln!(file, "---\nname: test\n---\nHello\nWorld").expect("write");
     let rendered = render_prompt(file.path()).expect("render");
     assert_eq!(rendered, "Hello\nWorld");
+}
+
+#[test]
+fn render_prompt_errors_when_file_is_missing() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+    let temp = TempDir::new().expect("temp dir");
+    let missing = temp.path().join("missing.md");
+    let err = render_prompt(&missing).expect_err("expected missing prompt error");
+    assert!(
+        err.contains("Failed to read prompt"),
+        "expected read prompt error, got: {err}"
+    );
+}
+
+#[test]
+fn render_prompt_can_return_empty_when_only_frontmatter() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+    let mut file = NamedTempFile::new().expect("temp file");
+    writeln!(file, "---\nname: test\n---").expect("write");
+    let rendered = render_prompt(file.path()).expect("render");
+    assert_eq!(rendered, "");
 }
 
 #[test]
@@ -1516,4 +1578,1916 @@ fn sample_configs_load_and_validate() {
             name
         );
     }
+}
+
+#[test]
+fn main_function_runs_under_test_harness_args() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+    let _ = crate::main();
+}
+
+#[test]
+fn run_with_args_returns_quit_on_cli_parse_failure() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let quit = run_with_args(vec![
+        std::ffi::OsString::from("trudger"),
+        std::ffi::OsString::from("--definitely-not-a-flag"),
+    ])
+    .expect_err("expected cli parse error");
+    assert_eq!(quit.reason, "cli_parse");
+    assert!(quit.code > 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn main_with_args_returns_success_for_doctor_config() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let original_home = env::var_os("HOME");
+    env::set_var("HOME", temp.path());
+
+    let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "exit 0"
+  task_show: "printf 'SHOW'"
+  task_status: |
+    queue="$TRUDGER_DOCTOR_SCRATCH_DIR/status-queue.txt"
+    tmp="$TRUDGER_DOCTOR_SCRATCH_DIR/status-queue.txt.tmp"
+    line=""
+    if [ -f "$queue" ]; then
+      line=$(head -n 1 "$queue" || true)
+      tail -n +2 "$queue" > "$tmp" || true
+      mv "$tmp" "$queue"
+      if [ -n "$line" ]; then printf '%s\n' "$line"; fi
+    fi
+  task_update_in_progress: "exit 0"
+  reset_task: "exit 0"
+review_loop_limit: 1
+hooks:
+  on_completed: "exit 0"
+  on_requires_human: "exit 0"
+  on_doctor_setup: |
+    mkdir -p "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"
+    printf '%s\n' '{"id":"tr-1","status":"open"}' > "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads/issues.jsonl"
+    printf 'open\nin_progress\nopen\nclosed\n' > "$TRUDGER_DOCTOR_SCRATCH_DIR/status-queue.txt"
+"#;
+
+    let mut config_file = NamedTempFile::new().expect("config");
+    config_file
+        .as_file_mut()
+        .write_all(config.as_bytes())
+        .expect("write config");
+
+    let code = main_with_args(vec![
+        std::ffi::OsString::from("trudger"),
+        std::ffi::OsString::from("-c"),
+        config_file.path().as_os_str().to_os_string(),
+        std::ffi::OsString::from("doctor"),
+    ]);
+
+    match original_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    }
+    reset_test_env();
+
+    assert_eq!(code, std::process::ExitCode::SUCCESS);
+}
+
+#[cfg(unix)]
+#[test]
+fn log_transition_disables_after_write_error() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+    let logger = Logger::new(Some(std::path::PathBuf::from("/dev/full")));
+
+    let stderr = capture_stderr(|| {
+        logger.log_transition("first");
+        logger.log_transition("second");
+    });
+
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(lines.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn render_args_falls_back_when_bash_unavailable() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("PATH", temp.path());
+    let rendered = render_args(&["with space".to_string(), "tab\targ".to_string()]);
+    assert!(rendered.ends_with(' '));
+
+    reset_test_env();
+}
+
+#[cfg(unix)]
+#[test]
+fn render_args_falls_back_when_bash_exits_nonzero() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("create bin dir");
+    let bash = bin.join("bash");
+    fs::write(&bash, "#!/usr/bin/env sh\nexit 1\n").expect("write bash");
+    fs::set_permissions(&bash, fs::Permissions::from_mode(0o755)).expect("chmod bash");
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", bin.display(), old_path));
+
+    let rendered = render_args(&["tab\targ".to_string()]);
+    assert!(rendered.ends_with(' '));
+
+    reset_test_env();
+}
+
+#[cfg(unix)]
+#[test]
+fn command_exists_handles_missing_path_and_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("create bin dir");
+
+    let real = bin.join("real");
+    fs::write(&real, "#!/usr/bin/env bash\nexit 0\n").expect("write real");
+    let link = bin.join("link");
+    symlink(&real, &link).expect("symlink");
+    let dangling_target = bin.join("missing-target");
+    let dangling = bin.join("dangling");
+    symlink(&dangling_target, &dangling).expect("symlink dangling");
+
+    env::set_var("PATH", bin.display().to_string());
+    assert!(crate::shell::command_exists("real"));
+    assert!(crate::shell::command_exists("link"));
+    assert!(crate::shell::command_exists("dangling"));
+
+    env::remove_var("PATH");
+    assert!(!crate::shell::command_exists("real"));
+
+    reset_test_env();
+}
+
+#[test]
+fn run_shell_command_noops_when_command_is_empty() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let logger = Logger::new(None);
+    let env = crate::shell::CommandEnv {
+        cwd: None,
+        config_path: "config".to_string(),
+        scratch_dir: None,
+        task_id: None,
+        task_show: None,
+        task_status: None,
+        prompt: None,
+        review_prompt: None,
+        completed: None,
+        needs_human: None,
+    };
+
+    let result = crate::shell::run_shell_command_capture("", "label", "none", &[], &env, &logger)
+        .expect("capture should succeed");
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.stdout, "");
+
+    let exit = crate::shell::run_shell_command_status("", "label", "none", &[], &env, &logger)
+        .expect("status should succeed");
+    assert_eq!(exit, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_shell_command_errors_when_bash_is_missing() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("PATH", temp.path());
+
+    let logger = Logger::new(None);
+    let env = crate::shell::CommandEnv {
+        cwd: None,
+        config_path: "config".to_string(),
+        scratch_dir: None,
+        task_id: None,
+        task_show: None,
+        task_status: None,
+        prompt: None,
+        review_prompt: None,
+        completed: None,
+        needs_human: None,
+    };
+
+    let err = crate::shell::run_shell_command_capture("true", "label", "none", &[], &env, &logger)
+        .expect_err("expected capture failure");
+    assert!(err.contains("Failed to run command"));
+
+    let err = crate::shell::run_shell_command_status("true", "label", "none", &[], &env, &logger)
+        .expect_err("expected status failure");
+    assert!(err.contains("Failed to run command"));
+
+    reset_test_env();
+}
+
+#[test]
+fn quit_sanitizes_empty_reason_and_exit_code_is_exposed() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let logger = Logger::new(None);
+    let quit = crate::run_loop::quit(&logger, "", 7);
+    let _code = quit.exit_code();
+}
+
+#[test]
+fn validate_config_rejects_missing_and_empty_values() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let base = Config {
+        agent_command: "agent".to_string(),
+        agent_review_command: "review".to_string(),
+        commands: Commands {
+            next_task: Some("next-task".to_string()),
+            task_show: "task-show".to_string(),
+            task_status: "task-status".to_string(),
+            task_update_in_progress: "task-update".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "hook --done".to_string(),
+            on_requires_human: "hook --human".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut config = base.clone();
+    config.agent_command = "  ".to_string();
+    assert!(validate_config(&config, &[]).is_err());
+
+    let mut config = base.clone();
+    config.agent_review_command = "\t".to_string();
+    assert!(validate_config(&config, &[]).is_err());
+
+    let mut config = base.clone();
+    config.review_loop_limit = 0;
+    assert!(validate_config(&config, &[]).is_err());
+
+    let mut config = base.clone();
+    config.commands.next_task = Some("".to_string());
+    assert!(validate_config(&config, &[]).is_err());
+
+    let mut config = base.clone();
+    config.commands.next_task = None;
+    assert!(validate_config(&config, &[]).is_err());
+
+    let mut config = base.clone();
+    config.commands.next_task = Some("".to_string());
+    assert!(validate_config(&config, &["tr-1".to_string()]).is_ok());
+
+    let mut config = base.clone();
+    config.commands.task_show = "".to_string();
+    assert!(validate_config(&config, &[]).is_err());
+
+    let mut config = base.clone();
+    config.commands.task_status = "".to_string();
+    assert!(validate_config(&config, &[]).is_err());
+
+    let mut config = base.clone();
+    config.commands.task_update_in_progress = "".to_string();
+    assert!(validate_config(&config, &[]).is_err());
+
+    let mut config = base.clone();
+    config.commands.reset_task = "".to_string();
+    assert!(validate_config(&config, &[]).is_err());
+
+    let mut config = base.clone();
+    config.hooks.on_completed = "".to_string();
+    assert!(validate_config(&config, &[]).is_err());
+
+    let mut config = base.clone();
+    config.hooks.on_requires_human = "".to_string();
+    assert!(validate_config(&config, &[]).is_err());
+}
+
+#[test]
+fn run_loop_errors_when_next_task_command_missing() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let config = Config {
+        agent_command: "agent".to_string(),
+        agent_review_command: "agent-review".to_string(),
+        commands: Commands {
+            next_task: None,
+            task_show: "task-show".to_string(),
+            task_status: "task-status".to_string(),
+            task_update_in_progress: "task-update".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected idle");
+    assert_eq!(err.code, 0);
+}
+
+#[test]
+fn run_loop_propagates_next_task_exit_code_other_than_1() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+
+    env::set_var("NEXT_TASK_EXIT_CODE", "2");
+    env::set_var("NEXT_TASK_OUTPUT", "tr-1");
+
+    let config = Config {
+        agent_command: "agent".to_string(),
+        agent_review_command: "agent-review".to_string(),
+        commands: Commands {
+            next_task: Some("next-task".to_string()),
+            task_show: "task-show".to_string(),
+            task_status: "task-status".to_string(),
+            task_update_in_progress: "task-update".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected next_task failure");
+    assert_eq!(err.code, 2);
+}
+
+#[test]
+fn run_loop_errors_when_selected_task_has_empty_status() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+
+    env::set_var("NEXT_TASK_OUTPUT", "tr-1");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "\n").expect("write status queue");
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+
+    let config = Config {
+        agent_command: "agent".to_string(),
+        agent_review_command: "agent-review".to_string(),
+        commands: Commands {
+            next_task: Some("next-task".to_string()),
+            task_show: "task-show".to_string(),
+            task_status: "task-status".to_string(),
+            task_update_in_progress: "task-update".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected missing status");
+    assert_eq!(err.code, 1);
+}
+
+#[test]
+fn run_loop_errors_when_manual_task_is_empty_string() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let config = Config {
+        agent_command: "agent".to_string(),
+        agent_review_command: "agent-review".to_string(),
+        commands: Commands {
+            next_task: None,
+            task_show: "task-show".to_string(),
+            task_status: "printf 'open\\n'".to_string(),
+            task_update_in_progress: "task-update".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: vec!["".to_string()],
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected empty task");
+    assert_eq!(err.code, 0);
+}
+
+#[test]
+fn run_loop_errors_when_update_in_progress_fails() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let config = Config {
+        agent_command: "agent".to_string(),
+        agent_review_command: "agent-review".to_string(),
+        commands: Commands {
+            next_task: Some("printf 'tr-1'".to_string()),
+            task_show: "task-show".to_string(),
+            task_status: "printf 'open\\n'".to_string(),
+            task_update_in_progress: "exit 1".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected update failure");
+    assert_eq!(err.code, 1);
+}
+
+#[test]
+fn run_loop_errors_when_task_show_fails_during_solve() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let config = Config {
+        agent_command: "agent".to_string(),
+        agent_review_command: "agent-review".to_string(),
+        commands: Commands {
+            next_task: Some("printf 'tr-1'".to_string()),
+            task_show: "exit 1".to_string(),
+            task_status: "printf 'open\\n'".to_string(),
+            task_update_in_progress: "true".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected show failure");
+    assert_eq!(err.code, 1);
+}
+
+#[test]
+fn run_loop_errors_when_agent_solve_fails() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let config = Config {
+        agent_command: "exit 1".to_string(),
+        agent_review_command: "agent-review".to_string(),
+        commands: Commands {
+            next_task: Some("printf 'tr-1'".to_string()),
+            task_show: "printf 'SHOW\\n'".to_string(),
+            task_status: "printf 'open\\n'".to_string(),
+            task_update_in_progress: "true".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected solve failure");
+    assert_eq!(err.code, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn run_loop_errors_when_task_show_fails_during_review() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let call_count = temp.path().join("task-show-count.txt");
+    let task_show = temp.path().join("task-show");
+    fs::write(
+        &task_show,
+        format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\ncount=0\nif [[ -f \"{0}\" ]]; then count=$(cat \"{0}\" || echo 0); fi\ncount=$((count+1))\necho \"$count\" > \"{0}\"\nif [[ $count -eq 1 ]]; then echo \"SHOW1\"; exit 0; fi\nexit 1\n",
+            call_count.display()
+        ),
+    )
+    .expect("write task-show");
+    fs::set_permissions(&task_show, fs::Permissions::from_mode(0o755)).expect("chmod task-show");
+
+    let config = Config {
+        agent_command: "true".to_string(),
+        agent_review_command: "true".to_string(),
+        commands: Commands {
+            next_task: Some("printf 'tr-1'".to_string()),
+            task_show: task_show.display().to_string(),
+            task_status: "printf 'open\\n'".to_string(),
+            task_update_in_progress: "true".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected review show failure");
+    assert_eq!(err.code, 1);
+}
+
+#[test]
+fn run_loop_errors_when_agent_review_fails() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let config = Config {
+        agent_command: "true".to_string(),
+        agent_review_command: "exit 1".to_string(),
+        commands: Commands {
+            next_task: Some("printf 'tr-1'".to_string()),
+            task_show: "printf 'SHOW\\n'".to_string(),
+            task_status: "printf 'open\\n'".to_string(),
+            task_update_in_progress: "true".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected review failure");
+    assert_eq!(err.code, 1);
+}
+
+#[test]
+fn run_loop_errors_when_on_completed_hook_fails() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+
+    env::set_var("NEXT_TASK_OUTPUT", "tr-1");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "open\nclosed\n").expect("write status queue");
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+
+    let config = Config {
+        agent_command: "true".to_string(),
+        agent_review_command: "true".to_string(),
+        commands: Commands {
+            next_task: Some("next-task".to_string()),
+            task_show: "task-show".to_string(),
+            task_status: "task-status".to_string(),
+            task_update_in_progress: "true".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "exit 1".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected hook failure");
+    assert_eq!(err.code, 1);
+}
+
+#[test]
+fn run_loop_errors_when_on_requires_human_hook_fails_on_blocked_status() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+
+    env::set_var("NEXT_TASK_OUTPUT", "tr-1");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "open\nblocked\n").expect("write status queue");
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+
+    let config = Config {
+        agent_command: "true".to_string(),
+        agent_review_command: "true".to_string(),
+        commands: Commands {
+            next_task: Some("next-task".to_string()),
+            task_show: "task-show".to_string(),
+            task_status: "task-status".to_string(),
+            task_update_in_progress: "true".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "exit 1".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 2,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected hook failure");
+    assert_eq!(err.code, 1);
+}
+
+#[test]
+fn run_loop_errors_when_blocked_status_update_fails_after_exhausting_review_loop() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+
+    env::set_var("NEXT_TASK_OUTPUT", "tr-1");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "open\nopen\n").expect("write status queue");
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+
+    let config = Config {
+        agent_command: "true".to_string(),
+        agent_review_command: "true".to_string(),
+        commands: Commands {
+            next_task: Some("next-task".to_string()),
+            task_show: "task-show".to_string(),
+            task_status: "task-status".to_string(),
+            task_update_in_progress: "if [[ \"$*\" == *\"blocked\"* ]]; then exit 1; fi; exit 0"
+                .to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "true".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 1,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected blocked update failure");
+    assert_eq!(err.code, 1);
+}
+
+#[test]
+fn run_loop_errors_when_on_requires_human_hook_fails_after_exhausting_review_loop() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+
+    env::set_var("NEXT_TASK_OUTPUT", "tr-1");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "open\nopen\n").expect("write status queue");
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+
+    let config = Config {
+        agent_command: "true".to_string(),
+        agent_review_command: "true".to_string(),
+        commands: Commands {
+            next_task: Some("next-task".to_string()),
+            task_show: "task-show".to_string(),
+            task_status: "task-status".to_string(),
+            task_update_in_progress: "true".to_string(),
+            reset_task: "reset-task".to_string(),
+        },
+        hooks: Hooks {
+            on_completed: "true".to_string(),
+            on_requires_human: "exit 1".to_string(),
+            on_doctor_setup: None,
+        },
+        review_loop_limit: 1,
+        log_path: "".to_string(),
+    };
+
+    let mut state = RuntimeState {
+        config,
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    let err = run_loop(&mut state).expect_err("expected hook failure");
+    assert_eq!(err.code, 1);
+}
+
+#[test]
+fn reset_task_on_exit_is_noop_for_ok_or_missing_task_id() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let logger = Logger::new(None);
+    let state = RuntimeState {
+        config: Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "review".to_string(),
+            commands: Commands {
+                next_task: None,
+                task_show: "task-show".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: "reset-task".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 2,
+            log_path: "".to_string(),
+        },
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger,
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: None,
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    reset_task_on_exit(&state, &Ok(()));
+    reset_task_on_exit(
+        &state,
+        &Err(Quit {
+            code: 1,
+            reason: "error".to_string(),
+        }),
+    );
+}
+
+#[test]
+fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let state = RuntimeState {
+        config: Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "review".to_string(),
+            commands: Commands {
+                next_task: None,
+                task_show: "task-show".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: "exit 1".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 2,
+            log_path: "".to_string(),
+        },
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: Some("tr-1".to_string()),
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    reset_task_on_exit(
+        &state,
+        &Err(Quit {
+            code: 1,
+            reason: "error".to_string(),
+        }),
+    );
+}
+
+#[test]
+fn run_with_cli_bootstraps_when_default_config_missing() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let err = run_with_cli(Cli {
+        config: None,
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected bootstrap missing config error");
+    assert_eq!(err.code, 1);
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
+fn run_with_cli_rejects_invalid_manual_task_values() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let err = run_with_cli(Cli {
+        config: None,
+        task: vec!["tr-1,,tr-2".to_string()],
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected manual task parse error");
+    assert_eq!(err.code, 1);
+}
+
+#[test]
+fn run_with_cli_errors_when_home_missing() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let old_home = env::var_os("HOME");
+    env::remove_var("HOME");
+
+    let err = run_with_cli(Cli {
+        config: None,
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected missing HOME error");
+    assert_eq!(err.code, 1);
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
+fn run_with_cli_errors_when_explicit_config_is_missing() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let missing = temp.path().join("missing.yml");
+    let err = run_with_cli(Cli {
+        config: Some(missing.clone()),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected missing config error");
+    assert_eq!(err.code, 1);
+    assert!(err.reason.contains(&missing.display().to_string()));
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
+fn run_with_cli_errors_when_config_is_invalid_yaml() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(&config_path, "agent_command: [").expect("write config");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected invalid config error");
+    assert_eq!(err.code, 1);
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
+fn run_with_cli_errors_when_validate_config_fails_and_log_path_is_empty() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+agent_command: "agent"
+agent_review_command: "agent-review"
+commands:
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_in_progress: "task-update"
+  reset_task: "reset-task"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+"#,
+    )
+    .expect("write config");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected validate_config failure");
+    assert_eq!(err.code, 1);
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
+fn run_with_cli_errors_when_prompt_files_missing() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+agent_command: "agent"
+agent_review_command: "agent-review"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_in_progress: "task-update"
+  reset_task: "reset-task"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+"#,
+    )
+    .expect("write config");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path.clone()),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected prompt missing error");
+    assert_eq!(err.code, 1);
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected review prompt missing error");
+    assert_eq!(err.code, 1);
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_cli_errors_when_trudge_prompt_is_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+agent_command: "agent"
+agent_review_command: "agent-review"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_in_progress: "task-update"
+  reset_task: "reset-task"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+"#,
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    let trudge_prompt = prompts_dir.join("trudge.md");
+    let review_prompt = prompts_dir.join("trudge_review.md");
+    fs::write(&trudge_prompt, "hello").expect("write trudge.md");
+    fs::write(&review_prompt, "review").expect("write trudge_review.md");
+
+    fs::set_permissions(&trudge_prompt, fs::Permissions::from_mode(0o000))
+        .expect("chmod trudge.md");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected trudge prompt read error");
+    assert_eq!(err.code, 1);
+    assert!(
+        err.reason.contains("Failed to read prompt"),
+        "expected prompt read error, got: {}",
+        err.reason
+    );
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[cfg(unix)]
+#[test]
+fn run_with_cli_errors_when_review_prompt_is_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+agent_command: "agent"
+agent_review_command: "agent-review"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_in_progress: "task-update"
+  reset_task: "reset-task"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+"#,
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    let trudge_prompt = prompts_dir.join("trudge.md");
+    let review_prompt = prompts_dir.join("trudge_review.md");
+    fs::write(&trudge_prompt, "hello").expect("write trudge.md");
+    fs::write(&review_prompt, "review").expect("write trudge_review.md");
+
+    fs::set_permissions(&review_prompt, fs::Permissions::from_mode(0o000))
+        .expect("chmod trudge_review.md");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected review prompt read error");
+    assert_eq!(err.code, 1);
+    assert!(
+        err.reason.contains("Failed to read prompt"),
+        "expected prompt read error, got: {}",
+        err.reason
+    );
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
+fn run_with_cli_can_force_error_and_ctrlc_handler_error_is_non_fatal() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    env::set_var("TRUDGER_TEST_FORCE_ERR", "1");
+
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+agent_command: "true"
+agent_review_command: "true"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_in_progress: "true"
+  reset_task: "true"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+log_path: ""
+"#,
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+    fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
+
+    let cli = Cli {
+        config: Some(config_path.clone()),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    };
+
+    let err = run_with_cli(cli).expect_err("expected forced error");
+    assert_eq!(err.code, 1);
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected forced error");
+    assert_eq!(err.code, 1);
+
+    env::remove_var("TRUDGER_TEST_FORCE_ERR");
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[cfg(unix)]
+#[test]
+fn ctrlc_handler_runs_on_sigint() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    env::set_var("TRUDGER_TEST_FORCE_ERR", "1");
+
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+agent_command: "true"
+agent_review_command: "true"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_in_progress: "true"
+  reset_task: "true"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+log_path: ""
+"#,
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+    fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
+
+    let _ = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    });
+
+    let pid = std::process::id().to_string();
+    let _ = std::process::Command::new("kill")
+        .args(["-s", "INT", &pid])
+        .status()
+        .expect("kill");
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    env::remove_var("TRUDGER_TEST_FORCE_ERR");
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
+fn run_with_cli_runs_run_loop_and_restores_tmux() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+
+    env::set_var("NEXT_TASK_EXIT_CODE", "1");
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+agent_command: "true"
+agent_review_command: "true"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_in_progress: "true"
+  reset_task: "true"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+log_path: ""
+"#,
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+    fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected idle exit");
+    assert_eq!(err.code, 0);
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_state_enabled_reads_title_and_updates_pane_name() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("create bin dir");
+    let tmux_log = temp.path().join("tmux.log");
+
+    let tmux_script = bin.join("tmux");
+    fs::write(
+        &tmux_script,
+        format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\nlog=\"{}\"\nif [[ \"${{1-}}\" == \"display-message\" ]]; then\n  fmt=\"${{3-}}\"\n  if [[ \"$fmt\" == \"#S\" ]]; then printf '%s\\n' 'session-1'; exit 0; fi\n  if [[ \"$fmt\" == \"#{{pane_title}}\" ]]; then printf '%s\\n' 'base COMPLETED [tr-1] SOLVING tr-2'; exit 0; fi\n  exit 1\nfi\nif [[ \"${{1-}}\" == \"select-pane\" ]]; then\n  printf 'select %s\\n' \"$*\" >> \"$log\"\n  exit 0\nfi\nexit 1\n",
+            tmux_log.display()
+        ),
+    )
+    .expect("write tmux script");
+    fs::set_permissions(&tmux_script, fs::Permissions::from_mode(0o755)).expect("chmod tmux");
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", bin.display(), old_path));
+    env::set_var("TMUX", "1");
+    env::remove_var("TRUDGER_TMUX_SESSION_NAME");
+    env::remove_var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE");
+
+    let state = TmuxState::new();
+    state.update_name("SOLVING", "tr-9", &["tr-1".to_string()], &[]);
+    state.restore();
+
+    let log_contents = fs::read_to_string(&tmux_log).unwrap_or_default();
+    assert!(log_contents.contains("-T base"));
+    assert!(log_contents.contains("SOLVING tr-9"));
+    assert!(log_contents.contains("SOLVING tr-2"));
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_state_ignores_tmux_display_failures() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("create bin dir");
+    let tmux_log = temp.path().join("tmux.log");
+
+    let tmux_script = bin.join("tmux");
+    fs::write(
+        &tmux_script,
+        format!(
+            "#!/usr/bin/env sh\nset -eu\nlog=\"{}\"\nif [ \"${{1-}}\" = \"display-message\" ]; then exit 1; fi\nif [ \"${{1-}}\" = \"select-pane\" ]; then\n  printf 'select %s\\n' \"$*\" >> \"$log\"\n  exit 0\nfi\nexit 1\n",
+            tmux_log.display()
+        ),
+    )
+    .expect("write tmux script");
+    fs::set_permissions(&tmux_script, fs::Permissions::from_mode(0o755)).expect("chmod tmux");
+
+    let hostname_script = bin.join("hostname");
+    fs::write(
+        &hostname_script,
+        "#!/usr/bin/env sh\nset -eu\nprintf '%s\\n' 'myhost'\nexit 0\n",
+    )
+    .expect("write hostname script");
+    fs::set_permissions(&hostname_script, fs::Permissions::from_mode(0o755))
+        .expect("chmod hostname");
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", bin.display(), old_path));
+    env::set_var("TMUX", "1");
+    env::remove_var("TRUDGER_TMUX_SESSION_NAME");
+    env::remove_var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE");
+
+    let _state = TmuxState::new();
+
+    let log_contents = fs::read_to_string(&tmux_log).unwrap_or_default();
+    assert!(log_contents.contains("myhost"));
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_state_default_base_name_uses_hostname_fallbacks() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("create bin dir");
+    let tmux_log = temp.path().join("tmux.log");
+
+    let tmux_script = bin.join("tmux");
+    fs::write(
+        &tmux_script,
+        format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\nlog=\"{}\"\nif [[ \"${{1-}}\" == \"display-message\" ]]; then\n  fmt=\"${{3-}}\"\n  if [[ \"$fmt\" == \"#S\" ]]; then printf '%s\\n' 'session-1'; exit 0; fi\n  if [[ \"$fmt\" == \"#{{pane_title}}\" ]]; then printf '%s\\n' ''; exit 0; fi\n  exit 1\nfi\nif [[ \"${{1-}}\" == \"select-pane\" ]]; then\n  printf 'select %s\\n' \"$*\" >> \"$log\"\n  exit 0\nfi\nexit 1\n",
+            tmux_log.display()
+        ),
+    )
+    .expect("write tmux script");
+    fs::set_permissions(&tmux_script, fs::Permissions::from_mode(0o755)).expect("chmod tmux");
+
+    let hostname_script = bin.join("hostname");
+    fs::write(
+        &hostname_script,
+        "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${1-}\" == \"-s\" ]]; then\n  printf '%s\\n' ''\n  exit 0\nfi\nprintf '%s\\n' 'myhost'\nexit 0\n",
+    )
+    .expect("write hostname script");
+    fs::set_permissions(&hostname_script, fs::Permissions::from_mode(0o755))
+        .expect("chmod hostname");
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", bin.display(), old_path));
+    env::set_var("TMUX", "1");
+    env::remove_var("TRUDGER_TMUX_SESSION_NAME");
+    env::remove_var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE");
+
+    let state = TmuxState::new();
+    state.restore();
+
+    let log_contents = fs::read_to_string(&tmux_log).unwrap_or_default();
+    assert!(log_contents.contains("myhost"));
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_state_hostname_falls_back_to_default_on_failures() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("create bin dir");
+    let tmux_log = temp.path().join("tmux.log");
+
+    let tmux_script = bin.join("tmux");
+    fs::write(
+        &tmux_script,
+        format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\nlog=\"{}\"\nif [[ \"${{1-}}\" == \"display-message\" ]]; then\n  fmt=\"${{3-}}\"\n  if [[ \"$fmt\" == \"#S\" ]]; then printf '%s\\n' 'session-1'; exit 0; fi\n  if [[ \"$fmt\" == \"#{{pane_title}}\" ]]; then printf '%s\\n' ''; exit 0; fi\n  exit 1\nfi\nif [[ \"${{1-}}\" == \"select-pane\" ]]; then\n  printf 'select %s\\n' \"$*\" >> \"$log\"\n  exit 0\nfi\nexit 1\n",
+            tmux_log.display()
+        ),
+    )
+    .expect("write tmux script");
+    fs::set_permissions(&tmux_script, fs::Permissions::from_mode(0o755)).expect("chmod tmux");
+
+    let hostname_script = bin.join("hostname");
+    fs::write(
+        &hostname_script,
+        "#!/usr/bin/env bash\nset -euo pipefail\nexit 1\n",
+    )
+    .expect("write hostname script");
+    fs::set_permissions(&hostname_script, fs::Permissions::from_mode(0o755))
+        .expect("chmod hostname");
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", bin.display(), old_path));
+    env::set_var("TMUX", "1");
+    env::remove_var("TRUDGER_TMUX_SESSION_NAME");
+    env::remove_var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE");
+
+    let _state = TmuxState::new();
+
+    let log_contents = fs::read_to_string(&tmux_log).unwrap_or_default();
+    assert!(log_contents.contains("host"));
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_state_uses_env_session_name_and_title_when_set() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("create bin dir");
+    let tmux_log = temp.path().join("tmux.log");
+
+    let tmux_script = bin.join("tmux");
+    fs::write(
+        &tmux_script,
+        format!(
+            "#!/usr/bin/env sh\nset -eu\nlog=\"{}\"\nif [ \"${{1-}}\" = \"display-message\" ]; then\n  echo \"unexpected display-message\" >&2\n  exit 2\nfi\nif [ \"${{1-}}\" = \"select-pane\" ]; then\n  printf 'select %s\\n' \"$*\" >> \"$log\"\n  exit 0\nfi\nexit 1\n",
+            tmux_log.display()
+        ),
+    )
+    .expect("write tmux script");
+    fs::set_permissions(&tmux_script, fs::Permissions::from_mode(0o755)).expect("chmod tmux");
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", bin.display(), old_path));
+    env::set_var("TMUX", "1");
+    env::set_var("TRUDGER_TMUX_SESSION_NAME", "session-from-env");
+    env::set_var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE", "title-from-env");
+
+    let state = TmuxState::new();
+    state.restore();
+
+    let log_contents = fs::read_to_string(&tmux_log).unwrap_or_default();
+    assert!(
+        log_contents.contains("select select-pane -T title-from-env"),
+        "expected pane title select, got:\n{log_contents}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_state_env_vars_whitespace_fall_back_to_tmux_display() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("create bin dir");
+    let tmux_log = temp.path().join("tmux.log");
+
+    let tmux_script = bin.join("tmux");
+    fs::write(
+        &tmux_script,
+        format!(
+            "#!/usr/bin/env sh\nset -eu\nlog=\"{}\"\nif [ \"${{1-}}\" = \"display-message\" ]; then\n  fmt=\"${{3-}}\"\n  if [ \"$fmt\" = \"#S\" ]; then printf '%s\\n' 'session-1'; exit 0; fi\n  if [ \"$fmt\" = \"#{{pane_title}}\" ]; then printf '%s\\n' 'title-from-tmux'; exit 0; fi\n  exit 1\nfi\nif [ \"${{1-}}\" = \"select-pane\" ]; then\n  printf 'select %s\\n' \"$*\" >> \"$log\"\n  exit 0\nfi\nexit 1\n",
+            tmux_log.display()
+        ),
+    )
+    .expect("write tmux script");
+    fs::set_permissions(&tmux_script, fs::Permissions::from_mode(0o755)).expect("chmod tmux");
+
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", bin.display(), old_path));
+    env::set_var("TMUX", "1");
+    env::set_var("TRUDGER_TMUX_SESSION_NAME", "   ");
+    env::set_var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE", "  ");
+
+    let state = TmuxState::new();
+    state.restore();
+
+    assert_eq!(
+        env::var("TRUDGER_TMUX_SESSION_NAME").unwrap_or_default(),
+        "session-1"
+    );
+    assert_eq!(
+        env::var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE").unwrap_or_default(),
+        "title-from-tmux"
+    );
+
+    let log_contents = fs::read_to_string(&tmux_log).unwrap_or_default();
+    assert!(
+        log_contents.contains("select select-pane -T title-from-tmux"),
+        "expected pane title select, got:\n{log_contents}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn tmux_state_tolerates_unexecutable_tmux_binary() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("create bin dir");
+
+    let tmux_script = bin.join("tmux");
+    fs::write(&tmux_script, "#!/usr/bin/env sh\nexit 0\n").expect("write tmux script");
+    fs::set_permissions(&tmux_script, fs::Permissions::from_mode(0o644)).expect("chmod tmux");
+
+    env::set_var("PATH", bin.display().to_string());
+    env::set_var("TMUX", "1");
+    env::set_var("TRUDGER_TMUX_SESSION_NAME", " ");
+    env::set_var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE", " ");
+
+    let state = TmuxState::new();
+    state.update_name("SOLVING", "tr-1", &[], &[]);
+    state.restore();
 }

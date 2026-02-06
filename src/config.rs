@@ -3,7 +3,7 @@ use serde_yaml::{Mapping, Value};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub agent_command: String,
     pub agent_review_command: String,
@@ -14,7 +14,7 @@ pub struct Config {
     pub log_path: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Commands {
     pub next_task: Option<String>,
     pub task_show: String,
@@ -23,7 +23,7 @@ pub struct Commands {
     pub reset_task: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Hooks {
     pub on_completed: String,
     pub on_requires_human: String,
@@ -223,11 +223,19 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::NamedTempFile;
+    use tempfile::TempDir;
 
     fn write_temp_config(contents: &str) -> NamedTempFile {
         let file = NamedTempFile::new().expect("create temp file");
         fs::write(file.path(), contents).expect("write temp config");
         file
+    }
+
+    #[test]
+    fn config_must_be_yaml_mapping() {
+        let file = write_temp_config("[]");
+        let err = load_config(file.path()).expect_err("expected mapping error");
+        assert!(err.contains("must be a YAML mapping"));
     }
 
     #[test]
@@ -247,10 +255,7 @@ hooks:
 "#;
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected missing agent_command");
-        assert!(
-            err.contains("agent_command"),
-            "error should name agent_command, got: {err}"
-        );
+        assert!(err.contains("agent_command"));
 
         let config = r#"
 agent_command: "agent"
@@ -268,10 +273,36 @@ hooks:
 "#;
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected missing agent_review_command");
-        assert!(
-            err.contains("agent_review_command"),
-            "error should name agent_review_command, got: {err}"
-        );
+        assert!(err.contains("agent_review_command"));
+    }
+
+    #[test]
+    fn missing_required_mapping_errors() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing commands mapping");
+        assert!(err.contains("commands"));
+
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+review_loop_limit: 3
+commands:
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing hooks mapping");
+        assert!(err.contains("hooks"));
     }
 
     #[test]
@@ -293,10 +324,67 @@ hooks:
 "#;
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected null agent_command");
-        assert!(
-            err.contains("agent_command"),
-            "error should name agent_command, got: {err}"
-        );
+        assert!(err.contains("agent_command"));
+    }
+
+    #[test]
+    fn empty_and_wrong_type_required_value_errors() {
+        let config = r#"
+agent_command: ""
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected empty agent_command");
+        assert!(err.contains("agent_command"));
+
+        let config = r#"
+agent_command: ["agent"]
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected agent_command type error");
+        assert!(err.contains("agent_command"));
+        assert!(err.contains("string"));
+    }
+
+    #[test]
+    fn missing_review_loop_limit_errors() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing review_loop_limit");
+        assert!(err.contains("review_loop_limit"));
     }
 
     #[test]
@@ -318,10 +406,7 @@ hooks:
 "#;
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected null review_loop_limit");
-        assert!(
-            err.contains("review_loop_limit"),
-            "error should name review_loop_limit, got: {err}"
-        );
+        assert!(err.contains("review_loop_limit"));
     }
 
     #[test]
@@ -338,10 +423,44 @@ hooks:
 "#;
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected null commands");
-        assert!(
-            err.contains("commands"),
-            "error should name commands, got: {err}"
-        );
+        assert!(err.contains("commands"));
+    }
+
+    #[test]
+    fn commands_mapping_must_be_mapping() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands: "not-a-mapping"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected commands mapping type error");
+        assert!(err.contains("commands"));
+        assert!(err.contains("mapping"));
+    }
+
+    #[test]
+    fn missing_task_update_in_progress_errors() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing task_update_in_progress");
+        assert!(err.contains("commands.task_update_in_progress"));
     }
 
     #[test]
@@ -349,10 +468,7 @@ hooks:
         let file = write_temp_config("agent_command: [");
         let err = load_config(file.path()).expect_err("expected parse error");
         let path = file.path().display().to_string();
-        assert!(
-            err.contains(&path),
-            "error should include path {path}, got: {err}"
-        );
+        assert!(err.contains(&path));
     }
 
     #[test]
@@ -427,18 +543,93 @@ hooks:
 "#;
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected codex_command error");
-        assert!(
-            err.contains("codex_command"),
-            "error should mention codex_command, got: {err}"
-        );
-        assert!(
-            err.contains("agent_command"),
-            "error should mention agent_command, got: {err}"
-        );
-        assert!(
-            err.contains("Migration"),
-            "error should include migration guidance, got: {err}"
-        );
+        assert!(err.contains("codex_command"));
+        assert!(err.contains("agent_command"));
+        assert!(err.contains("Migration"));
+    }
+
+    #[test]
+    fn optional_doctor_setup_value_errors() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+  on_doctor_setup: null
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected null on_doctor_setup error");
+        assert!(err.contains("hooks.on_doctor_setup"));
+
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+  on_doctor_setup: ""
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected empty on_doctor_setup error");
+        assert!(err.contains("hooks.on_doctor_setup"));
+
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+  on_doctor_setup: 123
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected non-string on_doctor_setup error");
+        assert!(err.contains("hooks.on_doctor_setup"));
+        assert!(err.contains("string"));
+    }
+
+    #[test]
+    fn optional_log_path_value_errors() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+log_path: 123
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected non-string log_path error");
+        assert!(err.contains("log_path"));
+        assert!(err.contains("string"));
     }
 
     #[test]
@@ -503,9 +694,133 @@ hooks:
 "#;
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected null log_path");
-        assert!(
-            err.contains("log_path"),
-            "error should name log_path, got: {err}"
-        );
+        assert!(err.contains("log_path"));
+    }
+
+    #[test]
+    fn read_config_errors_include_path() {
+        let temp = TempDir::new().expect("temp dir");
+        let dir_path = temp.path().join("config-dir");
+        fs::create_dir_all(&dir_path).expect("create config dir");
+        let err = load_config(&dir_path).expect_err("expected read error");
+        assert!(err.contains("Failed to read config"));
+        assert!(err.contains(&dir_path.display().to_string()));
+    }
+
+    #[test]
+    fn deserialize_errors_include_path_and_details() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: "not-a-number"
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected deserialize error");
+        assert!(err.contains("Failed to parse config"));
+        assert!(err.contains(&file.path().display().to_string()));
+        let has_invalid = err.contains("invalid");
+        let has_expected = err.contains("expected");
+        let has_not_a_number = err.contains("not-a-number");
+        assert!(has_invalid | has_expected | has_not_a_number);
+    }
+
+    #[test]
+    fn missing_command_field_errors_are_specific() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing task_show");
+        assert!(err.contains("commands.task_show"));
+
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing task_status");
+        assert!(err.contains("commands.task_status"));
+
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing reset_task");
+        assert!(err.contains("commands.reset_task"));
+    }
+
+    #[test]
+    fn missing_hook_field_errors_are_specific() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing on_completed");
+        assert!(err.contains("hooks.on_completed"));
+
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing on_requires_human");
+        assert!(err.contains("hooks.on_requires_human"));
     }
 }

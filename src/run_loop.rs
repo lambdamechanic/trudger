@@ -679,3 +679,548 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         state.current_task_status = None;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn base_state(temp: &TempDir) -> RuntimeState {
+        RuntimeState {
+            config: Config {
+                agent_command: "true".to_string(),
+                agent_review_command: "true".to_string(),
+                commands: crate::config::Commands {
+                    next_task: None,
+                    task_show: "true".to_string(),
+                    task_status: "true".to_string(),
+                    task_update_in_progress: "true".to_string(),
+                    reset_task: "true".to_string(),
+                },
+                hooks: crate::config::Hooks {
+                    on_completed: "true".to_string(),
+                    on_requires_human: "true".to_string(),
+                    on_doctor_setup: None,
+                },
+                review_loop_limit: 1,
+                log_path: "".to_string(),
+            },
+            config_path: temp.path().join("trudger.yml"),
+            prompt_trudge: "prompt".to_string(),
+            prompt_review: "review".to_string(),
+            logger: Logger::new(None),
+            tmux: TmuxState::disabled(),
+            interrupt_flag: Arc::new(AtomicBool::new(false)),
+            manual_tasks: Vec::new(),
+            completed_tasks: Vec::new(),
+            needs_human_tasks: Vec::new(),
+            current_task_id: None,
+            current_task_show: None,
+            current_task_status: None,
+        }
+    }
+
+    #[test]
+    fn run_hook_is_noop_for_empty_command() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let state = base_state(&temp);
+
+        run_hook(&state, "", "tr-1", "hook").expect("hook should succeed");
+    }
+
+    #[test]
+    fn task_status_errors_on_nonzero_exit() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.task_status = "exit 2".to_string();
+
+        let err = run_task_status(&mut state, "tr-1").expect_err("expected task_status failure");
+        assert!(err.contains("task_status failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_show_propagates_spawn_errors() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+
+        std::env::set_var("PATH", temp.path());
+        let err = run_task_show(&mut state, "tr-1", &[]).expect_err("expected spawn error");
+        assert!(err.contains("Failed to run command"));
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_status_propagates_spawn_errors() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+
+        std::env::set_var("PATH", temp.path());
+        let err = run_task_status(&mut state, "tr-1").expect_err("expected spawn error");
+        assert!(err.contains("Failed to run command"));
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_update_propagates_spawn_errors() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let state = base_state(&temp);
+
+        std::env::set_var("PATH", temp.path());
+        let err = update_task_status(&state, "tr-1", "in_progress").expect_err("spawn error");
+        assert!(err.contains("Failed to run command"));
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reset_task_propagates_spawn_errors() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let state = base_state(&temp);
+
+        std::env::set_var("PATH", temp.path());
+        let err = reset_task(&state, "tr-1").expect_err("spawn error");
+        assert!(err.contains("Failed to run command"));
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_solve_propagates_spawn_errors() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let state = base_state(&temp);
+
+        std::env::set_var("PATH", temp.path());
+        let err = run_agent_solve(&state, &[]).expect_err("spawn error");
+        assert!(err.contains("Failed to run command"));
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_review_propagates_spawn_errors() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let state = base_state(&temp);
+
+        std::env::set_var("PATH", temp.path());
+        let err = run_agent_review(&state).expect_err("spawn error");
+        assert!(err.contains("Failed to run command"));
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn next_task_spawn_errors_are_wrapped_in_quit() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("next-task".to_string());
+
+        std::env::set_var("PATH", temp.path());
+        let quit = get_next_task_id(&state).expect_err("expected quit");
+        assert_eq!(quit.code, 1);
+        assert!(quit.reason.starts_with("next_task_failed:"));
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn ensure_task_ready_wraps_task_status_errors_in_quit() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.task_status = "exit 2".to_string();
+
+        let quit = ensure_task_ready(&mut state, "tr-1").expect_err("expected quit");
+        assert_eq!(quit.code, 1);
+        assert!(quit.reason.contains("task_status_failed:"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_hook_propagates_spawn_errors() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let state = base_state(&temp);
+
+        std::env::set_var("PATH", temp.path());
+        let err = run_hook(&state, "hook", "tr-1", "hook").expect_err("expected spawn error");
+        assert!(err.contains("Failed to run command"));
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn selection_task_status_errors_are_wrapped_in_quit() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("printf 'tr-1'".to_string());
+        state.config.commands.task_status = "exit 2".to_string();
+
+        let quit = run_loop(&mut state).expect_err("expected quit");
+        assert_eq!(quit.code, 1);
+        assert!(quit.reason.contains("task_status_failed:"));
+    }
+
+    #[test]
+    fn review_task_status_errors_are_wrapped_in_quit() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let marker = temp.path().join("status-marker");
+        let marker_path = marker.display().to_string();
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("printf 'tr-1'".to_string());
+        state.config.commands.task_show = "printf '[]\\n'".to_string();
+        state.config.commands.task_status = format!(
+            "if [ -f '{marker_path}' ]; then exit 2; fi; touch '{marker_path}'; printf 'open\\n'"
+        );
+
+        let quit = run_loop(&mut state).expect_err("expected quit");
+        assert_eq!(quit.code, 1);
+        assert!(quit.reason.contains("task_status_failed:"));
+    }
+
+    #[test]
+    fn run_loop_interrupts_immediately_when_flag_is_set() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.interrupt_flag = Arc::new(AtomicBool::new(true));
+
+        let quit = run_loop(&mut state).expect_err("expected interruption");
+        assert_eq!(quit.code, 130);
+        assert_eq!(quit.reason, "interrupted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_loop_interrupts_during_manual_task_precheck() {
+        use std::time::Duration;
+
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.task_status = "printf 'open\\n'".to_string();
+
+        let interrupt_flag = Arc::new(AtomicBool::new(false));
+        state.interrupt_flag = Arc::clone(&interrupt_flag);
+        state.manual_tasks = (0..10_000).map(|_| "x".repeat(1024)).collect();
+
+        let setter = Arc::clone(&interrupt_flag);
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1));
+            setter.store(true, Ordering::SeqCst);
+        });
+
+        let quit = run_loop(&mut state).expect_err("expected interruption");
+        handle.join().expect("join");
+        assert_eq!(quit.code, 130);
+        assert_eq!(quit.reason, "interrupted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_loop_interrupts_during_task_selection_loop() {
+        use std::time::Duration;
+
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("printf 'tr-1'".to_string());
+
+        let interrupt_flag = Arc::new(AtomicBool::new(false));
+        state.interrupt_flag = Arc::clone(&interrupt_flag);
+
+        env::set_var("TRUDGER_SKIP_NOT_READY_LIMIT", "0".repeat(500_000));
+
+        let setter = Arc::clone(&interrupt_flag);
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1));
+            setter.store(true, Ordering::SeqCst);
+        });
+
+        let quit = run_loop(&mut state).expect_err("expected interruption");
+        handle.join().expect("join");
+        assert_eq!(quit.code, 130);
+        assert_eq!(quit.reason, "interrupted");
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_loop_interrupts_at_solving_loop_entry() {
+        use std::time::Duration;
+
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("sleep 0.05; printf 'tr-1'".to_string());
+        state.config.commands.task_status = "printf 'open\\n'".to_string();
+
+        let interrupt_flag = Arc::new(AtomicBool::new(false));
+        state.interrupt_flag = Arc::clone(&interrupt_flag);
+
+        let setter = Arc::clone(&interrupt_flag);
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(5));
+            setter.store(true, Ordering::SeqCst);
+        });
+
+        let quit = run_loop(&mut state).expect_err("expected interruption");
+        handle.join().expect("join");
+        assert_eq!(quit.code, 130);
+        assert_eq!(quit.reason, "interrupted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_loop_interrupts_before_task_show_in_solving_phase() {
+        use std::fs;
+        use std::time::Duration;
+
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("printf 'tr-1'".to_string());
+        state.config.commands.task_status = "printf 'open\\n'".to_string();
+        let update_started = temp.path().join("update-started");
+        let update_gate = temp.path().join("update-gate");
+        let started_path = update_started.display().to_string();
+        let gate_path = update_gate.display().to_string();
+        state.config.commands.task_update_in_progress = format!(
+            "touch '{started_path}'; while [ ! -f '{gate_path}' ]; do sleep 0.01; done; true"
+        );
+
+        let interrupt_flag = Arc::new(AtomicBool::new(false));
+        state.interrupt_flag = Arc::clone(&interrupt_flag);
+
+        let setter = Arc::clone(&interrupt_flag);
+        let handle = std::thread::spawn(move || {
+            while !update_started.exists() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            setter.store(true, Ordering::SeqCst);
+            fs::write(&update_gate, "").expect("open gate");
+        });
+
+        let quit = run_loop(&mut state).expect_err("expected interruption");
+        handle.join().expect("join");
+        assert_eq!(quit.code, 130);
+        assert_eq!(quit.reason, "interrupted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_loop_interrupts_before_agent_solve() {
+        use std::fs;
+        use std::time::Duration;
+
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("printf 'tr-1'".to_string());
+        state.config.commands.task_status = "printf 'open\\n'".to_string();
+        let show_started = temp.path().join("show-started");
+        let show_gate = temp.path().join("show-gate");
+        let started_path = show_started.display().to_string();
+        let gate_path = show_gate.display().to_string();
+        state.config.commands.task_show = format!(
+            "touch '{started_path}'; while [ ! -f '{gate_path}' ]; do sleep 0.01; done; printf '[]\\n'"
+        );
+
+        let interrupt_flag = Arc::new(AtomicBool::new(false));
+        state.interrupt_flag = Arc::clone(&interrupt_flag);
+
+        let setter = Arc::clone(&interrupt_flag);
+        let handle = std::thread::spawn(move || {
+            while !show_started.exists() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            setter.store(true, Ordering::SeqCst);
+            fs::write(&show_gate, "").expect("open gate");
+        });
+
+        let quit = run_loop(&mut state).expect_err("expected interruption");
+        handle.join().expect("join");
+        assert_eq!(quit.code, 130);
+        assert_eq!(quit.reason, "interrupted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_loop_interrupts_before_task_show_in_review_phase() {
+        use std::fs;
+        use std::time::Duration;
+
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("printf 'tr-1'".to_string());
+        state.config.commands.task_status = "printf 'open\\n'".to_string();
+        state.config.commands.task_show = "printf '[]\\n'".to_string();
+        let solve_started = temp.path().join("solve-started");
+        let solve_gate = temp.path().join("solve-gate");
+        let started_path = solve_started.display().to_string();
+        let gate_path = solve_gate.display().to_string();
+        state.config.agent_command = format!(
+            "touch '{started_path}'; while [ ! -f '{gate_path}' ]; do sleep 0.01; done; true"
+        );
+
+        let interrupt_flag = Arc::new(AtomicBool::new(false));
+        state.interrupt_flag = Arc::clone(&interrupt_flag);
+
+        let setter = Arc::clone(&interrupt_flag);
+        let handle = std::thread::spawn(move || {
+            while !solve_started.exists() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            setter.store(true, Ordering::SeqCst);
+            fs::write(&solve_gate, "").expect("open gate");
+        });
+
+        let quit = run_loop(&mut state).expect_err("expected interruption");
+        handle.join().expect("join");
+        assert_eq!(quit.code, 130);
+        assert_eq!(quit.reason, "interrupted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_loop_interrupts_before_agent_review() {
+        use std::fs;
+        use std::time::Duration;
+
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let marker = temp.path().join("show-first");
+        let marker_path = marker.display().to_string();
+        let show_started = temp.path().join("review-show-started");
+        let show_gate = temp.path().join("review-show-gate");
+        let started_path = show_started.display().to_string();
+        let gate_path = show_gate.display().to_string();
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("printf 'tr-1'".to_string());
+        state.config.commands.task_status = "printf 'open\\n'".to_string();
+        state.config.commands.task_show = format!(
+            "if [ ! -f '{marker_path}' ]; then touch '{marker_path}'; printf '[]\\n'; exit 0; fi; \
+             touch '{started_path}'; while [ ! -f '{gate_path}' ]; do sleep 0.01; done; printf '[]\\n'"
+        );
+
+        let interrupt_flag = Arc::new(AtomicBool::new(false));
+        state.interrupt_flag = Arc::clone(&interrupt_flag);
+
+        let setter = Arc::clone(&interrupt_flag);
+        let handle = std::thread::spawn(move || {
+            while !show_started.exists() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            setter.store(true, Ordering::SeqCst);
+            fs::write(&show_gate, "").expect("open gate");
+        });
+
+        let quit = run_loop(&mut state).expect_err("expected interruption");
+        handle.join().expect("join");
+        assert_eq!(quit.code, 130);
+        assert_eq!(quit.reason, "interrupted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_loop_interrupts_before_task_status_after_review() {
+        use std::fs;
+        use std::time::Duration;
+
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("printf 'tr-1'".to_string());
+        state.config.commands.task_status = "printf 'open\\n'".to_string();
+        state.config.commands.task_show = "printf '[]\\n'".to_string();
+        let review_started = temp.path().join("review-started");
+        let review_gate = temp.path().join("review-gate");
+        let started_path = review_started.display().to_string();
+        let gate_path = review_gate.display().to_string();
+        state.config.agent_review_command = format!(
+            "touch '{started_path}'; while [ ! -f '{gate_path}' ]; do sleep 0.01; done; true"
+        );
+
+        let interrupt_flag = Arc::new(AtomicBool::new(false));
+        state.interrupt_flag = Arc::clone(&interrupt_flag);
+
+        let setter = Arc::clone(&interrupt_flag);
+        let handle = std::thread::spawn(move || {
+            while !review_started.exists() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            setter.store(true, Ordering::SeqCst);
+            fs::write(&review_gate, "").expect("open gate");
+        });
+
+        let quit = run_loop(&mut state).expect_err("expected interruption");
+        handle.join().expect("join");
+        assert_eq!(quit.code, 130);
+        assert_eq!(quit.reason, "interrupted");
+    }
+}

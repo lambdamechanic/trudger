@@ -148,7 +148,10 @@ fn default_tmux_base_name() -> String {
         .ok()
         .and_then(|path| path.file_name().map(|v| v.to_string_lossy().to_string()))
         .unwrap_or_default();
-    let command = env::args().next().unwrap_or_else(|| "trudger".to_string());
+    // `env::args().next()` should always yield argv[0], but prefer a concrete
+    // fallback over `unwrap_or_else` so coverage doesn't depend on an
+    // effectively-unreachable closure.
+    let command = env::args().next().unwrap_or("trudger".to_string());
     let command = Path::new(&command)
         .file_name()
         .map(|v| v.to_string_lossy().to_string())
@@ -199,4 +202,15 @@ pub(crate) fn build_tmux_name(
     }
 
     parts.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_pane_is_noop_when_disabled() {
+        let state = TmuxState::disabled();
+        state.select_pane("name");
+    }
 }

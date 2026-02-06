@@ -135,6 +135,22 @@ Enable the repo git hooks (runs `shellcheck` and `bats` on pre-push):
 git config core.hooksPath .githooks
 ```
 
+### Coverage
+
+Rust coverage is enforced at 100% (lines + regions) using `cargo llvm-cov`.
+
+Local command:
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+cargo llvm-cov --all-targets --ignore-filename-regex 'unit_tests\.rs$' --fail-under-lines 100 --fail-under-regions 100
+```
+
+Coverage scope:
+- Includes all Rust sources under `src/` (production code), plus any in-file `#[cfg(test)]` modules.
+- Excludes `src/unit_tests.rs` via `--ignore-filename-regex 'unit_tests\.rs$'` because it is a test-only harness/fixture module (compiled only under `cfg(test)`) and excluding it keeps coverage focused on production logic.
+
 ## Behavior details
 
 - Task selection uses `commands.next_task` and expects the first whitespace-delimited token of stdout to be the task id.

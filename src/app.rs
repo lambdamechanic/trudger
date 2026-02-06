@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -212,8 +213,8 @@ pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
     result
 }
 
-fn run() -> Result<(), Quit> {
-    let cli = match Cli::try_parse() {
+pub(crate) fn run_with_args(args: Vec<OsString>) -> Result<(), Quit> {
+    let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(err) => {
             let _ = err.print();
@@ -226,10 +227,14 @@ fn run() -> Result<(), Quit> {
     run_with_cli(cli)
 }
 
-pub(crate) fn main() -> ExitCode {
-    let result = run();
+pub(crate) fn main_with_args(args: Vec<OsString>) -> ExitCode {
+    let result = run_with_args(args);
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(quit) => quit.exit_code(),
     }
+}
+
+pub(crate) fn main() -> ExitCode {
+    main_with_args(env::args_os().collect())
 }
