@@ -17,3 +17,4 @@ log_path: "./.trudger.log"
 hooks:
   on_completed: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"'
   on_requires_human: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"; br label add "$TRUDGER_TASK_ID" "human-required"'
+  on_doctor_setup: 'rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'

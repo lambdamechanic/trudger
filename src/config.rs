@@ -26,6 +26,8 @@ pub struct Commands {
 pub struct Hooks {
     pub on_completed: String,
     pub on_requires_human: String,
+    #[serde(default)]
+    pub on_doctor_setup: Option<String>,
 }
 
 #[derive(Debug)]
@@ -107,6 +109,7 @@ fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
         "on_requires_human",
         "hooks.on_requires_human",
     )?;
+    validate_optional_non_empty_string(hooks, "on_doctor_setup", "hooks.on_doctor_setup")?;
 
     Ok(())
 }
@@ -146,6 +149,26 @@ fn require_non_empty_string(mapping: &Mapping, key_name: &str, label: &str) -> R
     let key = Value::String(key_name.to_string());
     match mapping.get(&key) {
         None => Err(format!("Missing required config value: {}", label)),
+        Some(Value::Null) => Err(format!("{} must not be null", label)),
+        Some(Value::String(value)) => {
+            if value.trim().is_empty() {
+                Err(format!("{} must not be empty", label))
+            } else {
+                Ok(())
+            }
+        }
+        Some(_) => Err(format!("{} must be a string", label)),
+    }
+}
+
+fn validate_optional_non_empty_string(
+    mapping: &Mapping,
+    key_name: &str,
+    label: &str,
+) -> Result<(), String> {
+    let key = Value::String(key_name.to_string());
+    match mapping.get(&key) {
+        None => Ok(()),
         Some(Value::Null) => Err(format!("{} must not be null", label)),
         Some(Value::String(value)) => {
             if value.trim().is_empty() {

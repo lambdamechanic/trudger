@@ -16,7 +16,11 @@ We want to add subcommands (starting with `doctor`) without colliding with manua
   - `-t` may be repeated.
   - Each `-t` value may contain comma-separated ids.
   - Order is preserved based on appearance.
+  - Task ids are trimmed for surrounding whitespace; empty comma segments are rejected.
 - Positional task ids are a hard error with a migration hint.
+
+## Implementation Notes
+- Prefer a standard Rust argument parser (`clap`) to avoid bespoke parsing logic and to keep help/usage consistent as subcommands grow.
 
 ## Migration Plan
 - Update docs to show `trudger -t tr-1 -t tr-2` and `trudger -t tr-1,tr-2`.

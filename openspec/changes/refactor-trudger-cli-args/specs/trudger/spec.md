@@ -14,6 +14,21 @@ The system SHALL accept manual task ids via `-t/--task` options. The `-t/--task`
 - **WHEN** a user runs `trudger -t tr-1,tr-2 -t tr-3`
 - **THEN** the system processes `tr-1`, then `tr-2`, then `tr-3`
 
+#### Scenario: Comma-separated task ids trim whitespace
+- **WHEN** a user runs `trudger -t "tr-1, tr-2"`
+- **THEN** the system processes `tr-1` and `tr-2` (with surrounding whitespace trimmed)
+
+#### Scenario: Empty comma segments error
+- **WHEN** a user runs `trudger -t "tr-1,,tr-2"`
+- **THEN** the system exits non-zero with a clear error indicating an empty task id was provided
+
+### Requirement: Default mode is task-processing
+When no subcommand is provided, the system SHALL run task-processing mode (the normal task loop).
+
+#### Scenario: No args runs the task loop
+- **WHEN** a user runs `trudger` with no arguments
+- **THEN** the system starts task-processing mode
+
 ### Requirement: Positional task ids are rejected
 The system SHALL NOT accept positional task ids. If unexpected positional arguments are provided in task-processing mode, the system SHALL exit non-zero with a clear migration error instructing the user to use `-t/--task`.
 

@@ -17,11 +17,11 @@ It is slower and more serial, but if you have a large number of smaller projects
 
 ## Requirements
 
+- `bash` on your PATH (configured commands are executed via `bash -lc`)
 - `codex` CLI on your PATH
 - `jq` on your PATH
-- `yq` on your PATH for config parsing
 - Any task system CLIs referenced by your configured commands (for example `bd`, `br`, `bv`)
-- Prompt files installed under `~/.codex/prompts/` (see below):
+- Prompt files installed under `~/.codex/prompts/` (task-processing mode only; see below):
   - `trudge.md`
   - `trudge_review.md`
 
@@ -31,16 +31,29 @@ It is slower and more serial, but if you have a large number of smaller projects
 trudger
 ```
 
+Run specific tasks first (positional task ids are not supported):
+
+```bash
+trudger -t tr-1 -t tr-2
+trudger -t tr-1,tr-2
+```
+
 Use a specific config file:
 
 ```bash
 trudger --config ./sample_configuration/trudgeable-with-hooks.yml
 ```
 
+Doctor mode (runs `hooks.on_doctor_setup` against a temporary scratch directory):
+
+```bash
+trudger doctor
+```
+
 ## Configuration
 
 Trudger requires `~/.config/trudger.yml` on startup unless `-c/--config` is provided, which overrides the default path. If the file is missing, it prints curl commands for sample configs and exits non-zero.
-Configuration is parsed with `yq`; unknown top-level keys are logged as warnings and ignored.
+Configuration is parsed natively in Rust; unknown top-level keys are logged as warnings and ignored.
 
 Sample configs:
 - `sample_configuration/trudgeable-with-hooks.yml`
@@ -61,18 +74,22 @@ commands:
   task_show: 'br show "$TRUDGER_TASK_ID"'
   task_status: 'br show "$TRUDGER_TASK_ID" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
   task_update_in_progress: 'br update "$TRUDGER_TASK_ID" --status in_progress'
+  reset_task: 'br update "$TRUDGER_TASK_ID" --status open'
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
 hooks:
   on_completed: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"'
   on_requires_human: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"; br label add "$TRUDGER_TASK_ID" "human-required"'
+  on_doctor_setup: 'rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'
 ```
 
 Notes:
 - All configured commands are executed via `bash -lc`.
 - `agent_command` is used for solve; `agent_review_command` is used for review (Trudger appends `resume --last` to the review command arguments).
-- Required keys (non-empty, non-null): `agent_command`, `agent_review_command`, `review_loop_limit`, `log_path`, `commands.next_task`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, `hooks.on_requires_human`.
+- Required keys (non-empty, non-null): `agent_command`, `agent_review_command`, `review_loop_limit`, `log_path`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `commands.reset_task`, `hooks.on_completed`, `hooks.on_requires_human`.
+- `commands.next_task` is required when no manual task ids are provided.
+- `hooks.on_doctor_setup` is required only for `trudger doctor`.
 - Null values are treated as validation errors for required keys.
 - `commands.next_task`, `commands.task_show`, `commands.task_status`, and `commands.task_update_in_progress` must be non-empty when used.
 - `commands.next_task` runs in `bash -lc` and the first whitespace-delimited token of stdout is used as the task id.
@@ -122,7 +139,7 @@ git config core.hooksPath .githooks
 - Task selection uses `commands.next_task` and expects the first whitespace-delimited token of stdout to be the task id.
 - `commands.task_show` output is treated as free-form task details for the agent and provided via `TRUDGER_TASK_SHOW`.
 - Control flow decisions (readiness and post-review status) use `commands.task_status`; `commands.task_show` is not used for status checks.
-- Tasks must be in status `ready` or `open` (from `commands.task_status`). When selecting via `commands.next_task`, Trudger skips non-ready tasks up to `TRUDGER_SKIP_NOT_READY_LIMIT` (default 5) before idling; manual task IDs still error if not ready.
+- Tasks must be in status `ready` or `open` (from `commands.task_status`). When selecting via `commands.next_task`, Trudger skips non-ready tasks up to `TRUDGER_SKIP_NOT_READY_LIMIT` (default 5) before idling; manual task ids (via `-t/--task`) still error if not ready.
 - If `commands.next_task` exits 1 or returns an empty task id, Trudger exits 0 (no selectable tasks).
 - If a task is closed after review, Trudger runs `hooks.on_completed`.
 - If a task remains open after review, Trudger runs `hooks.on_requires_human`.

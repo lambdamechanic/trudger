@@ -17,3 +17,4 @@ log_path: "./.trudger.log"
 hooks:
   on_completed: "true"
   on_requires_human: "true"
+  on_doctor_setup: 'rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'

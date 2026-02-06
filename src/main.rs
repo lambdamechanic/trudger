@@ -1,4 +1,5 @@
 use chrono::Utc;
+use clap::{Parser, Subcommand};
 use regex::Regex;
 use shell_escape::unix::escape;
 use std::env;
@@ -17,16 +18,31 @@ const PROMPT_TRUDGE: &str = ".codex/prompts/trudge.md";
 const PROMPT_REVIEW: &str = ".codex/prompts/trudge_review.md";
 const DEFAULT_CONFIG_REL: &str = ".config/trudger.yml";
 
-fn usage() {
-    println!(
-        "Usage: ./trudger [options] [task_id ...]\n\n\
-Loop over ready br tasks and run Codex solve+review prompts.\n\
-If task IDs are provided, they run first (in order) before br ready tasks.\n\
-Configuration is loaded from ~/.config/trudger.yml by default.\n\n\
-Options:\n\
-  -c, --config PATH   Load configuration from PATH instead of ~/.config/trudger.yml.\n\
-  -h, --help          Show this help text."
-    );
+#[derive(Debug, Parser)]
+#[command(name = "trudger", disable_help_subcommand = true)]
+struct Cli {
+    #[arg(short = 'c', long = "config", global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    #[arg(
+        short = 't',
+        long = "task",
+        global = true,
+        action = clap::ArgAction::Append,
+        value_name = "TASK_ID"
+    )]
+    task: Vec<String>,
+
+    #[arg(value_name = "ARG", hide = true)]
+    positional: Vec<String>,
+
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+enum CliCommand {
+    Doctor,
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -148,6 +164,7 @@ fn render_args(args: &[String]) -> String {
 #[derive(Debug, Clone)]
 struct CommandEnv {
     config_path: String,
+    scratch_dir: Option<String>,
     task_id: Option<String>,
     task_show: Option<String>,
     task_status: Option<String>,
@@ -160,6 +177,7 @@ struct CommandEnv {
 impl CommandEnv {
     fn apply(&self, cmd: &mut Command) {
         cmd.env("TRUDGER_CONFIG_PATH", &self.config_path);
+        Self::apply_optional(cmd, "TRUDGER_DOCTOR_SCRATCH_DIR", &self.scratch_dir);
         Self::apply_optional(cmd, "TRUDGER_TASK_ID", &self.task_id);
         Self::apply_optional(cmd, "TRUDGER_TASK_SHOW", &self.task_show);
         Self::apply_optional(cmd, "TRUDGER_TASK_STATUS", &self.task_status);
@@ -595,6 +613,7 @@ fn build_command_env(
 
     CommandEnv {
         config_path: state.config_path.display().to_string(),
+        scratch_dir: None,
         task_id: task_id
             .map(|value| value.to_string())
             .or_else(|| state.current_task_id.clone()),
@@ -1087,76 +1106,143 @@ fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
     }
 }
 
-fn run() -> Result<(), Quit> {
-    let mut args = env::args().skip(1).peekable();
-    let mut config_path: Option<PathBuf> = None;
-    let mut config_path_source_flag = false;
-    let mut manual_tasks: Vec<String> = Vec::new();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppMode {
+    Run,
+    Doctor,
+}
 
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "-h" | "--help" => {
-                usage();
-                return Ok(());
+fn parse_manual_tasks(raw_values: &[String]) -> Result<Vec<String>, String> {
+    let mut tasks = Vec::new();
+    for raw in raw_values {
+        for (index, segment) in raw.split(',').enumerate() {
+            let trimmed = segment.trim();
+            if trimmed.is_empty() {
+                return Err(format!(
+                    "Invalid -t/--task value: empty segment in {:?} at index {}.",
+                    raw, index
+                ));
             }
-            "-c" | "--config" => {
-                let Some(value) = args.next() else {
-                    eprintln!("Missing value for {}", arg);
-                    usage();
-                    return Err(Quit {
-                        code: 1,
-                        reason: "missing_option_value".to_string(),
-                    });
-                };
-                if value.is_empty() {
-                    eprintln!("Missing value for {}", arg);
-                    usage();
-                    return Err(Quit {
-                        code: 1,
-                        reason: "missing_option_value".to_string(),
-                    });
-                }
-                config_path = Some(PathBuf::from(value));
-                config_path_source_flag = true;
-            }
-            "--" => {
-                manual_tasks.extend(args.map(|v| v));
-                break;
-            }
-            _ if arg.starts_with("--config=") => {
-                let value = arg.trim_start_matches("--config=");
-                if value.is_empty() {
-                    eprintln!("Missing value for --config");
-                    usage();
-                    return Err(Quit {
-                        code: 1,
-                        reason: "missing_option_value".to_string(),
-                    });
-                }
-                config_path = Some(PathBuf::from(value));
-                config_path_source_flag = true;
-            }
-            _ if arg.starts_with('-') => {
-                eprintln!("Unknown option: {}", arg);
-                usage();
-                return Err(Quit {
-                    code: 1,
-                    reason: "unknown_option".to_string(),
-                });
-            }
-            _ => {
-                manual_tasks.push(arg);
-            }
+            tasks.push(trimmed.to_string());
         }
     }
+    Ok(tasks)
+}
 
+fn run_doctor_mode(config: &Config, config_path: &Path, logger: &Logger) -> Result<(), Quit> {
+    let invocation_cwd = env::current_dir()
+        .map_err(|err| quit(logger, &format!("doctor_invocation_cwd_failed:{err}"), 1))?;
+
+    if let Err(message) = validate_config(config, &[]) {
+        eprintln!("{}", message);
+        return Err(quit(logger, &message, 1));
+    }
+
+    let hook = config
+        .hooks
+        .on_doctor_setup
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if hook.is_empty() {
+        let message = "hooks.on_doctor_setup must not be empty.".to_string();
+        eprintln!("{}", message);
+        return Err(quit(logger, &message, 1));
+    }
+
+    let scratch = tempfile::Builder::new()
+        .prefix("trudger-doctor-")
+        .tempdir()
+        .map_err(|err| quit(logger, &format!("doctor_scratch_create_failed:{err}"), 1))?;
+    let scratch_path = scratch.path().display().to_string();
+
+    let env = CommandEnv {
+        config_path: config_path.display().to_string(),
+        scratch_dir: Some(scratch_path.clone()),
+        task_id: None,
+        task_show: None,
+        task_status: None,
+        prompt: None,
+        review_prompt: None,
+        completed: None,
+        needs_human: None,
+    };
+
+    let hook_exit = run_shell_command_status(&hook, "doctor-setup", "none", &[], &env, logger);
+    let hook_result = match hook_exit {
+        Ok(0) => Ok(()),
+        Ok(exit) => Err(format!("hooks.on_doctor_setup failed with exit code {}", exit)),
+        Err(err) => Err(err),
+    };
+
+    if let Err(err) = env::set_current_dir(&invocation_cwd) {
+        let message = format!(
+            "doctor failed to restore invocation working directory {}: {}",
+            invocation_cwd.display(),
+            err
+        );
+        eprintln!("{}", message);
+        return Err(quit(logger, &message, 1));
+    }
+    let cleanup_result = scratch.close();
+
+    if let Err(err) = cleanup_result {
+        let message = format!("doctor scratch cleanup failed: {}", err);
+        eprintln!("{}", message);
+        return Err(quit(logger, &message, 1));
+    }
+
+    if let Err(err) = hook_result {
+        eprintln!("{}", err);
+        return Err(quit(logger, &err, 1));
+    }
+
+    Ok(())
+}
+
+fn run_with_cli(cli: Cli) -> Result<(), Quit> {
+    let mode = match cli.command {
+        Some(CliCommand::Doctor) => AppMode::Doctor,
+        None => AppMode::Run,
+    };
+
+    let manual_tasks = match parse_manual_tasks(&cli.task) {
+        Ok(tasks) => tasks,
+        Err(message) => {
+            eprintln!("{}", message);
+            return Err(Quit {
+                code: 1,
+                reason: message,
+            });
+        }
+    };
+    if mode == AppMode::Doctor && !manual_tasks.is_empty() {
+        let message = "-t/--task is not supported in doctor mode.".to_string();
+        eprintln!("{}", message);
+        return Err(Quit {
+            code: 1,
+            reason: message,
+        });
+    }
+    if mode == AppMode::Run && !cli.positional.is_empty() {
+        let message = format!(
+            "Positional arguments are not supported.\nMigration: pass manual task ids via -t/--task (for example: trudger -t {}).",
+            cli.positional.join(" -t ")
+        );
+        eprintln!("{}", message);
+        return Err(Quit {
+            code: 1,
+            reason: "positional_args_not_supported".to_string(),
+        });
+    }
+
+    let config_path = cli.config;
+    let config_path_source_flag = config_path.is_some();
     let home = home_dir().map_err(|message| Quit {
         code: 1,
         reason: message,
     })?;
-
-    let prompt_trudge = home.join(PROMPT_TRUDGE);
-    let prompt_review = home.join(PROMPT_REVIEW);
 
     let default_config = home.join(DEFAULT_CONFIG_REL);
     let config_path = config_path.unwrap_or_else(|| default_config.clone());
@@ -1184,11 +1270,17 @@ fn run() -> Result<(), Quit> {
         Some(PathBuf::from(log_path))
     });
 
+    if mode == AppMode::Doctor {
+        return run_doctor_mode(&loaded.config, &config_path, &logger);
+    }
+
     if let Err(message) = validate_config(&loaded.config, &manual_tasks) {
         eprintln!("{}", message);
         return Err(quit(&logger, &message, 1));
     }
 
+    let prompt_trudge = home.join(PROMPT_TRUDGE);
+    let prompt_review = home.join(PROMPT_REVIEW);
     if let Err(message) = require_file(&prompt_trudge, "prompt file") {
         eprintln!("{}", message);
         return Err(quit(&logger, &message, 1));
@@ -1239,6 +1331,20 @@ fn run() -> Result<(), Quit> {
     result
 }
 
+fn run() -> Result<(), Quit> {
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            let _ = err.print();
+            return Err(Quit {
+                code: err.exit_code(),
+                reason: "cli_parse".to_string(),
+            });
+        }
+    };
+    run_with_cli(cli)
+}
+
 fn main() -> ExitCode {
     let result = run();
     match result {
@@ -1265,7 +1371,14 @@ mod tests {
             "TASK_STATUS_OUTPUT",
             "TASK_SHOW_QUEUE",
             "TASK_SHOW_OUTPUT",
+            "TRUDGER_CONFIG_PATH",
+            "TRUDGER_DOCTOR_SCRATCH_DIR",
             "TRUDGER_SKIP_NOT_READY_LIMIT",
+            "TRUDGER_PROMPT",
+            "TRUDGER_REVIEW_PROMPT",
+            "TRUDGER_TASK_ID",
+            "TRUDGER_TASK_SHOW",
+            "TRUDGER_TASK_STATUS",
             "CODEX_MOCK_LOG",
             "TASK_SHOW_LOG",
             "TASK_STATUS_LOG",
@@ -1405,6 +1518,7 @@ mod tests {
             hooks: Hooks {
                 on_completed: "hook --done".to_string(),
                 on_requires_human: "hook --human".to_string(),
+                on_doctor_setup: None,
             },
             review_loop_limit: 2,
             log_path: log_path.display().to_string(),
@@ -1534,6 +1648,7 @@ mod tests {
             hooks: Hooks {
                 on_completed: "hook --done".to_string(),
                 on_requires_human: "hook --human".to_string(),
+                on_doctor_setup: None,
             },
             review_loop_limit: 2,
             log_path: log_path.display().to_string(),
@@ -1621,6 +1736,7 @@ mod tests {
             hooks: Hooks {
                 on_completed: "hook --done \"$TRUDGER_TASK_ID\"".to_string(),
                 on_requires_human: "hook --human \"$TRUDGER_TASK_ID\"".to_string(),
+                on_doctor_setup: None,
             },
             review_loop_limit: 2,
             log_path: log_path.display().to_string(),
@@ -1698,6 +1814,7 @@ mod tests {
             hooks: Hooks {
                 on_completed: "hook --done".to_string(),
                 on_requires_human: "hook --human".to_string(),
+                on_doctor_setup: None,
             },
             review_loop_limit: 2,
             log_path: log_path.display().to_string(),
@@ -1776,6 +1893,7 @@ mod tests {
             hooks: Hooks {
                 on_completed: "hook --done".to_string(),
                 on_requires_human: "hook --human".to_string(),
+                on_doctor_setup: None,
             },
             review_loop_limit: 2,
             log_path: log_path.display().to_string(),
@@ -1843,6 +1961,7 @@ mod tests {
             hooks: Hooks {
                 on_completed: "hook --done".to_string(),
                 on_requires_human: "hook --human".to_string(),
+                on_doctor_setup: None,
             },
             review_loop_limit: 2,
             log_path: temp.path().join("trudger.log").display().to_string(),
@@ -1883,5 +2002,286 @@ mod tests {
             contents.contains("env TRUDGER_TASK_ID=tr-1"),
             "reset-task should receive task id in env"
         );
+    }
+
+    #[test]
+    fn parse_manual_tasks_trims_and_rejects_empty_segments() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        reset_test_env();
+
+        let tasks = parse_manual_tasks(&vec![
+            " tr-1, tr-2 ".to_string(),
+            "tr-3".to_string(),
+        ])
+        .expect("parse tasks");
+        assert_eq!(tasks, vec!["tr-1", "tr-2", "tr-3"]);
+
+        let err = parse_manual_tasks(&vec!["tr-1,,tr-2".to_string()]).expect_err("should error");
+        assert!(
+            err.contains("empty segment"),
+            "expected empty segment error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn clap_parses_doctor_subcommand_and_positional_args() {
+        let cli = Cli::try_parse_from(["trudger", "doctor"]).expect("parse doctor");
+        assert!(
+            matches!(cli.command, Some(CliCommand::Doctor)),
+            "expected doctor subcommand"
+        );
+        assert!(cli.positional.is_empty(), "doctor should have no positionals");
+
+        let cli = Cli::try_parse_from(["trudger", "doctor", "-t", "tr-1"]).expect("parse doctor");
+        assert!(
+            matches!(cli.command, Some(CliCommand::Doctor)),
+            "expected doctor subcommand"
+        );
+        assert_eq!(cli.task, vec!["tr-1"], "expected task flag capture");
+
+        let cli = Cli::try_parse_from(["trudger", "tr-1"]).expect("parse positional");
+        assert!(cli.command.is_none(), "positional should not be a subcommand");
+        assert_eq!(cli.positional, vec!["tr-1"]);
+    }
+
+    #[test]
+    fn doctor_rejects_task_flag_with_clear_error() {
+        let err = run_with_cli(Cli {
+            config: None,
+            task: vec!["tr-1".to_string()],
+            positional: Vec::new(),
+            command: Some(CliCommand::Doctor),
+        })
+        .expect_err("expected doctor task-flag rejection");
+        assert_eq!(err.code, 1);
+        assert!(
+            err.reason.contains("-t/--task"),
+            "expected -t/--task error, got: {}",
+            err.reason
+        );
+    }
+
+    #[test]
+    fn positional_task_ids_are_rejected_with_migration_hint() {
+        let err = run_with_cli(Cli {
+            config: None,
+            task: Vec::new(),
+            positional: vec!["tr-1".to_string()],
+            command: None,
+        })
+        .expect_err("expected positional task id rejection");
+        assert_eq!(err.code, 1);
+        assert_eq!(err.reason, "positional_args_not_supported");
+    }
+
+    #[test]
+    fn doctor_does_not_require_prompts_and_cleans_scratch_dir() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        reset_test_env();
+
+        let old_home = env::var_os("HOME");
+        let original_cwd = env::current_dir().expect("cwd");
+        let temp = TempDir::new().expect("temp dir");
+        let invocation = temp.path().join("invocation");
+        fs::create_dir_all(&invocation).expect("create invocation dir");
+        env::set_current_dir(&invocation).expect("set cwd");
+
+        let hook_log = temp.path().join("hook.log");
+        env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+        // Ensure the setup hook sees these as unset even if present in the parent process env.
+        env::set_var("TRUDGER_TASK_ID", "PARENT_TASK");
+        env::set_var("TRUDGER_TASK_SHOW", "PARENT_SHOW");
+        env::set_var("TRUDGER_TASK_STATUS", "PARENT_STATUS");
+        env::set_var("TRUDGER_PROMPT", "PARENT_PROMPT");
+        env::set_var("TRUDGER_REVIEW_PROMPT", "PARENT_REVIEW_PROMPT");
+
+        let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = env::var("PATH").unwrap_or_default();
+        env::set_var(
+            "PATH",
+            format!("{}:{}", fixtures_bin.display(), old_path),
+        );
+
+        let config_path = temp.path().join("trudger.yml");
+        fs::write(
+            &config_path,
+            r#"
+agent_command: "agent"
+agent_review_command: "agent-review"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_in_progress: "task-update"
+  reset_task: "reset-task"
+review_loop_limit: 2
+log_path: "./.trudger.log"
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+  on_doctor_setup: "hook --doctor-setup"
+"#,
+        )
+        .expect("write config");
+
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).expect("create home");
+        env::set_var("HOME", &home);
+
+        let cli = Cli {
+            config: Some(config_path.clone()),
+            task: Vec::new(),
+            positional: Vec::new(),
+            command: Some(CliCommand::Doctor),
+        };
+
+        run_with_cli(cli).expect("doctor should succeed without prompts");
+
+        let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+        assert!(
+            hook_contents.contains(&format!("cwd {}", invocation.display())),
+            "setup hook should run from invocation cwd, got:\n{hook_contents}"
+        );
+        assert!(
+            hook_contents.contains("envset TRUDGER_CONFIG_PATH=1"),
+            "setup hook should receive TRUDGER_CONFIG_PATH"
+        );
+        assert!(
+            hook_contents.contains("envset TRUDGER_DOCTOR_SCRATCH_DIR=1"),
+            "setup hook should receive TRUDGER_DOCTOR_SCRATCH_DIR"
+        );
+        assert!(
+            hook_contents.contains("envset TRUDGER_TASK_ID=0"),
+            "setup hook should not receive TRUDGER_TASK_ID"
+        );
+        assert!(
+            hook_contents.contains("envset TRUDGER_TASK_SHOW=0"),
+            "setup hook should not receive TRUDGER_TASK_SHOW"
+        );
+        assert!(
+            hook_contents.contains("envset TRUDGER_TASK_STATUS=0"),
+            "setup hook should not receive TRUDGER_TASK_STATUS"
+        );
+        assert!(
+            hook_contents.contains("envset TRUDGER_PROMPT=0"),
+            "setup hook should not receive TRUDGER_PROMPT"
+        );
+        assert!(
+            hook_contents.contains("envset TRUDGER_REVIEW_PROMPT=0"),
+            "setup hook should not receive TRUDGER_REVIEW_PROMPT"
+        );
+
+        let scratch_dir = hook_contents
+            .lines()
+            .find_map(|line| line.strip_prefix("env TRUDGER_DOCTOR_SCRATCH_DIR="))
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        assert!(!scratch_dir.is_empty(), "missing scratch dir in hook log");
+        assert!(
+            !Path::new(&scratch_dir).exists(),
+            "scratch dir should be cleaned up: {scratch_dir}"
+        );
+
+        env::set_current_dir(&original_cwd).expect("restore cwd");
+        match old_home {
+            Some(value) => env::set_var("HOME", value),
+            None => env::remove_var("HOME"),
+        };
+    }
+
+    #[test]
+    fn doctor_cleanup_failure_is_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_MUTEX.lock().unwrap();
+        reset_test_env();
+
+        let original_cwd = env::current_dir().expect("cwd");
+        let temp = TempDir::new().expect("temp dir");
+        let invocation = temp.path().join("invocation");
+        fs::create_dir_all(&invocation).expect("create invocation dir");
+        env::set_current_dir(&invocation).expect("set cwd");
+
+        let scratch_path_file = temp.path().join("scratch-path.txt");
+        let hook = format!(
+            "printf '%s' \"$TRUDGER_DOCTOR_SCRATCH_DIR\" > \"{}\"; \
+             mkdir -p \"$TRUDGER_DOCTOR_SCRATCH_DIR/locked\"; \
+             printf 'hi' > \"$TRUDGER_DOCTOR_SCRATCH_DIR/locked/file\"; \
+             chmod 555 \"$TRUDGER_DOCTOR_SCRATCH_DIR/locked\"",
+            scratch_path_file.display()
+        );
+
+        let config = Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "agent-review".to_string(),
+            commands: Commands {
+                next_task: Some("next-task".to_string()),
+                task_show: "task-show".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: "reset-task".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: Some(hook),
+            },
+            review_loop_limit: 2,
+            log_path: temp.path().join("trudger.log").display().to_string(),
+        };
+        let logger = Logger::new(None);
+
+        let result = run_doctor_mode(&config, &temp.path().join("trudger.yml"), &logger)
+            .expect_err("expected cleanup failure");
+        assert_eq!(result.code, 1);
+        assert!(
+            result.reason.contains("doctor scratch cleanup failed"),
+            "expected cleanup failure reason, got: {}",
+            result.reason
+        );
+
+        let scratch_dir = fs::read_to_string(&scratch_path_file)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if !scratch_dir.is_empty() {
+            let locked_dir = Path::new(&scratch_dir).join("locked");
+            let _ = fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755));
+            let _ = fs::remove_dir_all(&scratch_dir);
+        }
+
+        env::set_current_dir(&original_cwd).expect("restore cwd");
+    }
+
+    #[test]
+    fn sample_configs_load_and_validate() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        reset_test_env();
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for name in ["trudgeable-with-hooks", "robot-triage"] {
+            let path = root
+                .join("sample_configuration")
+                .join(format!("{}.yml", name));
+            let loaded = load_config(&path).expect("load sample config");
+            validate_config(&loaded.config, &[]).expect("validate sample config");
+            let hook = loaded
+                .config
+                .hooks
+                .on_doctor_setup
+                .as_deref()
+                .unwrap_or("")
+                .trim();
+            assert!(
+                !hook.is_empty(),
+                "sample config {} should include hooks.on_doctor_setup",
+                name
+            );
+        }
     }
 }
