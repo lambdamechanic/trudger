@@ -321,10 +321,10 @@ fn get_mapping_value_at_path<'a>(mapping: &'a Mapping, path: &[&str]) -> Option<
         return None;
     }
 
-    let mut current = mapping.get(&Value::String(path[0].to_string()))?;
+    let mut current = mapping.get(path[0])?;
     for segment in &path[1..] {
         let nested = current.as_mapping()?;
-        current = nested.get(&Value::String((*segment).to_string()))?;
+        current = nested.get(*segment)?;
     }
     Some(current)
 }
@@ -337,7 +337,7 @@ fn get_value_at_path<'a>(root: &'a Value, path: &[&str]) -> Option<&'a Value> {
     let mut current = root;
     for segment in path {
         let nested = current.as_mapping()?;
-        current = nested.get(&Value::String((*segment).to_string()))?;
+        current = nested.get(*segment)?;
     }
     Some(current)
 }
@@ -355,12 +355,11 @@ fn remove_value_at_path(root: &mut Value, path: &[&str]) -> bool {
             None => return false,
         };
 
-        let key = Value::String((*segment).to_string());
         if is_last {
-            return nested.remove(&key).is_some();
+            return nested.remove(*segment).is_some();
         }
 
-        current = match nested.get_mut(&key) {
+        current = match nested.get_mut(*segment) {
             Some(value) => value,
             None => return false,
         };
@@ -384,16 +383,19 @@ fn set_value_at_path(root: &mut Value, path: &[&str], value: Value) -> Result<()
             )
         })?;
 
-        let key = Value::String((*segment).to_string());
+        let key = *segment;
         if is_last {
-            nested.insert(key, value);
+            nested.insert(Value::String(key.to_string()), value);
             return Ok(());
         }
 
-        if !nested.contains_key(&key) {
-            nested.insert(key.clone(), Value::Mapping(Mapping::new()));
+        if !nested.contains_key(key) {
+            nested.insert(
+                Value::String(key.to_string()),
+                Value::Mapping(Mapping::new()),
+            );
         }
-        let next = nested.get_mut(&key).expect("key exists");
+        let next = nested.get_mut(key).expect("key exists");
         if !matches!(next, Value::Mapping(_)) {
             *next = Value::Mapping(Mapping::new());
         }
