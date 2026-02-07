@@ -43,6 +43,7 @@ git commit -m "sync beads"
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
+   - Prefer `cargo nextest run` for Rust tests (parallel); fall back to `cargo test` if nextest is unavailable.
 3. **Update issue status** - Close finished work, update in-progress items
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
