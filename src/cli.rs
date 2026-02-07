@@ -39,6 +39,10 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum CliCommand {
+    #[command(about = "Interactively generate a trudger config from embedded templates.")]
+    /// Interactively generate a trudger config from embedded templates.
+    Wizard,
+
     #[command(about = "Run configuration/command validation against a temporary scratch task DB.")]
     /// Run configuration/command validation against a temporary scratch task DB.
     Doctor,

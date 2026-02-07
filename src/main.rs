@@ -8,6 +8,7 @@ mod logger;
 mod run_loop;
 mod shell;
 mod tmux;
+mod wizard;
 mod wizard_templates;
 
 #[cfg(test)]

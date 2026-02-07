@@ -41,11 +41,15 @@ pub struct LoadedConfig {
 pub fn load_config(path: &Path) -> Result<LoadedConfig, String> {
     let content = fs::read_to_string(path)
         .map_err(|err| format!("Failed to read config {}: {}", path.display(), err))?;
-    let value: Value = serde_yaml::from_str(&content)
-        .map_err(|err| format!("Failed to parse config {}: {}", path.display(), err))?;
+    load_config_from_str(&path.display().to_string(), &content)
+}
+
+pub(crate) fn load_config_from_str(label: &str, content: &str) -> Result<LoadedConfig, String> {
+    let value: Value = serde_yaml::from_str(content)
+        .map_err(|err| format!("Failed to parse config {}: {}", label, err))?;
     let mapping = match value {
         Value::Mapping(mapping) => mapping,
-        _ => return Err(format!("Config {} must be a YAML mapping", path.display())),
+        _ => return Err(format!("Config {} must be a YAML mapping", label)),
     };
 
     let warnings = unknown_config_keys(&mapping);
@@ -53,7 +57,7 @@ pub fn load_config(path: &Path) -> Result<LoadedConfig, String> {
     validate_required_fields(&mapping)?;
 
     let config: Config = serde_yaml::from_value(Value::Mapping(mapping))
-        .map_err(|err| format!("Failed to parse config {}: {}", path.display(), err))?;
+        .map_err(|err| format!("Failed to parse config {}: {}", label, err))?;
 
     Ok(LoadedConfig { config, warnings })
 }

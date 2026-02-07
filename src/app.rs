@@ -2,6 +2,7 @@ use clap::Parser;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +14,7 @@ use crate::doctor::run_doctor_mode;
 use crate::logger::Logger;
 use crate::run_loop::{quit, reset_task_on_exit, run_loop, validate_config, Quit, RuntimeState};
 use crate::tmux::TmuxState;
+use crate::wizard::run_wizard_interactive;
 
 const PROMPT_TRUDGE: &str = ".codex/prompts/trudge.md";
 const PROMPT_REVIEW: &str = ".codex/prompts/trudge_review.md";
@@ -21,6 +23,7 @@ const DEFAULT_CONFIG_REL: &str = ".config/trudger.yml";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppMode {
     Run,
+    Wizard,
     Doctor,
 }
 
@@ -86,6 +89,7 @@ pub(crate) fn render_prompt(path: &Path) -> Result<String, String> {
 pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
     let mode = match cli.command {
         Some(CliCommand::Doctor) => AppMode::Doctor,
+        Some(CliCommand::Wizard) => AppMode::Wizard,
         None => AppMode::Run,
     };
 
@@ -107,6 +111,14 @@ pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
             reason: message,
         });
     }
+    if mode == AppMode::Wizard && !manual_tasks.is_empty() {
+        let message = "-t/--task is not supported in wizard mode.".to_string();
+        eprintln!("{}", message);
+        return Err(Quit {
+            code: 1,
+            reason: message,
+        });
+    }
     if mode == AppMode::Run && !cli.positional.is_empty() {
         let message = format!(
             "Positional arguments are not supported.\nMigration: pass manual task ids via -t/--task (for example: trudger -t {}).",
@@ -116,6 +128,14 @@ pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
         return Err(Quit {
             code: 1,
             reason: "positional_args_not_supported".to_string(),
+        });
+    }
+    if mode == AppMode::Wizard && !cli.positional.is_empty() {
+        let message = "Positional arguments are not supported in wizard mode.".to_string();
+        eprintln!("{}", message);
+        return Err(Quit {
+            code: 1,
+            reason: message,
         });
     }
 
@@ -128,6 +148,35 @@ pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
 
     let default_config = home.join(DEFAULT_CONFIG_REL);
     let config_path = config_path.unwrap_or_else(|| default_config.clone());
+
+    if mode == AppMode::Wizard {
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            let message =
+                "trudger wizard requires an interactive terminal (stdin and stdout must be a TTY)."
+                    .to_string();
+            eprintln!("{}", message);
+            return Err(Quit {
+                code: 1,
+                reason: message,
+            });
+        }
+
+        let result = run_wizard_interactive(&config_path).map_err(|message| Quit {
+            code: 1,
+            reason: message,
+        })?;
+
+        for warning in result.warnings {
+            eprintln!("{}", warning);
+        }
+
+        println!("Wrote config to {}", result.config_path.display());
+        if let Some(backup) = result.backup_path {
+            println!("Backup: {}", backup.display());
+        }
+        return Ok(());
+    }
+
     if !config_path.is_file() {
         if config_path_source_flag {
             eprintln!("Missing config file: {}", config_path.display());
