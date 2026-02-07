@@ -188,12 +188,28 @@ fn run_wizard_selected_with_existing(
         }
     }
 
-    let yaml = serde_yaml::to_string(&candidate_value)
+    let mut yaml = serde_yaml::to_string(&candidate_value)
         .map_err(|err| format!("Failed to render generated config as YAML: {}", err))?;
+
+    let mut unknown_keys_warning: Option<String> = None;
+    if let Some(existing_mapping) = existing.mapping.as_ref() {
+        if let Some((unknown_block, unknown_paths)) =
+            render_unknown_keys_commented_block(existing_mapping)?
+        {
+            yaml.push_str(&unknown_block);
+            unknown_keys_warning = Some(format!(
+                "Warning: Unknown/custom config keys were commented out and appended to the generated config: {}",
+                unknown_paths.join(", ")
+            ));
+        }
+    }
 
     let (backup_path, write_warnings) = validate_then_write_config(config_path, &yaml)?;
 
     let mut all_warnings = existing.warnings;
+    if let Some(warning) = unknown_keys_warning {
+        all_warnings.push(warning);
+    }
     all_warnings.extend(write_warnings);
 
     Ok(WizardResult {
@@ -314,6 +330,135 @@ fn extract_existing_defaults(mapping: &Mapping) -> ExistingDefaults {
         review_loop_limit,
         log_path,
     }
+}
+
+fn render_unknown_keys_commented_block(
+    existing: &Mapping,
+) -> Result<Option<(String, Vec<String>)>, String> {
+    let (unknown_mapping, unknown_paths) = extract_unknown_key_values(existing);
+    if unknown_mapping.is_empty() {
+        return Ok(None);
+    }
+
+    let rendered = serde_yaml::to_string(&Value::Mapping(unknown_mapping))
+        .map_err(|err| format!("Failed to render unknown keys as YAML: {}", err))?;
+    let rendered = strip_yaml_document_prefix(&rendered);
+
+    let mut block = String::new();
+    block.push('\n');
+    block.push_str(
+        "# -----------------------------------------------------------------------------\n",
+    );
+    block.push_str(
+        "# WARNING: Unknown/custom keys from your previous config were preserved below.\n",
+    );
+    block.push_str("# They are commented out so the generated config remains valid; you may\n");
+    block.push_str("# restore them manually if needed.\n");
+    block.push_str(
+        "# -----------------------------------------------------------------------------\n",
+    );
+    block.push_str(&comment_out_yaml_lines(&rendered));
+
+    Ok(Some((block, unknown_paths)))
+}
+
+fn strip_yaml_document_prefix(rendered: &str) -> String {
+    let Some(stripped) = rendered.strip_prefix("---\n") else {
+        return rendered.to_string();
+    };
+    stripped.to_string()
+}
+
+fn comment_out_yaml_lines(rendered: &str) -> String {
+    let mut out = String::new();
+    for line in rendered.lines() {
+        if line.trim().is_empty() {
+            out.push_str("#\n");
+            continue;
+        }
+        out.push_str("# ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn extract_unknown_key_values(existing: &Mapping) -> (Mapping, Vec<String>) {
+    const ALLOWED_TOP_LEVEL: &[&str] = &[
+        "agent_command",
+        "agent_review_command",
+        "commands",
+        "hooks",
+        "review_loop_limit",
+        "log_path",
+    ];
+    const ALLOWED_COMMANDS: &[&str] = &[
+        "next_task",
+        "task_show",
+        "task_status",
+        "task_update_in_progress",
+        "reset_task",
+    ];
+    const ALLOWED_HOOKS: &[&str] = &["on_completed", "on_requires_human", "on_doctor_setup"];
+
+    let mut out = Mapping::new();
+    let mut unknown_paths: Vec<String> = Vec::new();
+
+    for (key, value) in existing {
+        let Some(key_str) = key.as_str() else {
+            continue;
+        };
+        if !ALLOWED_TOP_LEVEL.contains(&key_str) {
+            out.insert(Value::String(key_str.to_string()), value.clone());
+            unknown_paths.push(key_str.to_string());
+        }
+    }
+
+    if let Some((commands, paths)) =
+        extract_unknown_nested_mapping(existing, "commands", ALLOWED_COMMANDS)
+    {
+        out.insert(
+            Value::String("commands".to_string()),
+            Value::Mapping(commands),
+        );
+        unknown_paths.extend(paths);
+    }
+
+    if let Some((hooks, paths)) = extract_unknown_nested_mapping(existing, "hooks", ALLOWED_HOOKS) {
+        out.insert(Value::String("hooks".to_string()), Value::Mapping(hooks));
+        unknown_paths.extend(paths);
+    }
+
+    (out, unknown_paths)
+}
+
+fn extract_unknown_nested_mapping(
+    existing: &Mapping,
+    mapping_key: &str,
+    allowed: &[&str],
+) -> Option<(Mapping, Vec<String>)> {
+    let Some(Value::Mapping(nested)) = existing.get(mapping_key) else {
+        return None;
+    };
+
+    let mut out = Mapping::new();
+    let mut unknown_paths: Vec<String> = Vec::new();
+
+    for (key, value) in nested {
+        let Some(key_str) = key.as_str() else {
+            continue;
+        };
+        if !allowed.contains(&key_str) {
+            out.insert(Value::String(key_str.to_string()), value.clone());
+            unknown_paths.push(format!("{}.{}", mapping_key, key_str));
+        }
+    }
+
+    if out.is_empty() {
+        return None;
+    }
+
+    Some((out, unknown_paths))
 }
 
 fn get_mapping_value_at_path<'a>(mapping: &'a Mapping, path: &[&str]) -> Option<&'a Value> {
@@ -824,6 +969,82 @@ hooks:
         let backup_contents = fs::read_to_string(&backups[0]).expect("read backup");
         assert_eq!(backup_contents, original);
         assert!(config_path.is_file(), "expected config overwritten");
+    }
+
+    #[test]
+    fn unknown_keys_are_preserved_as_commented_yaml_and_warned() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+        let original = r#"
+agent_command: "agent"
+agent_review_command: "review"
+review_loop_limit: 3
+log_path: "./log"
+custom_top: 123
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+  extra_cmd: "foo"
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+  on_doctor_setup: "setup"
+  extra_hook: "bar"
+"#;
+        fs::write(&config_path, original).expect("write existing config");
+
+        let result = run_wizard_selected(&config_path, "codex", "br-next-task").expect("wizard");
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("Unknown/custom config keys were commented out")),
+            "expected unknown-keys warning, got: {:?}",
+            result.warnings
+        );
+
+        let new_contents = fs::read_to_string(&config_path).expect("read new config");
+        assert!(
+            new_contents.contains(
+                "WARNING: Unknown/custom keys from your previous config were preserved below."
+            ),
+            "expected warning header in output"
+        );
+        assert!(
+            new_contents.contains("# custom_top: 123"),
+            "expected custom_top commented"
+        );
+        assert!(
+            !new_contents.contains("\ncustom_top:"),
+            "expected custom_top not present as real YAML key"
+        );
+        assert!(
+            new_contents.contains("# commands:"),
+            "expected commands block commented"
+        );
+        assert!(
+            new_contents.contains("extra_cmd") && new_contents.contains("#   extra_cmd:"),
+            "expected extra_cmd commented"
+        );
+        assert!(
+            new_contents.contains("# hooks:"),
+            "expected hooks block commented"
+        );
+        assert!(
+            new_contents.contains("extra_hook") && new_contents.contains("#   extra_hook:"),
+            "expected extra_hook commented"
+        );
+
+        // Ensure commented keys do not affect parsing.
+        let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
+        assert!(
+            loaded.warnings.is_empty(),
+            "expected no unknown-key warnings from commented block, got: {:?}",
+            loaded.warnings
+        );
     }
 
     #[test]
