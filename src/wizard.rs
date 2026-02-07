@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use crate::config::load_config_from_str;
 use crate::run_loop::validate_config;
-use crate::wizard_templates::{load_embedded_wizard_templates, AgentTemplate, TrackingTemplate};
+use crate::wizard_templates::{
+    load_embedded_wizard_templates, AgentTemplate, TrackingTemplate, WizardTemplates,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WizardResult {
@@ -43,14 +45,51 @@ struct WizardHooksOut {
     on_doctor_setup: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ExistingConfig {
+    mapping: Option<Mapping>,
+    defaults: ExistingDefaults,
+    warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ExistingDefaults {
     review_loop_limit: Option<u64>,
     log_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MergeDecision {
+    KeepCurrent,
+    ReplaceWithProposed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WizardMergeMode {
+    Interactive,
+    #[cfg(test)]
+    Overwrite,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MergePrompt {
+    key: String,
+    current: Option<Value>,
+    proposed: Option<Value>,
+}
+
 pub(crate) fn run_wizard_interactive(config_path: &Path) -> Result<WizardResult, String> {
     let templates = load_embedded_wizard_templates()?;
+
+    let existing = read_existing_config(config_path)?;
+    let default_agent_id = existing
+        .mapping
+        .as_ref()
+        .map(|mapping| best_matching_agent_template_id(&templates.agents, mapping));
+    let default_tracking_id = existing
+        .mapping
+        .as_ref()
+        .map(|mapping| best_matching_tracking_template_id(&templates.tracking, mapping));
 
     let agent_id = prompt_template_choice(
         "Select agent template",
@@ -59,6 +98,7 @@ pub(crate) fn run_wizard_interactive(config_path: &Path) -> Result<WizardResult,
             .iter()
             .map(|t| format!("{}: {} ({})", t.id, t.label, t.description))
             .collect(),
+        default_agent_id.as_deref(),
     )?;
     let tracking_id = prompt_template_choice(
         "Select tracking template",
@@ -67,28 +107,55 @@ pub(crate) fn run_wizard_interactive(config_path: &Path) -> Result<WizardResult,
             .iter()
             .map(|t| format!("{}: {} ({})", t.id, t.label, t.description))
             .collect(),
+        default_tracking_id.as_deref(),
     )?;
 
-    run_wizard_selected(config_path, &agent_id, &tracking_id)
+    run_wizard_selected_with_existing(
+        config_path,
+        &templates,
+        existing,
+        &agent_id,
+        &tracking_id,
+        WizardMergeMode::Interactive,
+    )
 }
 
+#[cfg(test)]
 pub(crate) fn run_wizard_selected(
     config_path: &Path,
     agent_id: &str,
     tracking_id: &str,
 ) -> Result<WizardResult, String> {
     let templates = load_embedded_wizard_templates()?;
+    let existing = read_existing_config(config_path)?;
+    run_wizard_selected_with_existing(
+        config_path,
+        &templates,
+        existing,
+        agent_id,
+        tracking_id,
+        WizardMergeMode::Overwrite,
+    )
+}
 
+fn run_wizard_selected_with_existing(
+    config_path: &Path,
+    templates: &WizardTemplates,
+    existing: ExistingConfig,
+    agent_id: &str,
+    tracking_id: &str,
+    merge_mode: WizardMergeMode,
+) -> Result<WizardResult, String> {
     let agent = find_agent_template(&templates.agents, agent_id)?;
     let tracking = find_tracking_template(&templates.tracking, tracking_id)?;
 
-    let (existing_defaults, warnings) = read_existing_defaults(config_path)?;
-
-    let review_loop_limit = existing_defaults
+    let review_loop_limit = existing
+        .defaults
         .review_loop_limit
         .filter(|value| *value > 0)
         .unwrap_or(templates.defaults.review_loop_limit);
-    let log_path = existing_defaults
+    let log_path = existing
+        .defaults
         .log_path
         .unwrap_or_else(|| templates.defaults.log_path.clone());
 
@@ -111,12 +178,22 @@ pub(crate) fn run_wizard_selected(
         log_path,
     };
 
-    let yaml = serde_yaml::to_string(&candidate)
+    let mut candidate_value = serde_yaml::to_value(&candidate)
+        .map_err(|err| format!("Failed to render generated config as YAML: {}", err))?;
+
+    if merge_mode == WizardMergeMode::Interactive {
+        if let Some(existing_mapping) = existing.mapping.as_ref() {
+            let mut decider = prompt_merge_decision;
+            merge_known_template_keys(existing_mapping, &mut candidate_value, &mut decider)?;
+        }
+    }
+
+    let yaml = serde_yaml::to_string(&candidate_value)
         .map_err(|err| format!("Failed to render generated config as YAML: {}", err))?;
 
     let (backup_path, write_warnings) = validate_then_write_config(config_path, &yaml)?;
 
-    let mut all_warnings = warnings;
+    let mut all_warnings = existing.warnings;
     all_warnings.extend(write_warnings);
 
     Ok(WizardResult {
@@ -172,9 +249,13 @@ fn write_config_with_backup(
     Ok((backup_path, Vec::new()))
 }
 
-fn read_existing_defaults(config_path: &Path) -> Result<(ExistingDefaults, Vec<String>), String> {
+fn read_existing_config(config_path: &Path) -> Result<ExistingConfig, String> {
     if !config_path.is_file() {
-        return Ok((ExistingDefaults::default(), Vec::new()));
+        return Ok(ExistingConfig {
+            mapping: None,
+            defaults: ExistingDefaults::default(),
+            warnings: Vec::new(),
+        });
     }
 
     let content = fs::read_to_string(config_path).map_err(|err| {
@@ -188,31 +269,37 @@ fn read_existing_defaults(config_path: &Path) -> Result<(ExistingDefaults, Vec<S
     let value: Value = match serde_yaml::from_str(&content) {
         Ok(value) => value,
         Err(err) => {
-            return Ok((
-                ExistingDefaults::default(),
-                vec![format!(
+            return Ok(ExistingConfig {
+                mapping: None,
+                defaults: ExistingDefaults::default(),
+                warnings: vec![format!(
                     "Warning: Existing config {} could not be parsed as YAML and will be backed up and overwritten: {}",
                     config_path.display(),
                     err
                 )],
-            ));
+            });
         }
     };
 
     let mapping = match value {
         Value::Mapping(mapping) => mapping,
         _ => {
-            return Ok((
-                ExistingDefaults::default(),
-                vec![format!(
+            return Ok(ExistingConfig {
+                mapping: None,
+                defaults: ExistingDefaults::default(),
+                warnings: vec![format!(
                     "Warning: Existing config {} is not a YAML mapping and will be backed up and overwritten.",
                     config_path.display()
                 )],
-            ));
+            });
         }
     };
 
-    Ok((extract_existing_defaults(&mapping), Vec::new()))
+    Ok(ExistingConfig {
+        defaults: extract_existing_defaults(&mapping),
+        mapping: Some(mapping),
+        warnings: Vec::new(),
+    })
 }
 
 fn extract_existing_defaults(mapping: &Mapping) -> ExistingDefaults {
@@ -229,7 +316,285 @@ fn extract_existing_defaults(mapping: &Mapping) -> ExistingDefaults {
     }
 }
 
-fn prompt_template_choice(title: &str, options: Vec<String>) -> Result<String, String> {
+fn get_mapping_value_at_path<'a>(mapping: &'a Mapping, path: &[&str]) -> Option<&'a Value> {
+    if path.is_empty() {
+        return None;
+    }
+
+    let mut current = mapping.get(&Value::String(path[0].to_string()))?;
+    for segment in &path[1..] {
+        let nested = current.as_mapping()?;
+        current = nested.get(&Value::String((*segment).to_string()))?;
+    }
+    Some(current)
+}
+
+fn get_value_at_path<'a>(root: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    if path.is_empty() {
+        return None;
+    }
+
+    let mut current = root;
+    for segment in path {
+        let nested = current.as_mapping()?;
+        current = nested.get(&Value::String((*segment).to_string()))?;
+    }
+    Some(current)
+}
+
+fn remove_value_at_path(root: &mut Value, path: &[&str]) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+
+    let mut current = root;
+    for (index, segment) in path.iter().enumerate() {
+        let is_last = index == path.len() - 1;
+        let nested = match current.as_mapping_mut() {
+            Some(mapping) => mapping,
+            None => return false,
+        };
+
+        let key = Value::String((*segment).to_string());
+        if is_last {
+            return nested.remove(&key).is_some();
+        }
+
+        current = match nested.get_mut(&key) {
+            Some(value) => value,
+            None => return false,
+        };
+    }
+
+    false
+}
+
+fn set_value_at_path(root: &mut Value, path: &[&str], value: Value) -> Result<(), String> {
+    if path.is_empty() {
+        return Ok(());
+    }
+
+    let mut current = root;
+    for (index, segment) in path.iter().enumerate() {
+        let is_last = index == path.len() - 1;
+        let nested = current.as_mapping_mut().ok_or_else(|| {
+            format!(
+                "Internal wizard error: expected YAML mapping at {}",
+                path[..index].join(".")
+            )
+        })?;
+
+        let key = Value::String((*segment).to_string());
+        if is_last {
+            nested.insert(key, value);
+            return Ok(());
+        }
+
+        if !nested.contains_key(&key) {
+            nested.insert(key.clone(), Value::Mapping(Mapping::new()));
+        }
+        let next = nested.get_mut(&key).expect("key exists");
+        if !matches!(next, Value::Mapping(_)) {
+            *next = Value::Mapping(Mapping::new());
+        }
+        current = next;
+    }
+
+    Ok(())
+}
+
+fn get_string_value_at_path<'a>(mapping: &'a Mapping, path: &[&str]) -> Option<&'a str> {
+    get_mapping_value_at_path(mapping, path).and_then(|value| value.as_str())
+}
+
+fn best_matching_agent_template_id(templates: &[AgentTemplate], existing: &Mapping) -> String {
+    let existing_agent = get_string_value_at_path(existing, &["agent_command"]);
+    let existing_review = get_string_value_at_path(existing, &["agent_review_command"]);
+
+    let mut best_id = templates
+        .first()
+        .map(|template| template.id.clone())
+        .unwrap_or_default();
+    let mut best_score: i32 = -1;
+
+    for template in templates {
+        let mut score = 0;
+        if existing_agent.is_some_and(|value| value == template.agent_command) {
+            score += 1;
+        }
+        if existing_review.is_some_and(|value| value == template.agent_review_command) {
+            score += 1;
+        }
+
+        if score > best_score {
+            best_score = score;
+            best_id = template.id.clone();
+        }
+    }
+
+    best_id
+}
+
+fn best_matching_tracking_template_id(templates: &[TrackingTemplate], existing: &Mapping) -> String {
+    let existing_next_task = get_string_value_at_path(existing, &["commands", "next_task"]);
+    let existing_task_show = get_string_value_at_path(existing, &["commands", "task_show"]);
+    let existing_task_status = get_string_value_at_path(existing, &["commands", "task_status"]);
+    let existing_task_update_in_progress =
+        get_string_value_at_path(existing, &["commands", "task_update_in_progress"]);
+    let existing_reset_task = get_string_value_at_path(existing, &["commands", "reset_task"]);
+    let existing_on_completed = get_string_value_at_path(existing, &["hooks", "on_completed"]);
+    let existing_on_requires_human =
+        get_string_value_at_path(existing, &["hooks", "on_requires_human"]);
+    let existing_on_doctor_setup = get_string_value_at_path(existing, &["hooks", "on_doctor_setup"]);
+
+    let mut best_id = templates
+        .first()
+        .map(|template| template.id.clone())
+        .unwrap_or_default();
+    let mut best_score: i32 = -1;
+
+    for template in templates {
+        let mut score = 0;
+        if existing_next_task.is_some_and(|value| value == template.commands.next_task) {
+            score += 1;
+        }
+        if existing_task_show.is_some_and(|value| value == template.commands.task_show) {
+            score += 1;
+        }
+        if existing_task_status.is_some_and(|value| value == template.commands.task_status) {
+            score += 1;
+        }
+        if existing_task_update_in_progress
+            .is_some_and(|value| value == template.commands.task_update_in_progress)
+        {
+            score += 1;
+        }
+        if existing_reset_task.is_some_and(|value| value == template.commands.reset_task) {
+            score += 1;
+        }
+        if existing_on_completed.is_some_and(|value| value == template.hooks.on_completed) {
+            score += 1;
+        }
+        if existing_on_requires_human.is_some_and(|value| value == template.hooks.on_requires_human)
+        {
+            score += 1;
+        }
+        if existing_on_doctor_setup.is_some_and(|value| {
+            template
+                .hooks
+                .on_doctor_setup
+                .as_ref()
+                .is_some_and(|candidate| value == candidate)
+        }) {
+            score += 1;
+        }
+
+        if score > best_score {
+            best_score = score;
+            best_id = template.id.clone();
+        }
+    }
+
+    best_id
+}
+
+fn merge_known_template_keys(
+    existing: &Mapping,
+    candidate: &mut Value,
+    prompt: &mut dyn FnMut(&MergePrompt) -> Result<MergeDecision, String>,
+) -> Result<Vec<MergePrompt>, String> {
+    const KNOWN_TEMPLATE_KEYS: &[&[&str]] = &[
+        &["agent_command"],
+        &["agent_review_command"],
+        &["commands", "next_task"],
+        &["commands", "task_show"],
+        &["commands", "task_status"],
+        &["commands", "task_update_in_progress"],
+        &["commands", "reset_task"],
+        &["hooks", "on_completed"],
+        &["hooks", "on_requires_human"],
+        &["hooks", "on_doctor_setup"],
+    ];
+
+    let mut prompts = Vec::new();
+    for key_path in KNOWN_TEMPLATE_KEYS {
+        let current = get_mapping_value_at_path(existing, key_path).cloned();
+        let proposed = get_value_at_path(candidate, key_path).cloned();
+        if current == proposed {
+            continue;
+        }
+
+        let merge_prompt = MergePrompt {
+            key: key_path.join("."),
+            current,
+            proposed,
+        };
+
+        let decision = prompt(&merge_prompt)?;
+        if decision == MergeDecision::KeepCurrent {
+            match merge_prompt.current.clone() {
+                Some(value) => set_value_at_path(candidate, key_path, value)?,
+                None => {
+                    remove_value_at_path(candidate, key_path);
+                }
+            }
+        }
+
+        prompts.push(merge_prompt);
+    }
+
+    Ok(prompts)
+}
+
+fn format_yaml_value(value: &Option<Value>) -> String {
+    match value {
+        None => "<missing>".to_string(),
+        Some(value) => serde_yaml::to_string(value)
+            .map(|rendered| rendered.trim_end().to_string())
+            .unwrap_or_else(|_| format!("{:?}", value)),
+    }
+}
+
+fn parse_merge_decision(input: &str) -> Option<MergeDecision> {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "" | "k" | "keep" | "y" | "yes" => Some(MergeDecision::KeepCurrent),
+        "r" | "replace" | "n" | "no" => Some(MergeDecision::ReplaceWithProposed),
+        _ => None,
+    }
+}
+
+fn prompt_merge_decision(prompt: &MergePrompt) -> Result<MergeDecision, String> {
+    println!("\nKey: {}", prompt.key);
+    println!("Current: {}", format_yaml_value(&prompt.current));
+    println!("Proposed: {}", format_yaml_value(&prompt.proposed));
+
+    loop {
+        print!("Keep current or replace with proposed? [K/r] (default K): ");
+        io::stdout()
+            .flush()
+            .map_err(|err| format!("Failed to flush stdout: {}", err))?;
+
+        let mut input = String::new();
+        let bytes = io::stdin()
+            .read_line(&mut input)
+            .map_err(|err| format!("Failed to read selection: {}", err))?;
+        if bytes == 0 {
+            return Err("Wizard aborted (stdin closed).".to_string());
+        }
+
+        if let Some(decision) = parse_merge_decision(&input) {
+            return Ok(decision);
+        }
+
+        eprintln!("Please enter 'k' to keep current or 'r' to replace.\n");
+    }
+}
+
+fn prompt_template_choice(
+    title: &str,
+    options: Vec<String>,
+    default_id: Option<&str>,
+) -> Result<String, String> {
     if options.is_empty() {
         return Err(format!("No choices available for {}.", title));
     }
@@ -237,9 +602,19 @@ fn prompt_template_choice(title: &str, options: Vec<String>) -> Result<String, S
     loop {
         println!("{}\n", title);
         for (index, option) in options.iter().enumerate() {
-            println!("  {}) {}", index + 1, option);
+            let id = option.split(':').next().unwrap_or(option).trim();
+            let default_marker = if default_id.is_some_and(|value| value == id) {
+                " (default)"
+            } else {
+                ""
+            };
+            println!("  {}) {}{}", index + 1, option, default_marker);
         }
-        print!("\nEnter number or id: ");
+        if default_id.is_some() {
+            print!("\nEnter number or id (blank for default): ");
+        } else {
+            print!("\nEnter number or id: ");
+        }
         io::stdout()
             .flush()
             .map_err(|err| format!("Failed to flush stdout: {}", err))?;
@@ -253,6 +628,9 @@ fn prompt_template_choice(title: &str, options: Vec<String>) -> Result<String, S
         }
         let trimmed = input.trim();
         if trimmed.is_empty() {
+            if let Some(id) = default_id {
+                return Ok(id.to_string());
+            }
             eprintln!("Selection must not be empty.\n");
             continue;
         }
@@ -440,5 +818,191 @@ hooks:
         let backup_contents = fs::read_to_string(&backups[0]).expect("read backup");
         assert_eq!(backup_contents, original);
         assert!(config_path.is_file(), "expected config overwritten");
+    }
+
+    #[test]
+    fn merge_prompts_only_for_known_keys_that_differ() {
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let agent = find_agent_template(&templates.agents, "codex").expect("agent");
+        let tracking = find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
+
+        let candidate = WizardConfigOut {
+            agent_command: agent.agent_command.clone(),
+            agent_review_command: agent.agent_review_command.clone(),
+            commands: WizardCommandsOut {
+                next_task: tracking.commands.next_task.clone(),
+                task_show: tracking.commands.task_show.clone(),
+                task_status: tracking.commands.task_status.clone(),
+                task_update_in_progress: tracking.commands.task_update_in_progress.clone(),
+                reset_task: tracking.commands.reset_task.clone(),
+            },
+            hooks: WizardHooksOut {
+                on_completed: tracking.hooks.on_completed.clone(),
+                on_requires_human: tracking.hooks.on_requires_human.clone(),
+                on_doctor_setup: tracking.hooks.on_doctor_setup.clone(),
+            },
+            review_loop_limit: templates.defaults.review_loop_limit,
+            log_path: templates.defaults.log_path.clone(),
+        };
+
+        let mut candidate_value = serde_yaml::to_value(&candidate).expect("candidate yaml");
+        let mut existing_value = candidate_value.clone();
+        set_value_at_path(
+            &mut existing_value,
+            &["commands", "reset_task"],
+            Value::String("different".to_string()),
+        )
+        .expect("set existing value");
+        let existing_mapping = existing_value
+            .as_mapping()
+            .expect("mapping")
+            .clone();
+
+        let mut prompted_keys = Vec::new();
+        let mut decider = |prompt: &MergePrompt| {
+            prompted_keys.push(prompt.key.clone());
+            Ok(MergeDecision::ReplaceWithProposed)
+        };
+
+        let prompts =
+            merge_known_template_keys(&existing_mapping, &mut candidate_value, &mut decider)
+                .expect("merge");
+
+        assert_eq!(prompts.len(), 1, "prompts: {prompts:?}");
+        assert_eq!(prompts[0].key, "commands.reset_task");
+        assert_eq!(prompted_keys, vec!["commands.reset_task"]);
+    }
+
+    #[test]
+    fn merge_keep_current_overrides_candidate_for_hooks_on_doctor_setup() {
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let agent = find_agent_template(&templates.agents, "codex").expect("agent");
+        let tracking = find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
+
+        let candidate = WizardConfigOut {
+            agent_command: agent.agent_command.clone(),
+            agent_review_command: agent.agent_review_command.clone(),
+            commands: WizardCommandsOut {
+                next_task: tracking.commands.next_task.clone(),
+                task_show: tracking.commands.task_show.clone(),
+                task_status: tracking.commands.task_status.clone(),
+                task_update_in_progress: tracking.commands.task_update_in_progress.clone(),
+                reset_task: tracking.commands.reset_task.clone(),
+            },
+            hooks: WizardHooksOut {
+                on_completed: tracking.hooks.on_completed.clone(),
+                on_requires_human: tracking.hooks.on_requires_human.clone(),
+                on_doctor_setup: tracking.hooks.on_doctor_setup.clone(),
+            },
+            review_loop_limit: templates.defaults.review_loop_limit,
+            log_path: templates.defaults.log_path.clone(),
+        };
+
+        let mut candidate_value = serde_yaml::to_value(&candidate).expect("candidate yaml");
+        let mut existing_value = candidate_value.clone();
+        set_value_at_path(
+            &mut existing_value,
+            &["hooks", "on_doctor_setup"],
+            Value::String("existing".to_string()),
+        )
+        .expect("set existing value");
+        let existing_mapping = existing_value
+            .as_mapping()
+            .expect("mapping")
+            .clone();
+
+        let mut decider = |prompt: &MergePrompt| {
+            assert_eq!(prompt.key, "hooks.on_doctor_setup");
+            Ok(MergeDecision::KeepCurrent)
+        };
+
+        let prompts =
+            merge_known_template_keys(&existing_mapping, &mut candidate_value, &mut decider)
+                .expect("merge");
+
+        assert_eq!(prompts.len(), 1, "prompts: {prompts:?}");
+        let merged = get_value_at_path(&candidate_value, &["hooks", "on_doctor_setup"])
+            .and_then(|value| value.as_str())
+            .expect("merged hooks.on_doctor_setup");
+        assert_eq!(merged, "existing");
+    }
+
+    #[test]
+    fn merge_decision_defaults_to_keep_current() {
+        assert_eq!(
+            parse_merge_decision(""),
+            Some(MergeDecision::KeepCurrent),
+            "expected empty input to keep current"
+        );
+    }
+
+    #[test]
+    fn best_match_picks_agent_and_tracking_templates_from_existing_config() {
+        let templates = load_embedded_wizard_templates().expect("templates");
+
+        let claude = find_agent_template(&templates.agents, "claude").expect("claude");
+        let mut existing_agent = Mapping::new();
+        existing_agent.insert(
+            Value::String("agent_command".to_string()),
+            Value::String(claude.agent_command.clone()),
+        );
+        existing_agent.insert(
+            Value::String("agent_review_command".to_string()),
+            Value::String(claude.agent_review_command.clone()),
+        );
+        assert_eq!(
+            best_matching_agent_template_id(&templates.agents, &existing_agent),
+            "claude"
+        );
+
+        let bd = find_tracking_template(&templates.tracking, "bd-labels").expect("bd-labels");
+        let mut existing_tracking = Mapping::new();
+        let mut commands = Mapping::new();
+        commands.insert(
+            Value::String("next_task".to_string()),
+            Value::String(bd.commands.next_task.clone()),
+        );
+        commands.insert(
+            Value::String("task_show".to_string()),
+            Value::String(bd.commands.task_show.clone()),
+        );
+        commands.insert(
+            Value::String("task_status".to_string()),
+            Value::String(bd.commands.task_status.clone()),
+        );
+        commands.insert(
+            Value::String("task_update_in_progress".to_string()),
+            Value::String(bd.commands.task_update_in_progress.clone()),
+        );
+        commands.insert(
+            Value::String("reset_task".to_string()),
+            Value::String(bd.commands.reset_task.clone()),
+        );
+        existing_tracking.insert(
+            Value::String("commands".to_string()),
+            Value::Mapping(commands),
+        );
+
+        let mut hooks = Mapping::new();
+        hooks.insert(
+            Value::String("on_completed".to_string()),
+            Value::String(bd.hooks.on_completed.clone()),
+        );
+        hooks.insert(
+            Value::String("on_requires_human".to_string()),
+            Value::String(bd.hooks.on_requires_human.clone()),
+        );
+        if let Some(setup) = &bd.hooks.on_doctor_setup {
+            hooks.insert(
+                Value::String("on_doctor_setup".to_string()),
+                Value::String(setup.clone()),
+            );
+        }
+        existing_tracking.insert(Value::String("hooks".to_string()), Value::Mapping(hooks));
+
+        assert_eq!(
+            best_matching_tracking_template_id(&templates.tracking, &existing_tracking),
+            "bd-labels"
+        );
     }
 }
