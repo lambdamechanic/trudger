@@ -260,7 +260,12 @@ pub(crate) fn run_with_args(args: Vec<OsString>) -> Result<(), Quit> {
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(err) => {
-            let _ = err.print();
+            // clap's `Error::print()` uses termcolor and bypasses Rust's test output
+            // capturing, which can make `cargo test` look like it failed. Keep the
+            // pretty clap output for real CLI runs, but suppress it in unit tests.
+            if !cfg!(test) {
+                let _ = err.print();
+            }
             return Err(Quit {
                 code: err.exit_code(),
                 reason: "cli_parse".to_string(),
