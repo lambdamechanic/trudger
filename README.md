@@ -31,6 +31,18 @@ It is slower and more serial, but if you have a large number of smaller projects
 trudger
 ```
 
+Generate a config interactively:
+
+```bash
+trudger wizard
+```
+
+Generate a config at a custom path:
+
+```bash
+trudger wizard --config ./trudger.yml
+```
+
 Run specific tasks first (positional task ids are not supported):
 
 ```bash
@@ -52,7 +64,7 @@ trudger doctor
 
 ## Configuration
 
-Trudger requires `~/.config/trudger.yml` on startup unless `-c/--config` is provided, which overrides the default path. If the file is missing, it prints curl commands for sample configs and exits non-zero.
+Trudger requires `~/.config/trudger.yml` on startup unless `-c/--config` is provided, which overrides the default path. If the default config file is missing, it prints instructions to run `trudger wizard` (or `trudger wizard --config PATH`) and exits non-zero.
 Configuration is parsed natively in Rust; unknown keys at top-level and under `commands`/`hooks` are logged as warnings and ignored.
 
 Sample configs:

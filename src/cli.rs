@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(
     name = "trudger",
     about = "Trudger slowly and unimaginatively trudges through your tasks.",
-    long_about = "Trudger selects tasks (or accepts manual task IDs), runs an agent solve + review loop, and then verifies the task is closed or escalated for human input.\n\nTask context is provided to configured commands via TRUDGER_* environment variables.",
+    long_about = "Trudger selects tasks (or accepts manual task IDs), runs an agent solve + review loop, and then verifies the task is closed or escalated for human input.\n\nIf you do not have a config yet, run `trudger wizard` to generate one.\n\nTask context is provided to configured commands via TRUDGER_* environment variables.",
     disable_help_subcommand = true
 )]
 pub(crate) struct Cli {

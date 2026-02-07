@@ -43,16 +43,10 @@ pub(crate) fn require_file(path: &Path, label: &str) -> Result<(), String> {
 fn bootstrap_config_error(default_path: &Path) -> String {
     format!(
         "Missing config file: {}\n\n\
-Sample configurations:\n\n\
-1) Trudgeable with hooks\n\
-   - Selects the next ready br task labeled \"trudgeable\".\n\
-   - On completion, removes the \"trudgeable\" label.\n\
-   - On requires-human, removes \"trudgeable\" and adds \"human-required\".\n\
-   mkdir -p ~/.config && curl -fsSL https://raw.githubusercontent.com/lambdamechanic/trudger/main/sample_configuration/trudgeable-with-hooks.yml -o ~/.config/trudger.yml\n\n\
-2) Robot triage\n\
-   - Selects tasks via `bv --robot-next`.\n\
-   - No label changes (hooks are no-ops).\n\
-   mkdir -p ~/.config && curl -fsSL https://raw.githubusercontent.com/lambdamechanic/trudger/main/sample_configuration/robot-triage.yml -o ~/.config/trudger.yml",
+To generate a config interactively, run:\n\
+  trudger wizard\n\n\
+To generate a config at a non-default path, run:\n\
+  trudger wizard --config PATH",
         default_path.display()
     )
 }
