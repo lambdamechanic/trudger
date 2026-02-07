@@ -24,5 +24,10 @@ cargo fmt --check
 printf 'pre-push: running cargo clippy...\n'
 cargo clippy --all-targets -- -D warnings
 
-printf 'pre-push: running cargo test...\n'
-cargo test
+if command -v cargo-nextest >/dev/null 2>&1; then
+  printf 'pre-push: running cargo nextest...\n'
+  cargo nextest run
+else
+  printf 'pre-push: cargo-nextest not found; running cargo test...\n'
+  cargo test
+fi

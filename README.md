@@ -149,10 +149,16 @@ The prompt sources live in `prompts/` and are installed by `./install.sh`.
 
 ## Development
 
-Enable the repo git hooks (runs `shellcheck`, `cargo fmt`, `cargo clippy`, and `cargo test` on pre-push):
+Enable the repo git hooks (runs `shellcheck`, `cargo fmt`, `cargo clippy`, and tests on pre-push; prefers `cargo nextest run` when available):
 
 ```bash
 git config core.hooksPath .githooks
+```
+
+Optional (faster parallel tests):
+
+```bash
+cargo install cargo-nextest --locked
 ```
 
 ### Coverage
