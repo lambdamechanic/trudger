@@ -903,11 +903,23 @@ hooks:
         let nested = temp.path().join("missing-parent");
         let config_path = nested.join("trudger.yml");
 
+        let templates = load_embedded_wizard_templates().expect("templates");
         let result = run_wizard_selected(&config_path, "codex", "br-next-task").expect("wizard");
         assert_eq!(result.config_path, config_path);
         assert!(nested.is_dir(), "expected parent dir created");
         assert!(config_path.is_file(), "expected config written");
         assert!(result.backup_path.is_none());
+
+        let contents = fs::read_to_string(&config_path).expect("read config");
+        let loaded = load_config_from_str("<test>", &contents).expect("load config");
+        assert_eq!(
+            loaded.config.review_loop_limit, templates.defaults.review_loop_limit,
+            "expected review_loop_limit to use embedded default"
+        );
+        assert_eq!(
+            loaded.config.log_path, templates.defaults.log_path,
+            "expected log_path to use embedded default"
+        );
     }
 
     #[test]
@@ -945,6 +957,37 @@ hooks:
 
         // Sanity check: output must be loadable by current config parser.
         let _ = load_config_from_str("<test>", &new_contents).expect("load config");
+    }
+
+    #[test]
+    fn existing_review_loop_limit_and_log_path_are_preserved() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+        fs::write(
+            &config_path,
+            r#"
+review_loop_limit: 99
+log_path: "./custom.log"
+"#,
+        )
+        .expect("write existing config");
+
+        let result = run_wizard_selected(&config_path, "codex", "br-next-task").expect("wizard");
+        assert!(
+            result.backup_path.is_some(),
+            "expected overwrite to create a backup"
+        );
+
+        let contents = fs::read_to_string(&config_path).expect("read config");
+        let loaded = load_config_from_str("<test>", &contents).expect("load config");
+        assert_eq!(
+            loaded.config.review_loop_limit, 99,
+            "expected review_loop_limit to be preserved"
+        );
+        assert_eq!(
+            loaded.config.log_path, "./custom.log",
+            "expected log_path to be preserved"
+        );
     }
 
     #[test]
