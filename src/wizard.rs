@@ -435,7 +435,10 @@ fn best_matching_agent_template_id(templates: &[AgentTemplate], existing: &Mappi
     best_id
 }
 
-fn best_matching_tracking_template_id(templates: &[TrackingTemplate], existing: &Mapping) -> String {
+fn best_matching_tracking_template_id(
+    templates: &[TrackingTemplate],
+    existing: &Mapping,
+) -> String {
     let existing_next_task = get_string_value_at_path(existing, &["commands", "next_task"]);
     let existing_task_show = get_string_value_at_path(existing, &["commands", "task_show"]);
     let existing_task_status = get_string_value_at_path(existing, &["commands", "task_status"]);
@@ -445,7 +448,8 @@ fn best_matching_tracking_template_id(templates: &[TrackingTemplate], existing: 
     let existing_on_completed = get_string_value_at_path(existing, &["hooks", "on_completed"]);
     let existing_on_requires_human =
         get_string_value_at_path(existing, &["hooks", "on_requires_human"]);
-    let existing_on_doctor_setup = get_string_value_at_path(existing, &["hooks", "on_doctor_setup"]);
+    let existing_on_doctor_setup =
+        get_string_value_at_path(existing, &["hooks", "on_doctor_setup"]);
 
     let mut best_id = templates
         .first()
@@ -824,7 +828,8 @@ hooks:
     fn merge_prompts_only_for_known_keys_that_differ() {
         let templates = load_embedded_wizard_templates().expect("templates");
         let agent = find_agent_template(&templates.agents, "codex").expect("agent");
-        let tracking = find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
+        let tracking =
+            find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
 
         let candidate = WizardConfigOut {
             agent_command: agent.agent_command.clone(),
@@ -853,10 +858,7 @@ hooks:
             Value::String("different".to_string()),
         )
         .expect("set existing value");
-        let existing_mapping = existing_value
-            .as_mapping()
-            .expect("mapping")
-            .clone();
+        let existing_mapping = existing_value.as_mapping().expect("mapping").clone();
 
         let mut prompted_keys = Vec::new();
         let mut decider = |prompt: &MergePrompt| {
@@ -877,7 +879,8 @@ hooks:
     fn merge_keep_current_overrides_candidate_for_hooks_on_doctor_setup() {
         let templates = load_embedded_wizard_templates().expect("templates");
         let agent = find_agent_template(&templates.agents, "codex").expect("agent");
-        let tracking = find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
+        let tracking =
+            find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
 
         let candidate = WizardConfigOut {
             agent_command: agent.agent_command.clone(),
@@ -906,10 +909,7 @@ hooks:
             Value::String("existing".to_string()),
         )
         .expect("set existing value");
-        let existing_mapping = existing_value
-            .as_mapping()
-            .expect("mapping")
-            .clone();
+        let existing_mapping = existing_value.as_mapping().expect("mapping").clone();
 
         let mut decider = |prompt: &MergePrompt| {
             assert_eq!(prompt.key, "hooks.on_doctor_setup");
