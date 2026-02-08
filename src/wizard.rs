@@ -1,8 +1,6 @@
 use chrono::Utc;
 use serde::Serialize;
 use serde_yaml::{Mapping, Value};
-use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::config::load_config_from_str;
@@ -10,6 +8,11 @@ use crate::run_loop::validate_config;
 use crate::wizard_templates::{
     load_embedded_wizard_templates, AgentTemplate, TrackingTemplate, WizardTemplates,
 };
+
+mod fs;
+mod io;
+
+use io::{TerminalWizardIo, WizardIo};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WizardResult {
@@ -80,8 +83,23 @@ struct MergePrompt {
 
 pub(crate) fn run_wizard_interactive(config_path: &Path) -> Result<WizardResult, String> {
     let templates = load_embedded_wizard_templates()?;
+    let mut io = TerminalWizardIo::new();
+    run_wizard_with_io(
+        config_path,
+        &templates,
+        WizardMergeMode::Interactive,
+        &mut io,
+    )
+}
 
+fn run_wizard_with_io(
+    config_path: &Path,
+    templates: &WizardTemplates,
+    merge_mode: WizardMergeMode,
+    io: &mut dyn WizardIo,
+) -> Result<WizardResult, String> {
     let existing = read_existing_config(config_path)?;
+
     let default_agent_id = existing
         .mapping
         .as_ref()
@@ -92,6 +110,7 @@ pub(crate) fn run_wizard_interactive(config_path: &Path) -> Result<WizardResult,
         .map(|mapping| best_matching_tracking_template_id(&templates.tracking, mapping));
 
     let agent_id = prompt_template_choice(
+        io,
         "Select agent template",
         templates
             .agents
@@ -101,6 +120,7 @@ pub(crate) fn run_wizard_interactive(config_path: &Path) -> Result<WizardResult,
         default_agent_id.as_deref(),
     )?;
     let tracking_id = prompt_template_choice(
+        io,
         "Select tracking template",
         templates
             .tracking
@@ -112,29 +132,12 @@ pub(crate) fn run_wizard_interactive(config_path: &Path) -> Result<WizardResult,
 
     run_wizard_selected_with_existing(
         config_path,
-        &templates,
+        templates,
         existing,
         &agent_id,
         &tracking_id,
-        WizardMergeMode::Interactive,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn run_wizard_selected(
-    config_path: &Path,
-    agent_id: &str,
-    tracking_id: &str,
-) -> Result<WizardResult, String> {
-    let templates = load_embedded_wizard_templates()?;
-    let existing = read_existing_config(config_path)?;
-    run_wizard_selected_with_existing(
-        config_path,
-        &templates,
-        existing,
-        agent_id,
-        tracking_id,
-        WizardMergeMode::Overwrite,
+        merge_mode,
+        io,
     )
 }
 
@@ -145,6 +148,7 @@ fn run_wizard_selected_with_existing(
     agent_id: &str,
     tracking_id: &str,
     merge_mode: WizardMergeMode,
+    io: &mut dyn WizardIo,
 ) -> Result<WizardResult, String> {
     let agent = find_agent_template(&templates.agents, agent_id)?;
     let tracking = find_tracking_template(&templates.tracking, tracking_id)?;
@@ -183,7 +187,7 @@ fn run_wizard_selected_with_existing(
 
     if merge_mode == WizardMergeMode::Interactive {
         if let Some(existing_mapping) = existing.mapping.as_ref() {
-            let mut decider = prompt_merge_decision;
+            let mut decider = |prompt: &MergePrompt| prompt_merge_decision(io, prompt);
             merge_known_template_keys(existing_mapping, &mut candidate_value, &mut decider)?;
         }
     }
@@ -240,33 +244,25 @@ fn write_config_with_backup(
     // Create parent directory only after validation succeeded to avoid side effects on failure.
     if let Some(parent) = config_path.parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|err| {
-                format!(
-                    "Failed to create config parent directory {}: {}",
-                    parent.display(),
-                    err
-                )
-            })?;
+            fs::create_dir_all(parent)?;
         }
     }
 
-    let backup_path = if config_path.exists() {
+    let backup_path = if fs::exists(config_path) {
         let backup_path = next_backup_path(config_path);
-        fs::copy(config_path, &backup_path)
-            .map_err(|err| format!("Failed to create backup {}: {}", backup_path.display(), err))?;
+        fs::copy(config_path, &backup_path)?;
         Some(backup_path)
     } else {
         None
     };
 
-    fs::write(config_path, content)
-        .map_err(|err| format!("Failed to write config {}: {}", config_path.display(), err))?;
+    fs::write(config_path, content)?;
 
     Ok((backup_path, Vec::new()))
 }
 
 fn read_existing_config(config_path: &Path) -> Result<ExistingConfig, String> {
-    if !config_path.is_file() {
+    if !fs::is_file(config_path) {
         return Ok(ExistingConfig {
             mapping: None,
             defaults: ExistingDefaults::default(),
@@ -274,13 +270,7 @@ fn read_existing_config(config_path: &Path) -> Result<ExistingConfig, String> {
         });
     }
 
-    let content = fs::read_to_string(config_path).map_err(|err| {
-        format!(
-            "Failed to read existing config {}: {}",
-            config_path.display(),
-            err
-        )
-    })?;
+    let content = fs::read_to_string(config_path)?;
 
     let value: Value = match serde_yaml::from_str(&content) {
         Ok(value) => value,
@@ -714,34 +704,38 @@ fn parse_merge_decision(input: &str) -> Option<MergeDecision> {
     }
 }
 
-fn prompt_merge_decision(prompt: &MergePrompt) -> Result<MergeDecision, String> {
-    println!("\nKey: {}", prompt.key);
-    println!("Current: {}", format_yaml_value(&prompt.current));
-    println!("Proposed: {}", format_yaml_value(&prompt.proposed));
+fn prompt_merge_decision(
+    io: &mut dyn WizardIo,
+    prompt: &MergePrompt,
+) -> Result<MergeDecision, String> {
+    io.write_out(&format!("\nKey: {}\n", prompt.key))?;
+    io.write_out(&format!(
+        "Current: {}\n",
+        format_yaml_value(&prompt.current)
+    ))?;
+    io.write_out(&format!(
+        "Proposed: {}\n",
+        format_yaml_value(&prompt.proposed)
+    ))?;
 
     loop {
-        print!("Keep current or replace with proposed? [K/r] (default K): ");
-        io::stdout()
-            .flush()
-            .map_err(|err| format!("Failed to flush stdout: {}", err))?;
+        io.write_out("Keep current or replace with proposed? [K/r] (default K): ")?;
+        io.flush_out()?;
 
-        let mut input = String::new();
-        let bytes = io::stdin()
-            .read_line(&mut input)
-            .map_err(|err| format!("Failed to read selection: {}", err))?;
-        if bytes == 0 {
+        let Some(input) = io.read_line()? else {
             return Err("Wizard aborted (stdin closed).".to_string());
-        }
+        };
 
         if let Some(decision) = parse_merge_decision(&input) {
             return Ok(decision);
         }
 
-        eprintln!("Please enter 'k' to keep current or 'r' to replace.\n");
+        io.write_err("Please enter 'k' to keep current or 'r' to replace.\n\n")?;
     }
 }
 
 fn prompt_template_choice(
+    io: &mut dyn WizardIo,
     title: &str,
     options: Vec<String>,
     default_id: Option<&str>,
@@ -751,7 +745,7 @@ fn prompt_template_choice(
     }
 
     loop {
-        println!("{}\n", title);
+        io.write_out(&format!("{}\n\n", title))?;
         for (index, option) in options.iter().enumerate() {
             let id = option.split(':').next().unwrap_or(option).trim();
             let default_marker = if default_id.is_some_and(|value| value == id) {
@@ -759,30 +753,24 @@ fn prompt_template_choice(
             } else {
                 ""
             };
-            println!("  {}) {}{}", index + 1, option, default_marker);
+            io.write_out(&format!("  {}) {}{}\n", index + 1, option, default_marker))?;
         }
         if default_id.is_some() {
-            print!("\nEnter number or id (blank for default): ");
+            io.write_out("\nEnter number or id (blank for default): ")?;
         } else {
-            print!("\nEnter number or id: ");
+            io.write_out("\nEnter number or id: ")?;
         }
-        io::stdout()
-            .flush()
-            .map_err(|err| format!("Failed to flush stdout: {}", err))?;
+        io.flush_out()?;
 
-        let mut input = String::new();
-        let bytes = io::stdin()
-            .read_line(&mut input)
-            .map_err(|err| format!("Failed to read selection: {}", err))?;
-        if bytes == 0 {
+        let Some(input) = io.read_line()? else {
             return Err("Wizard aborted (stdin closed).".to_string());
-        }
+        };
         let trimmed = input.trim();
         if trimmed.is_empty() {
             if let Some(id) = default_id {
                 return Ok(id.to_string());
             }
-            eprintln!("Selection must not be empty.\n");
+            io.write_err("Selection must not be empty.\n\n")?;
             continue;
         }
         if let Ok(choice) = trimmed.parse::<usize>() {
@@ -791,7 +779,7 @@ fn prompt_template_choice(
                 let id = option.split(':').next().unwrap_or(option).trim();
                 return Ok(id.to_string());
             }
-            eprintln!("Selection out of range.\n");
+            io.write_err("Selection out of range.\n\n")?;
             continue;
         }
 
@@ -828,13 +816,13 @@ fn next_backup_path(config_path: &Path) -> PathBuf {
     let timestamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let mut backup = config_path.with_file_name(format!("{}.bak-{}", file_name, timestamp));
 
-    if !backup.exists() {
+    if !fs::exists(&backup) {
         return backup;
     }
 
     for index in 2..=1000 {
         backup = config_path.with_file_name(format!("{}.bak-{}-{}", file_name, timestamp, index));
-        if !backup.exists() {
+        if !fs::exists(&backup) {
             return backup;
         }
     }
@@ -904,7 +892,15 @@ hooks:
         let config_path = nested.join("trudger.yml");
 
         let templates = load_embedded_wizard_templates().expect("templates");
-        let result = run_wizard_selected(&config_path, "codex", "br-next-task").expect("wizard");
+        let mut wizard_io =
+            io::TestWizardIo::new(vec!["codex\n".to_string(), "br-next-task\n".to_string()]);
+        let result = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect("wizard");
         assert_eq!(result.config_path, config_path);
         assert!(nested.is_dir(), "expected parent dir created");
         assert!(config_path.is_file(), "expected config written");
@@ -944,7 +940,16 @@ hooks:
 "#;
         fs::write(&config_path, original).expect("write existing config");
 
-        let result = run_wizard_selected(&config_path, "codex", "br-next-task").expect("wizard");
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let mut wizard_io =
+            io::TestWizardIo::new(vec!["codex\n".to_string(), "br-next-task\n".to_string()]);
+        let result = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect("wizard");
 
         let backups = list_backups(temp.path(), "trudger.yml");
         assert_eq!(backups.len(), 1, "expected one backup, got {backups:?}");
@@ -972,7 +977,16 @@ log_path: "./custom.log"
         )
         .expect("write existing config");
 
-        let result = run_wizard_selected(&config_path, "codex", "br-next-task").expect("wizard");
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let mut wizard_io =
+            io::TestWizardIo::new(vec!["codex\n".to_string(), "br-next-task\n".to_string()]);
+        let result = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect("wizard");
         assert!(
             result.backup_path.is_some(),
             "expected overwrite to create a backup"
@@ -997,7 +1011,16 @@ log_path: "./custom.log"
         let original = ":\n  - invalid";
         fs::write(&config_path, original).expect("write invalid yaml");
 
-        let result = run_wizard_selected(&config_path, "codex", "br-next-task").expect("wizard");
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let mut wizard_io =
+            io::TestWizardIo::new(vec!["codex\n".to_string(), "br-next-task\n".to_string()]);
+        let result = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect("wizard");
         assert!(
             result
                 .warnings
@@ -1039,7 +1062,16 @@ hooks:
 "#;
         fs::write(&config_path, original).expect("write existing config");
 
-        let result = run_wizard_selected(&config_path, "codex", "br-next-task").expect("wizard");
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let mut wizard_io =
+            io::TestWizardIo::new(vec!["codex\n".to_string(), "br-next-task\n".to_string()]);
+        let result = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect("wizard");
         assert!(
             result
                 .warnings
@@ -1270,5 +1302,240 @@ hooks:
             best_matching_tracking_template_id(&templates.tracking, &existing_tracking),
             "bd-labels"
         );
+    }
+
+    #[test]
+    fn template_selection_defaults_are_applied_on_blank_input() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let agent = find_agent_template(&templates.agents, "claude").expect("agent");
+        let tracking = find_tracking_template(&templates.tracking, "bd-labels").expect("tracking");
+
+        let mut existing = Mapping::new();
+        existing.insert(
+            Value::String("agent_command".to_string()),
+            Value::String(agent.agent_command.clone()),
+        );
+        existing.insert(
+            Value::String("agent_review_command".to_string()),
+            Value::String(agent.agent_review_command.clone()),
+        );
+
+        let mut commands = Mapping::new();
+        commands.insert(
+            Value::String("next_task".to_string()),
+            Value::String(tracking.commands.next_task.clone()),
+        );
+        commands.insert(
+            Value::String("task_show".to_string()),
+            Value::String(tracking.commands.task_show.clone()),
+        );
+        commands.insert(
+            Value::String("task_status".to_string()),
+            Value::String(tracking.commands.task_status.clone()),
+        );
+        commands.insert(
+            Value::String("task_update_in_progress".to_string()),
+            Value::String(tracking.commands.task_update_in_progress.clone()),
+        );
+        commands.insert(
+            Value::String("reset_task".to_string()),
+            Value::String(tracking.commands.reset_task.clone()),
+        );
+        existing.insert(
+            Value::String("commands".to_string()),
+            Value::Mapping(commands),
+        );
+
+        let mut hooks = Mapping::new();
+        hooks.insert(
+            Value::String("on_completed".to_string()),
+            Value::String(tracking.hooks.on_completed.clone()),
+        );
+        hooks.insert(
+            Value::String("on_requires_human".to_string()),
+            Value::String(tracking.hooks.on_requires_human.clone()),
+        );
+        if let Some(setup) = &tracking.hooks.on_doctor_setup {
+            hooks.insert(
+                Value::String("on_doctor_setup".to_string()),
+                Value::String(setup.clone()),
+            );
+        }
+        existing.insert(Value::String("hooks".to_string()), Value::Mapping(hooks));
+
+        let existing_yaml =
+            serde_yaml::to_string(&Value::Mapping(existing)).expect("existing yaml");
+        fs::write(&config_path, existing_yaml).expect("write existing config");
+
+        let mut wizard_io = io::TestWizardIo::new(vec!["\n".to_string(), "\n".to_string()]);
+        let result = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect("wizard");
+        assert_eq!(result.config_path, config_path);
+
+        let new_contents = fs::read_to_string(&config_path).expect("read config");
+        let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
+        assert_eq!(
+            loaded.config.agent_command, agent.agent_command,
+            "expected default agent selection to be applied"
+        );
+        assert_eq!(
+            loaded.config.commands.next_task,
+            Some(tracking.commands.next_task.clone()),
+            "expected default tracking selection to be applied"
+        );
+    }
+
+    #[test]
+    fn merge_decisions_are_driven_via_io_interpreter() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let agent = find_agent_template(&templates.agents, "codex").expect("agent");
+        let tracking =
+            find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
+
+        // Existing config differs on one known key; we will choose to keep it.
+        let mut existing = Mapping::new();
+        existing.insert(
+            Value::String("agent_command".to_string()),
+            Value::String(agent.agent_command.clone()),
+        );
+        existing.insert(
+            Value::String("agent_review_command".to_string()),
+            Value::String(agent.agent_review_command.clone()),
+        );
+
+        let mut commands = Mapping::new();
+        commands.insert(
+            Value::String("next_task".to_string()),
+            Value::String(tracking.commands.next_task.clone()),
+        );
+        commands.insert(
+            Value::String("task_show".to_string()),
+            Value::String(tracking.commands.task_show.clone()),
+        );
+        commands.insert(
+            Value::String("task_status".to_string()),
+            Value::String(tracking.commands.task_status.clone()),
+        );
+        commands.insert(
+            Value::String("task_update_in_progress".to_string()),
+            Value::String(tracking.commands.task_update_in_progress.clone()),
+        );
+        commands.insert(
+            Value::String("reset_task".to_string()),
+            Value::String("keep-me".to_string()),
+        );
+        existing.insert(
+            Value::String("commands".to_string()),
+            Value::Mapping(commands),
+        );
+
+        let mut hooks = Mapping::new();
+        hooks.insert(
+            Value::String("on_completed".to_string()),
+            Value::String(tracking.hooks.on_completed.clone()),
+        );
+        hooks.insert(
+            Value::String("on_requires_human".to_string()),
+            Value::String(tracking.hooks.on_requires_human.clone()),
+        );
+        if let Some(setup) = &tracking.hooks.on_doctor_setup {
+            hooks.insert(
+                Value::String("on_doctor_setup".to_string()),
+                Value::String(setup.clone()),
+            );
+        }
+        existing.insert(Value::String("hooks".to_string()), Value::Mapping(hooks));
+
+        let existing_yaml =
+            serde_yaml::to_string(&Value::Mapping(existing)).expect("existing yaml");
+        fs::write(&config_path, existing_yaml).expect("write existing config");
+
+        let mut wizard_io = io::TestWizardIo::new(vec![
+            "codex\n".to_string(),
+            "br-next-task\n".to_string(),
+            "k\n".to_string(),
+        ]);
+        let _ = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Interactive,
+            &mut wizard_io,
+        )
+        .expect("wizard");
+
+        let new_contents = fs::read_to_string(&config_path).expect("read new config");
+        let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
+        assert_eq!(
+            loaded.config.commands.reset_task, "keep-me",
+            "expected interactive merge to keep current value"
+        );
+    }
+
+    #[test]
+    fn wizard_validation_failure_prevents_write_and_backup() {
+        use crate::wizard_templates::{
+            AgentTemplate, DefaultsTemplate, TrackingCommands, TrackingHooks, TrackingTemplate,
+            WizardTemplates,
+        };
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+        fs::write(&config_path, "old").expect("write existing config");
+
+        let templates = WizardTemplates {
+            agents: vec![AgentTemplate {
+                id: "bad".to_string(),
+                label: "Bad".to_string(),
+                description: "bad".to_string(),
+                agent_command: "".to_string(),
+                agent_review_command: "review".to_string(),
+            }],
+            tracking: vec![TrackingTemplate {
+                id: "trk".to_string(),
+                label: "trk".to_string(),
+                description: "trk".to_string(),
+                commands: TrackingCommands {
+                    next_task: "next".to_string(),
+                    task_show: "show".to_string(),
+                    task_status: "status".to_string(),
+                    task_update_in_progress: "update".to_string(),
+                    reset_task: "reset".to_string(),
+                },
+                hooks: TrackingHooks {
+                    on_completed: "done".to_string(),
+                    on_requires_human: "human".to_string(),
+                    on_doctor_setup: None,
+                },
+            }],
+            defaults: DefaultsTemplate {
+                review_loop_limit: 1,
+                log_path: "./log".to_string(),
+            },
+        };
+
+        let mut wizard_io = io::TestWizardIo::new(vec!["bad\n".to_string(), "trk\n".to_string()]);
+        let err = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect_err("expected error");
+        assert!(err.contains("agent_command"), "err: {err}");
+
+        let contents = fs::read_to_string(&config_path).expect("read config");
+        assert_eq!(contents, "old");
+        assert!(list_backups(temp.path(), "trudger.yml").is_empty());
     }
 }
