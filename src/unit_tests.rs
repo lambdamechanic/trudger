@@ -2881,7 +2881,10 @@ fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
     );
 
     assert!(task_status_log.exists(), "task-status should run at exit");
-    assert!(reset_task_log.exists(), "reset-task should run for in_progress");
+    assert!(
+        reset_task_log.exists(),
+        "reset-task should run for in_progress"
+    );
 }
 
 #[test]
@@ -2947,7 +2950,10 @@ fn sigint_while_in_progress_invokes_reset_task_on_exit() {
     );
 
     assert!(task_status_log.exists(), "task-status should run at exit");
-    assert!(reset_task_log.exists(), "reset-task should run for in_progress");
+    assert!(
+        reset_task_log.exists(),
+        "reset-task should run for in_progress"
+    );
 }
 
 #[test]
