@@ -1,4 +1,3 @@
-use regex::Regex;
 use std::env;
 use std::path::Path;
 use std::process::Command;
@@ -36,15 +35,7 @@ impl TmuxState {
             env::set_var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE", &original_title);
         }
 
-        let mut base_name = original_title.clone();
-        if !base_name.is_empty() {
-            let re = Regex::new(r" (COMPLETED|NEEDS_HUMAN) \[[^\]]*\]").unwrap();
-            base_name = re.replace_all(&base_name, "").to_string();
-            let re = Regex::new(r" (SOLVING|REVIEWING) .*$").unwrap();
-            base_name = re.replace_all(&base_name, "").to_string();
-            let re = Regex::new(r" HALTED ON ERROR .*$").unwrap();
-            base_name = re.replace_all(&base_name, "").to_string();
-        }
+        let mut base_name = strip_trudger_title_suffixes(&original_title);
 
         if base_name.trim().is_empty() {
             base_name = default_tmux_base_name();
@@ -100,6 +91,26 @@ impl TmuxState {
             self.select_pane(&self.original_title);
         }
     }
+}
+
+fn strip_trudger_title_suffixes(title: &str) -> String {
+    // Trudger appends these segments when updating the pane title.
+    const MARKERS: &[&str] = &[
+        " COMPLETED [",
+        " NEEDS_HUMAN [",
+        " SOLVING ",
+        " REVIEWING ",
+        " HALTED ON ERROR ",
+    ];
+
+    let mut cut = title.len();
+    for marker in MARKERS {
+        if let Some(idx) = title.find(marker) {
+            cut = cut.min(idx);
+        }
+    }
+
+    title[..cut].to_string()
 }
 
 fn tmux_display(format: &str) -> Option<String> {

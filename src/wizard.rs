@@ -1,5 +1,4 @@
 use chrono::Utc;
-use serde::Serialize;
 use serde_yaml::{Mapping, Value};
 use std::path::{Path, PathBuf};
 
@@ -21,33 +20,6 @@ pub(crate) struct WizardResult {
     pub(crate) config_path: PathBuf,
     pub(crate) backup_path: Option<PathBuf>,
     pub(crate) warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct WizardConfigOut {
-    agent_command: String,
-    agent_review_command: String,
-    commands: WizardCommandsOut,
-    hooks: WizardHooksOut,
-    review_loop_limit: u64,
-    log_path: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct WizardCommandsOut {
-    next_task: String,
-    task_show: String,
-    task_status: String,
-    task_update_in_progress: String,
-    reset_task: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct WizardHooksOut {
-    on_completed: String,
-    on_requires_human: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    on_doctor_setup: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +53,76 @@ struct MergePrompt {
     key: String,
     current: Option<Value>,
     proposed: Option<Value>,
+}
+
+fn build_candidate_value(
+    agent: &AgentTemplate,
+    tracking: &TrackingTemplate,
+    review_loop_limit: u64,
+    log_path: String,
+) -> Value {
+    let mut commands = Mapping::new();
+    commands.insert(
+        Value::String("next_task".to_string()),
+        Value::String(tracking.commands.next_task.clone()),
+    );
+    commands.insert(
+        Value::String("task_show".to_string()),
+        Value::String(tracking.commands.task_show.clone()),
+    );
+    commands.insert(
+        Value::String("task_status".to_string()),
+        Value::String(tracking.commands.task_status.clone()),
+    );
+    commands.insert(
+        Value::String("task_update_in_progress".to_string()),
+        Value::String(tracking.commands.task_update_in_progress.clone()),
+    );
+    commands.insert(
+        Value::String("reset_task".to_string()),
+        Value::String(tracking.commands.reset_task.clone()),
+    );
+
+    let mut hooks = Mapping::new();
+    hooks.insert(
+        Value::String("on_completed".to_string()),
+        Value::String(tracking.hooks.on_completed.clone()),
+    );
+    hooks.insert(
+        Value::String("on_requires_human".to_string()),
+        Value::String(tracking.hooks.on_requires_human.clone()),
+    );
+    if let Some(value) = &tracking.hooks.on_doctor_setup {
+        hooks.insert(
+            Value::String("on_doctor_setup".to_string()),
+            Value::String(value.clone()),
+        );
+    }
+
+    let mut candidate = Mapping::new();
+    candidate.insert(
+        Value::String("agent_command".to_string()),
+        Value::String(agent.agent_command.clone()),
+    );
+    candidate.insert(
+        Value::String("agent_review_command".to_string()),
+        Value::String(agent.agent_review_command.clone()),
+    );
+    candidate.insert(
+        Value::String("commands".to_string()),
+        Value::Mapping(commands),
+    );
+    candidate.insert(Value::String("hooks".to_string()), Value::Mapping(hooks));
+    candidate.insert(
+        Value::String("review_loop_limit".to_string()),
+        Value::Number(review_loop_limit.into()),
+    );
+    candidate.insert(
+        Value::String("log_path".to_string()),
+        Value::String(log_path),
+    );
+
+    Value::Mapping(candidate)
 }
 
 fn run_wizard_with_io(
@@ -154,28 +196,7 @@ fn run_wizard_selected_with_existing(
         .log_path
         .unwrap_or_else(|| templates.defaults.log_path.clone());
 
-    let candidate = WizardConfigOut {
-        agent_command: agent.agent_command.clone(),
-        agent_review_command: agent.agent_review_command.clone(),
-        commands: WizardCommandsOut {
-            next_task: tracking.commands.next_task.clone(),
-            task_show: tracking.commands.task_show.clone(),
-            task_status: tracking.commands.task_status.clone(),
-            task_update_in_progress: tracking.commands.task_update_in_progress.clone(),
-            reset_task: tracking.commands.reset_task.clone(),
-        },
-        hooks: WizardHooksOut {
-            on_completed: tracking.hooks.on_completed.clone(),
-            on_requires_human: tracking.hooks.on_requires_human.clone(),
-            on_doctor_setup: tracking.hooks.on_doctor_setup.clone(),
-        },
-        review_loop_limit,
-        log_path,
-    };
-
-    let mut candidate_value = serde_yaml::to_value(&candidate).expect(
-        "WizardConfigOut should always serialize to serde_yaml::Value (internal bug if this fails)",
-    );
+    let mut candidate_value = build_candidate_value(agent, tracking, review_loop_limit, log_path);
 
     if merge_mode == WizardMergeMode::Interactive {
         if let Some(existing_mapping) = existing.mapping.as_ref() {
@@ -184,9 +205,12 @@ fn run_wizard_selected_with_existing(
         }
     }
 
-    let mut yaml = serde_yaml::to_string(&candidate_value).expect(
-        "serde_yaml::Value should always serialize to YAML text (internal bug if this fails)",
-    );
+    let mut yaml = serde_yaml::to_string(&candidate_value).map_err(|err| {
+        format!(
+            "Internal wizard error: failed to serialize generated config YAML: {}",
+            err
+        )
+    })?;
 
     let mut unknown_keys_warning: Option<String> = None;
     if let Some(existing_mapping) = existing.mapping.as_ref() {
@@ -321,10 +345,30 @@ fn render_unknown_keys_commented_block(existing: &Mapping) -> Option<(String, Ve
         return None;
     }
 
-    let rendered = serde_yaml::to_string(&Value::Mapping(unknown_mapping)).expect(
-        "serde_yaml::Value should always serialize to YAML text (internal bug if this fails)",
-    );
-    let rendered = strip_yaml_document_prefix(&rendered);
+    let rendered = match serde_yaml::to_string(&Value::Mapping(unknown_mapping)) {
+        Ok(rendered) => strip_yaml_document_prefix(&rendered),
+        Err(err) => {
+            let mut block = String::new();
+            block.push('\n');
+            block.push_str(
+                "# -----------------------------------------------------------------------------\n",
+            );
+            block.push_str(
+                "# WARNING: Unknown/custom keys from your previous config were detected,\n",
+            );
+            block.push_str("# but could not be rendered as YAML.\n");
+            block.push_str("# Reason: ");
+            block.push_str(&err.to_string());
+            block.push('\n');
+            block.push_str("# Keys: ");
+            block.push_str(&unknown_paths.join(", "));
+            block.push('\n');
+            block.push_str(
+                "# -----------------------------------------------------------------------------\n",
+            );
+            return Some((block, unknown_paths));
+        }
+    };
 
     let mut block = String::new();
     block.push('\n');
@@ -509,14 +553,9 @@ fn set_value_at_path(root: &mut Value, path: &[&str], value: Value) -> Result<()
             )
         })?;
 
-        if !nested.contains_key(segment) {
-            nested.insert(
-                Value::String(segment.to_string()),
-                Value::Mapping(Mapping::new()),
-            );
-        }
-
-        let next = nested.get_mut(segment).expect("key exists");
+        let next = nested
+            .entry(Value::String(segment.to_string()))
+            .or_insert_with(|| Value::Mapping(Mapping::new()));
         if !matches!(next, Value::Mapping(_)) {
             *next = Value::Mapping(Mapping::new());
         }
@@ -683,10 +722,10 @@ fn merge_known_template_keys(
 fn format_yaml_value(value: &Option<Value>) -> String {
     match value {
         None => "<missing>".to_string(),
-        Some(value) => serde_yaml::to_string(value)
-            .expect("serde_yaml::Value should always serialize to YAML text")
-            .trim_end()
-            .to_string(),
+        Some(value) => match serde_yaml::to_string(value) {
+            Ok(rendered) => rendered.trim_end().to_string(),
+            Err(err) => format!("<failed to render YAML: {}>", err),
+        },
     }
 }
 
@@ -846,6 +885,20 @@ mod tests {
                 Value::String(value.clone()),
             );
         }
+    }
+
+    fn unserializable_yaml_value() -> Value {
+        // `serde_yaml::to_string` can fail for certain YAML values (notably complex map keys);
+        // exercise those paths so we don't reintroduce panics to maintain coverage.
+        let mut inner = Mapping::new();
+        inner.insert(
+            Value::String("k".to_string()),
+            Value::String("v".to_string()),
+        );
+
+        let mut outer = Mapping::new();
+        outer.insert(Value::Mapping(inner), Value::String("x".to_string()));
+        Value::Mapping(outer)
     }
 
     #[test]
@@ -1096,32 +1149,75 @@ hooks:
     }
 
     #[test]
+    fn render_unknown_keys_commented_block_reports_render_errors() {
+        let bad = unserializable_yaml_value();
+        serde_yaml::to_string(&bad).expect_err("expected serde_yaml render error");
+
+        let mut existing = Mapping::new();
+        existing.insert(Value::String("custom".to_string()), bad);
+
+        let (block, paths) =
+            render_unknown_keys_commented_block(&existing).expect("expected unknown key block");
+        assert!(block.contains("could not be rendered as YAML"));
+        assert!(block.contains("# Keys: custom"));
+        assert_eq!(paths, vec!["custom".to_string()]);
+    }
+
+    #[test]
+    fn wizard_errors_when_generated_config_yaml_cannot_serialize() {
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let agent = find_agent_template(&templates.agents, "codex").expect("agent");
+        let tracking =
+            find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
+
+        let mut existing_value = build_candidate_value(
+            agent,
+            tracking,
+            templates.defaults.review_loop_limit,
+            templates.defaults.log_path.clone(),
+        );
+        set_value_at_path(
+            &mut existing_value,
+            &["commands", "reset_task"],
+            unserializable_yaml_value(),
+        )
+        .expect("set reset_task");
+
+        let existing = ExistingConfig {
+            mapping: Some(existing_value.as_mapping().expect("mapping").clone()),
+            defaults: ExistingDefaults::default(),
+            warnings: Vec::new(),
+        };
+
+        let mut io = io::TestWizardIo::new(vec!["\n".to_string()]);
+        let err = run_wizard_selected_with_existing(
+            Path::new("trudger.yml"),
+            &templates,
+            existing,
+            "codex",
+            "br-next-task",
+            WizardMergeMode::Interactive,
+            &mut io,
+        )
+        .expect_err("expected yaml serialization error");
+        assert!(err.contains("failed to serialize generated config YAML"));
+
+        assert!(io.stdout.contains("<failed to render YAML:"));
+    }
+
+    #[test]
     fn merge_prompts_only_for_known_keys_that_differ() {
         let templates = load_embedded_wizard_templates().expect("templates");
         let agent = find_agent_template(&templates.agents, "codex").expect("agent");
         let tracking =
             find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
 
-        let candidate = WizardConfigOut {
-            agent_command: agent.agent_command.clone(),
-            agent_review_command: agent.agent_review_command.clone(),
-            commands: WizardCommandsOut {
-                next_task: tracking.commands.next_task.clone(),
-                task_show: tracking.commands.task_show.clone(),
-                task_status: tracking.commands.task_status.clone(),
-                task_update_in_progress: tracking.commands.task_update_in_progress.clone(),
-                reset_task: tracking.commands.reset_task.clone(),
-            },
-            hooks: WizardHooksOut {
-                on_completed: tracking.hooks.on_completed.clone(),
-                on_requires_human: tracking.hooks.on_requires_human.clone(),
-                on_doctor_setup: tracking.hooks.on_doctor_setup.clone(),
-            },
-            review_loop_limit: templates.defaults.review_loop_limit,
-            log_path: templates.defaults.log_path.clone(),
-        };
-
-        let mut candidate_value = serde_yaml::to_value(&candidate).expect("candidate yaml");
+        let mut candidate_value = build_candidate_value(
+            agent,
+            tracking,
+            templates.defaults.review_loop_limit,
+            templates.defaults.log_path.clone(),
+        );
         let mut existing_value = candidate_value.clone();
         set_value_at_path(
             &mut existing_value,
@@ -1153,26 +1249,12 @@ hooks:
         let tracking =
             find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
 
-        let candidate = WizardConfigOut {
-            agent_command: agent.agent_command.clone(),
-            agent_review_command: agent.agent_review_command.clone(),
-            commands: WizardCommandsOut {
-                next_task: tracking.commands.next_task.clone(),
-                task_show: tracking.commands.task_show.clone(),
-                task_status: tracking.commands.task_status.clone(),
-                task_update_in_progress: tracking.commands.task_update_in_progress.clone(),
-                reset_task: tracking.commands.reset_task.clone(),
-            },
-            hooks: WizardHooksOut {
-                on_completed: tracking.hooks.on_completed.clone(),
-                on_requires_human: tracking.hooks.on_requires_human.clone(),
-                on_doctor_setup: tracking.hooks.on_doctor_setup.clone(),
-            },
-            review_loop_limit: templates.defaults.review_loop_limit,
-            log_path: templates.defaults.log_path.clone(),
-        };
-
-        let mut candidate_value = serde_yaml::to_value(&candidate).expect("candidate yaml");
+        let mut candidate_value = build_candidate_value(
+            agent,
+            tracking,
+            templates.defaults.review_loop_limit,
+            templates.defaults.log_path.clone(),
+        );
         let mut existing_value = candidate_value.clone();
         set_value_at_path(
             &mut existing_value,
