@@ -21,6 +21,9 @@ jobs:
         with:
           components: rustfmt, clippy, llvm-tools-preview
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Install br (beads_rust)
         run: cargo install --git https://github.com/Dicklesworthstone/beads_rust --locked --bin br
 

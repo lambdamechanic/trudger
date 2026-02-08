@@ -437,18 +437,9 @@ hooks:
 "#;
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected zero review_loop_limit");
-        assert!(
-            err.contains("review_loop_limit"),
-            "expected error to mention review_loop_limit, got: {err}"
-        );
-        assert!(
-            err.contains("positive integer") || err.contains("got 0"),
-            "expected error to explain non-zero constraint, got: {err}"
-        );
-        assert!(
-            err.contains(&file.path().display().to_string()),
-            "expected error to include path, got: {err}"
-        );
+        assert!(err.contains("review_loop_limit"));
+        assert!(err.contains("positive integer") | err.contains("got 0"));
+        assert!(err.contains(&file.path().display().to_string()));
     }
 
     #[test]

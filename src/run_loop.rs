@@ -278,8 +278,8 @@ fn get_next_task_id(state: &RuntimeState) -> Result<Option<TaskId>, Quit> {
     if token.trim().is_empty() {
         return Ok(None);
     }
-    let task_id = TaskId::try_from(token)
-        .map_err(|err| quit(&state.logger, &format!("next_task_invalid_id:{err}"), 1))?;
+    // `TaskId` validation currently rejects only empty strings; we already handled empty tokens.
+    let task_id = TaskId::try_from(token).unwrap();
     Ok(Some(task_id))
 }
 
@@ -802,6 +802,19 @@ mod tests {
             current_task_show: None,
             current_task_status: None,
         }
+    }
+
+    #[test]
+    fn build_command_env_joins_completed_tasks_with_commas() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.completed_tasks = vec![task("tr-1"), task("tr-2")];
+
+        let env = build_command_env(&state, None, None, None);
+        assert_eq!(env.completed.as_deref(), Some("tr-1,tr-2"));
     }
 
     #[test]

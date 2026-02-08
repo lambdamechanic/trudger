@@ -1256,6 +1256,16 @@ fn parse_manual_tasks_trims_and_rejects_empty_segments() {
 }
 
 #[test]
+fn task_status_ready_round_trips_through_as_str() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let status = crate::task_types::TaskStatus::parse("ready").expect("parse ready");
+    assert!(status.is_ready(), "ready should be treated as ready");
+    assert_eq!(status.as_str(), "ready");
+}
+
+#[test]
 fn clap_parses_doctor_subcommand_and_positional_args() {
     let cli = Cli::try_parse_from(["trudger", "doctor"]).expect("parse doctor");
     assert!(

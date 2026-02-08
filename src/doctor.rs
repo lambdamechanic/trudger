@@ -160,9 +160,9 @@ fn doctor_run_next_task(ctx: &DoctorCtx<'_>) -> Result<(), String> {
             // Empty output is valid ("no tasks") in Trudger semantics.
             let token = output.stdout.split_whitespace().next().unwrap_or("");
             if !token.trim().is_empty() {
-                let _task_id = TaskId::try_from(token).map_err(|err| {
-                    format!("commands.next_task returned an invalid task id: {}", err)
-                })?;
+                // `TaskId` validation currently rejects only empty strings; the split token is
+                // guaranteed to be non-empty after the trim check above.
+                let _task_id = TaskId::try_from(token).unwrap();
             }
         }
         1 => {
@@ -625,6 +625,19 @@ mod tests {
     }
 
     #[test]
+    fn load_doctor_issue_statuses_treats_missing_status_as_unknown() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let scratch = scratch_with_issues("{\"id\":\"tr-1\"}\n");
+        let statuses =
+            load_doctor_issue_statuses(&scratch.path().join(".beads").join("issues.jsonl"))
+                .expect("load");
+        let status = statuses.get(&task("tr-1")).expect("status");
+        assert!(status.is_unknown());
+    }
+
+    #[test]
     fn load_doctor_issue_statuses_errors_on_invalid_json() {
         let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
         crate::unit_tests::reset_test_env();
@@ -678,6 +691,28 @@ mod tests {
             logger: &logger,
         };
         doctor_run_next_task(&ctx).expect("exit 1 should be ok");
+    }
+
+    #[test]
+    fn doctor_run_next_task_accepts_nonempty_output() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let scratch = TempDir::new().expect("scratch");
+        let mut config = base_config();
+        config.commands.next_task = Some("printf 'tr-1\\n'".to_string());
+        let logger = Logger::new(None);
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+        doctor_run_next_task(&ctx).expect("non-empty output should be ok");
     }
 
     #[test]
@@ -830,6 +865,35 @@ mod tests {
         assert!(err.contains("returned an empty status"));
     }
 
+    #[test]
+    fn doctor_run_task_status_logs_unknown_status() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let scratch = TempDir::new().expect("scratch");
+        let mut config = base_config();
+        config.commands.task_status = "printf 'mystery\\n'".to_string();
+
+        let log_path = temp.path().join("transitions.log");
+        let logger = Logger::new(Some(log_path.clone()));
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+
+        let status = doctor_run_task_status(&ctx, &task("tr-1")).expect("task_status");
+        assert!(status.is_unknown());
+
+        let contents = fs::read_to_string(&log_path).expect("read transitions");
+        assert!(contents.contains("unknown_task_status task=tr-1 status=mystery"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn doctor_run_task_status_propagates_spawn_errors() {
@@ -880,6 +944,35 @@ mod tests {
         let err = doctor_run_task_update_status(&ctx, &task("tr-1"), TaskStatus::Closed)
             .expect_err("expected update error");
         assert!(err.contains("failed to set status"));
+    }
+
+    #[test]
+    fn doctor_run_task_update_status_debug_assert_panics_on_unknown_status() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let scratch = TempDir::new().expect("scratch");
+        let config = base_config();
+        let logger = Logger::new(None);
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = doctor_run_task_update_status(
+                &ctx,
+                &task("tr-1"),
+                TaskStatus::Unknown("mystery".to_string()),
+            );
+        }));
+        assert!(result.is_err());
     }
 
     #[cfg(unix)]

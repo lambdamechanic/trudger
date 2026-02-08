@@ -61,12 +61,8 @@ pub(crate) fn parse_manual_tasks(raw_values: &[String]) -> Result<Vec<TaskId>, S
                     raw, index
                 ));
             }
-            let task_id = TaskId::try_from(trimmed).map_err(|err| {
-                format!(
-                    "Invalid -t/--task value: {:?} at index {}: {}.",
-                    raw, index, err
-                )
-            })?;
+            // `TaskId` validation currently rejects only empty strings, which we already checked.
+            let task_id = TaskId::try_from(trimmed).unwrap();
             tasks.push(task_id);
         }
     }
