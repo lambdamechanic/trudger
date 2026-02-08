@@ -1738,6 +1738,7 @@ fn render_args_falls_back_when_bash_exits_nonzero() {
 #[test]
 fn command_exists_handles_missing_path_and_symlinks() {
     use std::os::unix::fs::symlink;
+    use std::os::unix::fs::PermissionsExt;
 
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
@@ -1748,8 +1749,19 @@ fn command_exists_handles_missing_path_and_symlinks() {
 
     let real = bin.join("real");
     fs::write(&real, "#!/usr/bin/env bash\nexit 0\n").expect("write real");
+    fs::set_permissions(&real, fs::Permissions::from_mode(0o755)).expect("chmod real");
     let link = bin.join("link");
     symlink(&real, &link).expect("symlink");
+
+    let not_exec = bin.join("not_exec");
+    fs::write(&not_exec, "#!/usr/bin/env bash\nexit 0\n").expect("write not_exec");
+    fs::set_permissions(&not_exec, fs::Permissions::from_mode(0o644)).expect("chmod not_exec");
+    let link_not_exec = bin.join("link_not_exec");
+    symlink(&not_exec, &link_not_exec).expect("symlink not_exec");
+
+    let dircmd = bin.join("dircmd");
+    fs::create_dir_all(&dircmd).expect("create dircmd");
+
     let dangling_target = bin.join("missing-target");
     let dangling = bin.join("dangling");
     symlink(&dangling_target, &dangling).expect("symlink dangling");
@@ -1757,7 +1769,10 @@ fn command_exists_handles_missing_path_and_symlinks() {
     env::set_var("PATH", bin.display().to_string());
     assert!(crate::shell::command_exists("real"));
     assert!(crate::shell::command_exists("link"));
-    assert!(crate::shell::command_exists("dangling"));
+    assert!(!crate::shell::command_exists("not_exec"));
+    assert!(!crate::shell::command_exists("link_not_exec"));
+    assert!(!crate::shell::command_exists("dircmd"));
+    assert!(!crate::shell::command_exists("dangling"));
 
     env::remove_var("PATH");
     assert!(!crate::shell::command_exists("real"));
@@ -4046,7 +4061,7 @@ fn tmux_state_env_vars_whitespace_fall_back_to_tmux_display() {
 
 #[cfg(unix)]
 #[test]
-fn tmux_state_tolerates_unexecutable_tmux_binary() {
+fn tmux_state_tolerates_tmux_spawn_failures() {
     use std::os::unix::fs::PermissionsExt;
 
     let _guard = ENV_MUTEX.lock().unwrap();
@@ -4057,8 +4072,8 @@ fn tmux_state_tolerates_unexecutable_tmux_binary() {
     fs::create_dir_all(&bin).expect("create bin dir");
 
     let tmux_script = bin.join("tmux");
-    fs::write(&tmux_script, "#!/usr/bin/env sh\nexit 0\n").expect("write tmux script");
-    fs::set_permissions(&tmux_script, fs::Permissions::from_mode(0o644)).expect("chmod tmux");
+    fs::write(&tmux_script, "#!/does/not/exist\nexit 0\n").expect("write tmux script");
+    fs::set_permissions(&tmux_script, fs::Permissions::from_mode(0o755)).expect("chmod tmux");
 
     env::set_var("PATH", bin.display().to_string());
     env::set_var("TMUX", "1");

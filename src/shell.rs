@@ -1,6 +1,7 @@
 use shell_escape::unix::escape;
 use std::env;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::logger::{sanitize_log_value, Logger};
@@ -202,6 +203,27 @@ pub(crate) fn command_exists(name: &str) -> bool {
     };
     env::split_paths(&paths).any(|path| {
         let full = path.join(name);
-        full.is_file() || full.is_symlink()
+        is_executable_file(&full)
     })
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    // `metadata` follows symlinks; dangling symlinks fail and are treated as missing.
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+
+    if !metadata.is_file() {
+        return false;
+    }
+
+    (metadata.permissions().mode() & 0o111) != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
 }
