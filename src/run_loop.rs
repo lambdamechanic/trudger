@@ -729,12 +729,11 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         }
 
         let completed_env = state.completed_tasks.join(",");
-        state
-            .logger
-            .log_transition(&format!("env TRUDGER_COMPLETED={}", completed_env));
         let needs_human_env = state.needs_human_tasks.join(",");
-        env::set_var("TRUDGER_COMPLETED", &completed_env);
-        env::set_var("TRUDGER_NEEDS_HUMAN", &needs_human_env);
+        state.logger.log_transition(&format!(
+            "task_lists completed={} needs_human={}",
+            completed_env, needs_human_env
+        ));
 
         state.current_task_id = None;
         state.current_task_show = None;

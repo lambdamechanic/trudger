@@ -44,6 +44,8 @@ pub(crate) fn reset_test_env() {
         "TRUDGER_TASK_ID",
         "TRUDGER_TASK_SHOW",
         "TRUDGER_TASK_STATUS",
+        "TRUDGER_COMPLETED",
+        "TRUDGER_NEEDS_HUMAN",
         "CODEX_MOCK_LOG",
         "TASK_SHOW_LOG",
         "TASK_STATUS_LOG",
@@ -435,6 +437,14 @@ fn run_loop_executes_commands_and_hooks_with_env() {
     assert!(
         hook_contents.contains("env TRUDGER_TASK_ID=tr-1"),
         "hook should see task id in env"
+    );
+    assert!(
+        hook_contents.contains("env TRUDGER_COMPLETED=tr-1"),
+        "hook should see completed task IDs in TRUDGER_COMPLETED, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("env TRUDGER_NEEDS_HUMAN=tr-2"),
+        "hook should see needs-human task IDs in TRUDGER_NEEDS_HUMAN, got:\n{hook_contents}"
     );
 
     let log_contents = fs::read_to_string(&log_path).expect("read log file");
