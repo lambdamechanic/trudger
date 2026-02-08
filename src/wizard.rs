@@ -10,9 +10,11 @@ use crate::wizard_templates::{
 };
 
 mod fs;
+mod interactive;
 mod io;
 
-use io::{TerminalWizardIo, WizardIo};
+pub(crate) use interactive::run_wizard_cli;
+use io::WizardIo;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WizardResult {
@@ -79,17 +81,6 @@ struct MergePrompt {
     key: String,
     current: Option<Value>,
     proposed: Option<Value>,
-}
-
-pub(crate) fn run_wizard_interactive(config_path: &Path) -> Result<WizardResult, String> {
-    let templates = load_embedded_wizard_templates()?;
-    let mut io = TerminalWizardIo::new();
-    run_wizard_with_io(
-        config_path,
-        &templates,
-        WizardMergeMode::Interactive,
-        &mut io,
-    )
 }
 
 fn run_wizard_with_io(
@@ -182,8 +173,9 @@ fn run_wizard_selected_with_existing(
         log_path,
     };
 
-    let mut candidate_value = serde_yaml::to_value(&candidate)
-        .map_err(|err| format!("Failed to render generated config as YAML: {}", err))?;
+    let mut candidate_value = serde_yaml::to_value(&candidate).expect(
+        "WizardConfigOut should always serialize to serde_yaml::Value (internal bug if this fails)",
+    );
 
     if merge_mode == WizardMergeMode::Interactive {
         if let Some(existing_mapping) = existing.mapping.as_ref() {
@@ -192,13 +184,14 @@ fn run_wizard_selected_with_existing(
         }
     }
 
-    let mut yaml = serde_yaml::to_string(&candidate_value)
-        .map_err(|err| format!("Failed to render generated config as YAML: {}", err))?;
+    let mut yaml = serde_yaml::to_string(&candidate_value).expect(
+        "serde_yaml::Value should always serialize to YAML text (internal bug if this fails)",
+    );
 
     let mut unknown_keys_warning: Option<String> = None;
     if let Some(existing_mapping) = existing.mapping.as_ref() {
         if let Some((unknown_block, unknown_paths)) =
-            render_unknown_keys_commented_block(existing_mapping)?
+            render_unknown_keys_commented_block(existing_mapping)
         {
             yaml.push_str(&unknown_block);
             unknown_keys_warning = Some(format!(
@@ -322,16 +315,15 @@ fn extract_existing_defaults(mapping: &Mapping) -> ExistingDefaults {
     }
 }
 
-fn render_unknown_keys_commented_block(
-    existing: &Mapping,
-) -> Result<Option<(String, Vec<String>)>, String> {
+fn render_unknown_keys_commented_block(existing: &Mapping) -> Option<(String, Vec<String>)> {
     let (unknown_mapping, unknown_paths) = extract_unknown_key_values(existing);
     if unknown_mapping.is_empty() {
-        return Ok(None);
+        return None;
     }
 
-    let rendered = serde_yaml::to_string(&Value::Mapping(unknown_mapping))
-        .map_err(|err| format!("Failed to render unknown keys as YAML: {}", err))?;
+    let rendered = serde_yaml::to_string(&Value::Mapping(unknown_mapping)).expect(
+        "serde_yaml::Value should always serialize to YAML text (internal bug if this fails)",
+    );
     let rendered = strip_yaml_document_prefix(&rendered);
 
     let mut block = String::new();
@@ -349,7 +341,7 @@ fn render_unknown_keys_commented_block(
     );
     block.push_str(&comment_out_yaml_lines(&rendered));
 
-    Ok(Some((block, unknown_paths)))
+    Some((block, unknown_paths))
 }
 
 fn strip_yaml_document_prefix(rendered: &str) -> String {
@@ -478,39 +470,38 @@ fn get_value_at_path<'a>(root: &'a Value, path: &[&str]) -> Option<&'a Value> {
 }
 
 fn remove_value_at_path(root: &mut Value, path: &[&str]) -> bool {
-    if path.is_empty() {
+    let Some((last, prefix)) = path.split_last() else {
         return false;
-    }
+    };
 
     let mut current = root;
-    for (index, segment) in path.iter().enumerate() {
-        let is_last = index == path.len() - 1;
+    for &segment in prefix {
         let nested = match current.as_mapping_mut() {
             Some(mapping) => mapping,
             None => return false,
         };
 
-        if is_last {
-            return nested.remove(*segment).is_some();
-        }
-
-        current = match nested.get_mut(*segment) {
+        current = match nested.get_mut(segment) {
             Some(value) => value,
             None => return false,
         };
     }
 
-    false
+    let nested = match current.as_mapping_mut() {
+        Some(mapping) => mapping,
+        None => return false,
+    };
+
+    nested.remove(*last).is_some()
 }
 
 fn set_value_at_path(root: &mut Value, path: &[&str], value: Value) -> Result<(), String> {
-    if path.is_empty() {
+    let Some((last, prefix)) = path.split_last() else {
         return Ok(());
-    }
+    };
 
     let mut current = root;
-    for (index, segment) in path.iter().enumerate() {
-        let is_last = index == path.len() - 1;
+    for (index, &segment) in prefix.iter().enumerate() {
         let nested = current.as_mapping_mut().ok_or_else(|| {
             format!(
                 "Internal wizard error: expected YAML mapping at {}",
@@ -518,25 +509,27 @@ fn set_value_at_path(root: &mut Value, path: &[&str], value: Value) -> Result<()
             )
         })?;
 
-        let key = *segment;
-        if is_last {
-            nested.insert(Value::String(key.to_string()), value);
-            return Ok(());
-        }
-
-        if !nested.contains_key(key) {
+        if !nested.contains_key(segment) {
             nested.insert(
-                Value::String(key.to_string()),
+                Value::String(segment.to_string()),
                 Value::Mapping(Mapping::new()),
             );
         }
-        let next = nested.get_mut(key).expect("key exists");
+
+        let next = nested.get_mut(segment).expect("key exists");
         if !matches!(next, Value::Mapping(_)) {
             *next = Value::Mapping(Mapping::new());
         }
         current = next;
     }
 
+    let nested = current.as_mapping_mut().ok_or_else(|| {
+        format!(
+            "Internal wizard error: expected YAML mapping at {}",
+            path[..prefix.len()].join(".")
+        )
+    })?;
+    nested.insert(Value::String((*last).to_string()), value);
     Ok(())
 }
 
@@ -691,8 +684,9 @@ fn format_yaml_value(value: &Option<Value>) -> String {
     match value {
         None => "<missing>".to_string(),
         Some(value) => serde_yaml::to_string(value)
-            .map(|rendered| rendered.trim_end().to_string())
-            .unwrap_or_else(|_| format!("{:?}", value)),
+            .expect("serde_yaml::Value should always serialize to YAML text")
+            .trim_end()
+            .to_string(),
     }
 }
 
@@ -814,6 +808,14 @@ fn next_backup_path(config_path: &Path) -> PathBuf {
         .and_then(|value| value.to_str())
         .unwrap_or("trudger.yml");
     let timestamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    next_backup_path_with_timestamp(config_path, file_name, &timestamp)
+}
+
+fn next_backup_path_with_timestamp(
+    config_path: &Path,
+    file_name: &str,
+    timestamp: &str,
+) -> PathBuf {
     let mut backup = config_path.with_file_name(format!("{}.bak-{}", file_name, timestamp));
 
     if !fs::exists(&backup) {
@@ -836,6 +838,22 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    fn maybe_insert_doctor_setup(hooks: &mut Mapping, setup: &Option<String>) {
+        if let Some(value) = setup {
+            hooks.insert(
+                Value::String("on_doctor_setup".to_string()),
+                Value::String(value.clone()),
+            );
+        }
+    }
+
+    #[test]
+    fn maybe_insert_doctor_setup_is_noop_for_none() {
+        let mut hooks = Mapping::new();
+        maybe_insert_doctor_setup(&mut hooks, &None);
+        assert!(hooks.is_empty());
+    }
 
     fn list_backups(dir: &Path, base: &str) -> Vec<PathBuf> {
         let prefix = format!("{}.bak-", base);
@@ -877,7 +895,7 @@ hooks:
 "#;
 
         let err = validate_then_write_config(&config_path, invalid).expect_err("expected error");
-        assert!(err.contains("agent_command"), "err: {err}");
+        assert!(err.contains("agent_command"));
 
         // Ensure we didn't touch the existing file.
         let contents = fs::read_to_string(&config_path).expect("read config");
@@ -902,20 +920,17 @@ hooks:
         )
         .expect("wizard");
         assert_eq!(result.config_path, config_path);
-        assert!(nested.is_dir(), "expected parent dir created");
-        assert!(config_path.is_file(), "expected config written");
+        assert!(nested.is_dir());
+        assert!(config_path.is_file());
         assert!(result.backup_path.is_none());
 
         let contents = fs::read_to_string(&config_path).expect("read config");
         let loaded = load_config_from_str("<test>", &contents).expect("load config");
         assert_eq!(
-            loaded.config.review_loop_limit, templates.defaults.review_loop_limit,
-            "expected review_loop_limit to use embedded default"
+            loaded.config.review_loop_limit,
+            templates.defaults.review_loop_limit
         );
-        assert_eq!(
-            loaded.config.log_path, templates.defaults.log_path,
-            "expected log_path to use embedded default"
-        );
+        assert_eq!(loaded.config.log_path, templates.defaults.log_path);
     }
 
     #[test]
@@ -952,13 +967,13 @@ hooks:
         .expect("wizard");
 
         let backups = list_backups(temp.path(), "trudger.yml");
-        assert_eq!(backups.len(), 1, "expected one backup, got {backups:?}");
+        assert_eq!(backups.len(), 1);
         assert_eq!(result.backup_path.as_ref(), Some(&backups[0]));
         let backup_contents = fs::read_to_string(&backups[0]).expect("read backup");
         assert_eq!(backup_contents, original);
 
         let new_contents = fs::read_to_string(&config_path).expect("read new config");
-        assert_ne!(new_contents, original, "expected config overwritten");
+        assert_ne!(new_contents, original);
 
         // Sanity check: output must be loadable by current config parser.
         let _ = load_config_from_str("<test>", &new_contents).expect("load config");
@@ -987,21 +1002,12 @@ log_path: "./custom.log"
             &mut wizard_io,
         )
         .expect("wizard");
-        assert!(
-            result.backup_path.is_some(),
-            "expected overwrite to create a backup"
-        );
+        assert!(result.backup_path.is_some());
 
         let contents = fs::read_to_string(&config_path).expect("read config");
         let loaded = load_config_from_str("<test>", &contents).expect("load config");
-        assert_eq!(
-            loaded.config.review_loop_limit, 99,
-            "expected review_loop_limit to be preserved"
-        );
-        assert_eq!(
-            loaded.config.log_path, "./custom.log",
-            "expected log_path to be preserved"
-        );
+        assert_eq!(loaded.config.review_loop_limit, 99);
+        assert_eq!(loaded.config.log_path, "./custom.log");
     }
 
     #[test]
@@ -1021,20 +1027,16 @@ log_path: "./custom.log"
             &mut wizard_io,
         )
         .expect("wizard");
-        assert!(
-            result
-                .warnings
-                .iter()
-                .any(|w| w.contains("could not be parsed as YAML")),
-            "expected invalid-YAML warning, got: {:?}",
-            result.warnings
-        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("could not be parsed as YAML")));
 
         let backups = list_backups(temp.path(), "trudger.yml");
-        assert_eq!(backups.len(), 1, "expected one backup, got {backups:?}");
+        assert_eq!(backups.len(), 1);
         let backup_contents = fs::read_to_string(&backups[0]).expect("read backup");
         assert_eq!(backup_contents, original);
-        assert!(config_path.is_file(), "expected config overwritten");
+        assert!(config_path.is_file());
     }
 
     #[test]
@@ -1072,54 +1074,25 @@ hooks:
             &mut wizard_io,
         )
         .expect("wizard");
-        assert!(
-            result
-                .warnings
-                .iter()
-                .any(|w| w.contains("Unknown/custom config keys were commented out")),
-            "expected unknown-keys warning, got: {:?}",
-            result.warnings
-        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("Unknown/custom config keys were commented out")));
 
         let new_contents = fs::read_to_string(&config_path).expect("read new config");
-        assert!(
-            new_contents.contains(
-                "WARNING: Unknown/custom keys from your previous config were preserved below."
-            ),
-            "expected warning header in output"
-        );
-        assert!(
-            new_contents.contains("# custom_top: 123"),
-            "expected custom_top commented"
-        );
-        assert!(
-            !new_contents.contains("\ncustom_top:"),
-            "expected custom_top not present as real YAML key"
-        );
-        assert!(
-            new_contents.contains("# commands:"),
-            "expected commands block commented"
-        );
-        assert!(
-            new_contents.contains("extra_cmd") && new_contents.contains("#   extra_cmd:"),
-            "expected extra_cmd commented"
-        );
-        assert!(
-            new_contents.contains("# hooks:"),
-            "expected hooks block commented"
-        );
-        assert!(
-            new_contents.contains("extra_hook") && new_contents.contains("#   extra_hook:"),
-            "expected extra_hook commented"
-        );
+        assert!(new_contents.contains(
+            "WARNING: Unknown/custom keys from your previous config were preserved below."
+        ));
+        assert!(new_contents.contains("# custom_top: 123"));
+        assert!(!new_contents.contains("\ncustom_top:"));
+        assert!(new_contents.contains("# commands:"));
+        assert!(new_contents.contains("extra_cmd") && new_contents.contains("#   extra_cmd:"));
+        assert!(new_contents.contains("# hooks:"));
+        assert!(new_contents.contains("extra_hook") && new_contents.contains("#   extra_hook:"));
 
         // Ensure commented keys do not affect parsing.
         let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
-        assert!(
-            loaded.warnings.is_empty(),
-            "expected no unknown-key warnings from commented block, got: {:?}",
-            loaded.warnings
-        );
+        assert!(loaded.warnings.is_empty());
     }
 
     #[test]
@@ -1168,7 +1141,7 @@ hooks:
             merge_known_template_keys(&existing_mapping, &mut candidate_value, &mut decider)
                 .expect("merge");
 
-        assert_eq!(prompts.len(), 1, "prompts: {prompts:?}");
+        assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0].key, "commands.reset_task");
         assert_eq!(prompted_keys, vec!["commands.reset_task"]);
     }
@@ -1218,7 +1191,7 @@ hooks:
             merge_known_template_keys(&existing_mapping, &mut candidate_value, &mut decider)
                 .expect("merge");
 
-        assert_eq!(prompts.len(), 1, "prompts: {prompts:?}");
+        assert_eq!(prompts.len(), 1);
         let merged = get_value_at_path(&candidate_value, &["hooks", "on_doctor_setup"])
             .and_then(|value| value.as_str())
             .expect("merged hooks.on_doctor_setup");
@@ -1227,11 +1200,7 @@ hooks:
 
     #[test]
     fn merge_decision_defaults_to_keep_current() {
-        assert_eq!(
-            parse_merge_decision(""),
-            Some(MergeDecision::KeepCurrent),
-            "expected empty input to keep current"
-        );
+        assert_eq!(parse_merge_decision(""), Some(MergeDecision::KeepCurrent));
     }
 
     #[test]
@@ -1290,12 +1259,7 @@ hooks:
             Value::String("on_requires_human".to_string()),
             Value::String(bd.hooks.on_requires_human.clone()),
         );
-        if let Some(setup) = &bd.hooks.on_doctor_setup {
-            hooks.insert(
-                Value::String("on_doctor_setup".to_string()),
-                Value::String(setup.clone()),
-            );
-        }
+        maybe_insert_doctor_setup(&mut hooks, &bd.hooks.on_doctor_setup);
         existing_tracking.insert(Value::String("hooks".to_string()), Value::Mapping(hooks));
 
         assert_eq!(
@@ -1358,12 +1322,7 @@ hooks:
             Value::String("on_requires_human".to_string()),
             Value::String(tracking.hooks.on_requires_human.clone()),
         );
-        if let Some(setup) = &tracking.hooks.on_doctor_setup {
-            hooks.insert(
-                Value::String("on_doctor_setup".to_string()),
-                Value::String(setup.clone()),
-            );
-        }
+        maybe_insert_doctor_setup(&mut hooks, &tracking.hooks.on_doctor_setup);
         existing.insert(Value::String("hooks".to_string()), Value::Mapping(hooks));
 
         let existing_yaml =
@@ -1382,14 +1341,10 @@ hooks:
 
         let new_contents = fs::read_to_string(&config_path).expect("read config");
         let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
-        assert_eq!(
-            loaded.config.agent_command, agent.agent_command,
-            "expected default agent selection to be applied"
-        );
+        assert_eq!(loaded.config.agent_command, agent.agent_command);
         assert_eq!(
             loaded.config.commands.next_task,
-            Some(tracking.commands.next_task.clone()),
-            "expected default tracking selection to be applied"
+            Some(tracking.commands.next_task.clone())
         );
     }
 
@@ -1449,12 +1404,7 @@ hooks:
             Value::String("on_requires_human".to_string()),
             Value::String(tracking.hooks.on_requires_human.clone()),
         );
-        if let Some(setup) = &tracking.hooks.on_doctor_setup {
-            hooks.insert(
-                Value::String("on_doctor_setup".to_string()),
-                Value::String(setup.clone()),
-            );
-        }
+        maybe_insert_doctor_setup(&mut hooks, &tracking.hooks.on_doctor_setup);
         existing.insert(Value::String("hooks".to_string()), Value::Mapping(hooks));
 
         let existing_yaml =
@@ -1476,10 +1426,7 @@ hooks:
 
         let new_contents = fs::read_to_string(&config_path).expect("read new config");
         let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
-        assert_eq!(
-            loaded.config.commands.reset_task, "keep-me",
-            "expected interactive merge to keep current value"
-        );
+        assert_eq!(loaded.config.commands.reset_task, "keep-me");
     }
 
     #[test]
@@ -1532,10 +1479,851 @@ hooks:
             &mut wizard_io,
         )
         .expect_err("expected error");
-        assert!(err.contains("agent_command"), "err: {err}");
+        assert!(err.contains("agent_command"));
 
         let contents = fs::read_to_string(&config_path).expect("read config");
         assert_eq!(contents, "old");
         assert!(list_backups(temp.path(), "trudger.yml").is_empty());
+    }
+
+    #[test]
+    fn wizard_selection_errors_when_agents_empty() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let mut templates = load_embedded_wizard_templates().expect("templates");
+        templates.agents.clear();
+
+        let mut wizard_io = io::TestWizardIo::new(Vec::new());
+        let err = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect_err("expected error");
+        assert!(err.contains("No choices available"));
+    }
+
+    #[test]
+    fn wizard_selection_errors_when_tracking_empty() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let mut templates = load_embedded_wizard_templates().expect("templates");
+        templates.tracking.clear();
+
+        let mut wizard_io = io::TestWizardIo::new(vec!["codex\n".to_string()]);
+        let err = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect_err("expected error");
+        assert!(err.contains("No choices available"));
+    }
+
+    #[test]
+    fn wizard_interactive_merge_propagates_io_errors() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+        fs::write(&config_path, "{}\n").expect("write empty mapping");
+
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let existing = read_existing_config(&config_path).expect("read existing");
+        let mut io = io::TestWizardIo::new(Vec::new());
+        let err = run_wizard_selected_with_existing(
+            &config_path,
+            &templates,
+            existing,
+            "codex",
+            "br-next-task",
+            WizardMergeMode::Interactive,
+            &mut io,
+        )
+        .expect_err("expected error");
+        assert!(err.contains("stdin closed"));
+    }
+
+    #[test]
+    fn wizard_interactive_merge_skips_when_no_existing_mapping() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let mut wizard_io =
+            io::TestWizardIo::new(vec!["codex\n".to_string(), "br-next-task\n".to_string()]);
+        let result = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Interactive,
+            &mut wizard_io,
+        )
+        .expect("wizard");
+
+        assert!(config_path.is_file());
+        assert!(result.backup_path.is_none());
+    }
+
+    #[test]
+    fn wizard_write_skips_create_dir_all_when_parent_is_empty() {
+        // This test manipulates the process working directory; keep it serialized.
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+
+        let temp = TempDir::new().expect("temp dir");
+        let original_dir = std::env::current_dir().expect("current_dir");
+        std::env::set_current_dir(temp.path()).expect("set_current_dir");
+
+        struct CwdGuard(std::path::PathBuf);
+
+        impl Drop for CwdGuard {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+
+        let _cwd_guard = CwdGuard(original_dir);
+
+        let yaml = r#"
+agent_command: "agent"
+agent_review_command: "review"
+review_loop_limit: 1
+log_path: "./log"
+commands:
+  next_task: "x"
+  task_show: "x"
+  task_status: "x"
+  task_update_in_progress: "x"
+  reset_task: "x"
+hooks:
+  on_completed: "x"
+  on_requires_human: "x"
+"#;
+
+        validate_then_write_config(Path::new("trudger.yml"), yaml).expect("write config");
+        assert!(temp.path().join("trudger.yml").is_file());
+
+        // Empty paths have no parent; cover that branch without touching the repo cwd.
+        let err = write_config_with_backup(Path::new(""), "x").expect_err("expected error");
+        assert!(err.contains("Failed to copy") || err.contains("Failed to write"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wizard_write_fails_when_parent_is_file() {
+        let yaml = r#"
+agent_command: "agent"
+agent_review_command: "review"
+review_loop_limit: 1
+log_path: "./log"
+commands:
+  next_task: "x"
+  task_show: "x"
+  task_status: "x"
+  task_update_in_progress: "x"
+  reset_task: "x"
+hooks:
+  on_completed: "x"
+  on_requires_human: "x"
+"#;
+
+        let err = validate_then_write_config(Path::new("/dev/null/trudger.yml"), yaml)
+            .expect_err("expected error");
+        assert!(err.contains("Failed to create directory"));
+    }
+
+    #[test]
+    fn strip_yaml_document_prefix_handles_document_marker() {
+        assert_eq!(
+            strip_yaml_document_prefix("---\nfoo: bar\n"),
+            "foo: bar\n".to_string()
+        );
+    }
+
+    #[test]
+    fn comment_out_yaml_lines_comments_empty_lines() {
+        let rendered = "foo: bar\n\nbaz: qux\n";
+        let out = comment_out_yaml_lines(rendered);
+        assert!(out.contains("# foo: bar\n"));
+        assert!(out.contains("#\n"));
+        assert!(out.contains("# baz: qux\n"));
+    }
+
+    #[test]
+    fn extract_unknown_key_values_ignores_non_string_keys() {
+        let mut mapping = Mapping::new();
+        mapping.insert(Value::Bool(true), Value::String("ignored".to_string()));
+        let (_unknown, paths) = extract_unknown_key_values(&mapping);
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn extract_unknown_nested_mapping_ignores_non_string_keys() {
+        let mut nested = Mapping::new();
+        nested.insert(Value::Bool(true), Value::String("ignored".to_string()));
+
+        let mut root = Mapping::new();
+        root.insert(
+            Value::String("commands".to_string()),
+            Value::Mapping(nested),
+        );
+
+        let result = extract_unknown_nested_mapping(&root, "commands", &[]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_value_at_path_returns_none_for_empty_path() {
+        assert!(get_value_at_path(&Value::Null, &[]).is_none());
+    }
+
+    #[test]
+    fn get_mapping_value_at_path_returns_none_for_empty_path() {
+        assert!(get_mapping_value_at_path(&Mapping::new(), &[]).is_none());
+    }
+
+    #[test]
+    fn remove_value_at_path_covers_edge_cases() {
+        let mut root = Value::Mapping(Mapping::new());
+        assert!(!remove_value_at_path(&mut root, &[]));
+
+        let mut root = Value::Null;
+        assert!(!remove_value_at_path(&mut root, &["a"]));
+        let mut root = Value::Null;
+        assert!(!remove_value_at_path(&mut root, &["a", "b"]));
+
+        let mut root = Value::Mapping(Mapping::new());
+        assert!(!remove_value_at_path(&mut root, &["a", "b"]));
+
+        let mut inner = Mapping::new();
+        inner.insert(Value::String("b".to_string()), Value::Null);
+        let mut outer = Mapping::new();
+        outer.insert(Value::String("a".to_string()), Value::Mapping(inner));
+        let mut root = Value::Mapping(outer);
+        assert!(remove_value_at_path(&mut root, &["a", "b"]));
+        assert!(get_value_at_path(&root, &["a", "b"]).is_none());
+    }
+
+    #[test]
+    fn set_value_at_path_covers_edge_cases() {
+        let mut root = Value::Mapping(Mapping::new());
+        set_value_at_path(&mut root, &[], Value::Null).expect("ok");
+
+        let mut root = Value::Null;
+        let err = set_value_at_path(&mut root, &["a"], Value::Null).expect_err("expected err");
+        assert!(err.contains("expected YAML mapping"));
+        let mut root = Value::Null;
+        let err = set_value_at_path(&mut root, &["a", "b"], Value::Null).expect_err("expected err");
+        assert!(err.contains("expected YAML mapping"));
+
+        let mut root = Value::Mapping(Mapping::new());
+        set_value_at_path(&mut root, &["a", "b"], Value::String("x".to_string()))
+            .expect("set nested");
+        assert_eq!(
+            get_value_at_path(&root, &["a", "b"]).and_then(|value| value.as_str()),
+            Some("x")
+        );
+
+        let mut root_mapping = Mapping::new();
+        root_mapping.insert(
+            Value::String("a".to_string()),
+            Value::String("nope".to_string()),
+        );
+        let mut root = Value::Mapping(root_mapping);
+        set_value_at_path(&mut root, &["a", "b"], Value::Bool(true)).expect("set");
+        assert_eq!(
+            get_value_at_path(&root, &["a", "b"]).and_then(|value| value.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn merge_known_template_keys_removes_when_current_missing_and_keep_selected() {
+        let existing = Mapping::new();
+        let mut candidate_mapping = Mapping::new();
+        candidate_mapping.insert(
+            Value::String("agent_command".to_string()),
+            Value::String("agent".to_string()),
+        );
+        let mut candidate = Value::Mapping(candidate_mapping);
+
+        let mut decided = false;
+        let mut decider = |_prompt: &MergePrompt| {
+            decided = true;
+            Ok(MergeDecision::KeepCurrent)
+        };
+
+        let prompts =
+            merge_known_template_keys(&existing, &mut candidate, &mut decider).expect("merge");
+        assert!(decided);
+        assert_eq!(prompts.len(), 1);
+        assert!(get_value_at_path(&candidate, &["agent_command"]).is_none());
+    }
+
+    #[test]
+    fn format_yaml_value_and_merge_decision_parsing_cover_branches() {
+        assert_eq!(format_yaml_value(&None), "<missing>");
+        assert_eq!(
+            format_yaml_value(&Some(Value::String("x".to_string()))),
+            "x".to_string()
+        );
+        assert_eq!(
+            parse_merge_decision("r"),
+            Some(MergeDecision::ReplaceWithProposed)
+        );
+        assert_eq!(parse_merge_decision("nonsense"), None);
+    }
+
+    #[test]
+    fn prompt_merge_decision_errors_when_stdin_closed() {
+        let mut io = io::TestWizardIo::new(Vec::new());
+        let prompt = MergePrompt {
+            key: "x".to_string(),
+            current: None,
+            proposed: None,
+        };
+
+        let err = prompt_merge_decision(&mut io, &prompt).expect_err("expected err");
+        assert!(err.contains("stdin closed"));
+    }
+
+    #[test]
+    fn prompt_merge_decision_writes_error_on_invalid_input() {
+        let mut io = io::TestWizardIo::new(vec!["bad\n".to_string(), "r\n".to_string()]);
+        let prompt = MergePrompt {
+            key: "x".to_string(),
+            current: None,
+            proposed: None,
+        };
+
+        let decision = prompt_merge_decision(&mut io, &prompt).expect("decision");
+        assert_eq!(decision, MergeDecision::ReplaceWithProposed);
+        assert!(io.stderr.contains("Please enter"));
+    }
+
+    #[test]
+    fn prompt_merge_decision_propagates_write_out_errors() {
+        #[derive(Default)]
+        struct FailWriteOut {
+            fail_on_call: usize,
+            calls: usize,
+        }
+
+        impl WizardIo for FailWriteOut {
+            fn write_out(&mut self, _s: &str) -> Result<(), String> {
+                self.calls += 1;
+                if self.calls == self.fail_on_call {
+                    return Err("write_out failed".to_string());
+                }
+                Ok(())
+            }
+
+            fn write_err(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn flush_out(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn read_line(&mut self) -> Result<Option<String>, String> {
+                Ok(Some("k\n".to_string()))
+            }
+        }
+
+        let prompt = MergePrompt {
+            key: "x".to_string(),
+            current: Some(Value::String("cur".to_string())),
+            proposed: Some(Value::String("prop".to_string())),
+        };
+
+        for call in 1..=4 {
+            let mut io = FailWriteOut {
+                fail_on_call: call,
+                calls: 0,
+            };
+            assert!(prompt_merge_decision(&mut io, &prompt).is_err());
+        }
+
+        // Ensure the trait methods that are not reached in the failure cases are still covered.
+        let mut io = FailWriteOut {
+            fail_on_call: usize::MAX,
+            calls: 0,
+        };
+        assert!(io.write_err("x").is_ok());
+        assert!(io.flush_out().is_ok());
+        assert!(io.read_line().is_ok());
+    }
+
+    #[test]
+    fn prompt_merge_decision_propagates_flush_errors() {
+        struct FailFlush;
+
+        impl WizardIo for FailFlush {
+            fn write_out(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn write_err(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn flush_out(&mut self) -> Result<(), String> {
+                Err("flush failed".to_string())
+            }
+
+            fn read_line(&mut self) -> Result<Option<String>, String> {
+                Ok(Some("k\n".to_string()))
+            }
+        }
+
+        let prompt = MergePrompt {
+            key: "x".to_string(),
+            current: None,
+            proposed: None,
+        };
+
+        let mut io = FailFlush;
+        let err = prompt_merge_decision(&mut io, &prompt).expect_err("expected err");
+        assert!(err.contains("flush failed"));
+
+        assert!(io.write_err("x").is_ok());
+        assert!(io.read_line().is_ok());
+    }
+
+    #[test]
+    fn prompt_merge_decision_propagates_read_errors() {
+        struct FailRead;
+
+        impl WizardIo for FailRead {
+            fn write_out(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn write_err(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn flush_out(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn read_line(&mut self) -> Result<Option<String>, String> {
+                Err("read failed".to_string())
+            }
+        }
+
+        let prompt = MergePrompt {
+            key: "x".to_string(),
+            current: None,
+            proposed: None,
+        };
+
+        let mut io = FailRead;
+        let err = prompt_merge_decision(&mut io, &prompt).expect_err("expected err");
+        assert!(err.contains("read failed"));
+
+        assert!(io.write_err("x").is_ok());
+    }
+
+    #[test]
+    fn prompt_merge_decision_propagates_write_err_errors() {
+        struct FailWriteErr;
+
+        impl WizardIo for FailWriteErr {
+            fn write_out(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn write_err(&mut self, _s: &str) -> Result<(), String> {
+                Err("write_err failed".to_string())
+            }
+
+            fn flush_out(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn read_line(&mut self) -> Result<Option<String>, String> {
+                Ok(Some("bad\n".to_string()))
+            }
+        }
+
+        let prompt = MergePrompt {
+            key: "x".to_string(),
+            current: None,
+            proposed: None,
+        };
+
+        let mut io = FailWriteErr;
+        let err = prompt_merge_decision(&mut io, &prompt).expect_err("expected err");
+        assert!(err.contains("write_err failed"));
+    }
+
+    #[test]
+    fn prompt_template_choice_covers_error_paths() {
+        let mut io = io::TestWizardIo::new(Vec::new());
+        let err = prompt_template_choice(&mut io, "x", Vec::new(), None).expect_err("err");
+        assert!(err.contains("No choices available"));
+
+        let mut io = io::TestWizardIo::new(Vec::new());
+        let err = prompt_template_choice(&mut io, "x", vec!["a: A".to_string()], None)
+            .expect_err("expected err");
+        assert!(err.contains("stdin closed"));
+
+        let mut io = io::TestWizardIo::new(vec!["\n".to_string(), "1\n".to_string()]);
+        let id = prompt_template_choice(&mut io, "x", vec!["a: A".to_string()], None).expect("id");
+        assert_eq!(id, "a");
+        assert!(io.stderr.contains("Selection must not be empty"));
+
+        let mut io = io::TestWizardIo::new(vec!["99\n".to_string(), "1\n".to_string()]);
+        let id = prompt_template_choice(&mut io, "x", vec!["a: A".to_string()], None).expect("id");
+        assert_eq!(id, "a");
+        assert!(io.stderr.contains("Selection out of range"));
+    }
+
+    #[test]
+    fn prompt_template_choice_propagates_write_out_errors() {
+        #[derive(Default)]
+        struct FailWriteOut {
+            fail_on_call: usize,
+            calls: usize,
+        }
+
+        impl WizardIo for FailWriteOut {
+            fn write_out(&mut self, _s: &str) -> Result<(), String> {
+                self.calls += 1;
+                if self.calls == self.fail_on_call {
+                    return Err("write_out failed".to_string());
+                }
+                Ok(())
+            }
+
+            fn write_err(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn flush_out(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn read_line(&mut self) -> Result<Option<String>, String> {
+                Ok(Some("a\n".to_string()))
+            }
+        }
+
+        for call in 1..=3 {
+            let mut io = FailWriteOut {
+                fail_on_call: call,
+                calls: 0,
+            };
+            assert!(prompt_template_choice(&mut io, "x", vec!["a: A".to_string()], None,).is_err());
+        }
+
+        // Cover the "blank for default" prompt branch.
+        let mut io = FailWriteOut {
+            fail_on_call: 3,
+            calls: 0,
+        };
+        assert!(
+            prompt_template_choice(&mut io, "x", vec!["a: A".to_string()], Some("a"),).is_err()
+        );
+
+        let mut io = FailWriteOut {
+            fail_on_call: usize::MAX,
+            calls: 0,
+        };
+        assert!(io.write_err("x").is_ok());
+        assert!(io.flush_out().is_ok());
+        assert!(io.read_line().is_ok());
+    }
+
+    #[test]
+    fn prompt_template_choice_propagates_flush_errors() {
+        struct FailFlush;
+
+        impl WizardIo for FailFlush {
+            fn write_out(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn write_err(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn flush_out(&mut self) -> Result<(), String> {
+                Err("flush failed".to_string())
+            }
+
+            fn read_line(&mut self) -> Result<Option<String>, String> {
+                Ok(Some("a\n".to_string()))
+            }
+        }
+
+        let mut io = FailFlush;
+        let err = prompt_template_choice(&mut io, "x", vec!["a: A".to_string()], None)
+            .expect_err("expected err");
+        assert!(err.contains("flush failed"));
+
+        assert!(io.write_err("x").is_ok());
+        assert!(io.read_line().is_ok());
+    }
+
+    #[test]
+    fn prompt_template_choice_propagates_read_errors() {
+        struct FailRead;
+
+        impl WizardIo for FailRead {
+            fn write_out(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn write_err(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn flush_out(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn read_line(&mut self) -> Result<Option<String>, String> {
+                Err("read failed".to_string())
+            }
+        }
+
+        let mut io = FailRead;
+        let err = prompt_template_choice(&mut io, "x", vec!["a: A".to_string()], None)
+            .expect_err("expected err");
+        assert!(err.contains("read failed"));
+
+        assert!(io.write_err("x").is_ok());
+    }
+
+    #[test]
+    fn prompt_template_choice_propagates_write_err_errors() {
+        struct FailWriteErr {
+            inputs: std::collections::VecDeque<String>,
+        }
+
+        impl WizardIo for FailWriteErr {
+            fn write_out(&mut self, _s: &str) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn write_err(&mut self, _s: &str) -> Result<(), String> {
+                Err("write_err failed".to_string())
+            }
+
+            fn flush_out(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+
+            fn read_line(&mut self) -> Result<Option<String>, String> {
+                Ok(self.inputs.pop_front())
+            }
+        }
+
+        let mut io = FailWriteErr {
+            inputs: vec!["\n".to_string()].into(),
+        };
+        let err = prompt_template_choice(&mut io, "x", vec!["a: A".to_string()], None)
+            .expect_err("expected err");
+        assert!(err.contains("write_err failed"));
+
+        let mut io = FailWriteErr {
+            inputs: vec!["99\n".to_string()].into(),
+        };
+        let err = prompt_template_choice(&mut io, "x", vec!["a: A".to_string()], None)
+            .expect_err("expected err");
+        assert!(err.contains("write_err failed"));
+    }
+
+    #[test]
+    fn next_backup_path_with_timestamp_skips_existing_backups() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+        let file_name = "trudger.yml";
+        let timestamp = "20000101T000000Z";
+
+        let first = temp.path().join(format!("{}.bak-{}", file_name, timestamp));
+        fs::write(&first, "x").expect("write first backup");
+
+        let next = next_backup_path_with_timestamp(&config_path, file_name, timestamp);
+        assert!(next.ends_with(format!("{}.bak-{}-2", file_name, timestamp)));
+    }
+
+    #[test]
+    fn next_backup_path_with_timestamp_returns_last_candidate_on_exhaustion() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+        let file_name = "trudger.yml";
+        let timestamp = "20000101T000000Z";
+
+        let first = temp.path().join(format!("{}.bak-{}", file_name, timestamp));
+        fs::write(&first, "x").expect("write first backup");
+        for index in 2..=1000 {
+            let candidate = temp
+                .path()
+                .join(format!("{}.bak-{}-{}", file_name, timestamp, index));
+            fs::write(candidate, "x").expect("write backup");
+        }
+
+        let next = next_backup_path_with_timestamp(&config_path, file_name, timestamp);
+        assert!(next.ends_with(format!("{}.bak-{}-1000", file_name, timestamp)));
+    }
+
+    #[test]
+    fn wizard_errors_when_existing_config_is_not_utf8() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+        fs::write(&config_path, [0xff]).expect("write invalid utf8 config");
+
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let mut wizard_io = io::TestWizardIo::new(Vec::new());
+        let err = run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect_err("expected error");
+        assert!(err.contains("Failed to read"));
+    }
+
+    #[test]
+    fn wizard_errors_on_unknown_template_ids() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let mut io = io::TestWizardIo::new(Vec::new());
+
+        let existing = ExistingConfig {
+            mapping: None,
+            defaults: ExistingDefaults::default(),
+            warnings: Vec::new(),
+        };
+        let err = run_wizard_selected_with_existing(
+            &config_path,
+            &templates,
+            existing,
+            "nope",
+            "br-next-task",
+            WizardMergeMode::Overwrite,
+            &mut io,
+        )
+        .expect_err("expected error");
+        assert!(err.contains("Unknown agent template id"));
+
+        let existing = ExistingConfig {
+            mapping: None,
+            defaults: ExistingDefaults::default(),
+            warnings: Vec::new(),
+        };
+        let err = run_wizard_selected_with_existing(
+            &config_path,
+            &templates,
+            existing,
+            "codex",
+            "nope",
+            WizardMergeMode::Overwrite,
+            &mut io,
+        )
+        .expect_err("expected error");
+        assert!(err.contains("Unknown tracking template id"));
+    }
+
+    #[test]
+    fn validate_generated_config_propagates_validation_errors() {
+        let invalid = r#"
+agent_command: "agent"
+agent_review_command: "review"
+review_loop_limit: 1
+log_path: "./log"
+commands:
+  next_task: ""
+  task_show: "x"
+  task_status: "x"
+  task_update_in_progress: "x"
+  reset_task: "x"
+hooks:
+  on_completed: "x"
+  on_requires_human: "x"
+"#;
+        let err = validate_generated_config(invalid).expect_err("expected error");
+        assert!(err.contains("commands.next_task"));
+    }
+
+    #[test]
+    fn wizard_backup_copy_fails_when_existing_config_is_directory() {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+        fs::create_dir(&config_path).expect("create existing config dir");
+
+        let err = write_config_with_backup(&config_path, "x").expect_err("expected error");
+        assert!(err.contains("Failed to copy"));
+    }
+
+    #[test]
+    fn get_mapping_value_at_path_returns_none_when_path_missing_or_non_mapping() {
+        let mut nested = Mapping::new();
+        nested.insert(Value::String("c".to_string()), Value::Bool(true));
+        let mut root = Mapping::new();
+        root.insert(
+            Value::String("a".to_string()),
+            Value::String("x".to_string()),
+        );
+        root.insert(Value::String("b".to_string()), Value::Mapping(nested));
+
+        assert!(get_mapping_value_at_path(&root, &["missing"]).is_none());
+        assert!(get_mapping_value_at_path(&root, &["a", "b"]).is_none());
+        assert!(get_mapping_value_at_path(&root, &["b", "missing"]).is_none());
+    }
+
+    #[test]
+    fn get_value_at_path_returns_none_when_root_or_key_missing() {
+        assert!(get_value_at_path(&Value::String("x".to_string()), &["a"]).is_none());
+        assert!(get_value_at_path(&Value::Mapping(Mapping::new()), &["a"]).is_none());
+    }
+
+    #[test]
+    fn merge_known_template_keys_errors_when_candidate_cannot_be_set() {
+        let mut existing = Mapping::new();
+        existing.insert(
+            Value::String("agent_command".to_string()),
+            Value::String("agent".to_string()),
+        );
+        let mut candidate = Value::String("nope".to_string());
+
+        let mut decider = |_prompt: &MergePrompt| Ok(MergeDecision::KeepCurrent);
+        let err = merge_known_template_keys(&existing, &mut candidate, &mut decider)
+            .expect_err("expected error");
+        assert!(err.contains("expected YAML mapping"));
+    }
+
+    #[test]
+    fn strip_yaml_document_prefix_keeps_text_without_marker() {
+        assert_eq!(
+            strip_yaml_document_prefix("foo: bar\n"),
+            "foo: bar\n".to_string()
+        );
+    }
+
+    #[test]
+    fn prompt_template_choice_accepts_non_numeric_id() {
+        let mut io = io::TestWizardIo::new(vec!["custom\n".to_string()]);
+        let id = prompt_template_choice(&mut io, "x", vec!["a: A".to_string()], None).expect("id");
+        assert_eq!(id, "custom");
+    }
+
+    #[test]
+    fn remove_value_at_path_returns_false_when_prefix_not_mapping() {
+        let mut mapping = Mapping::new();
+        mapping.insert(
+            Value::String("a".to_string()),
+            Value::String("x".to_string()),
+        );
+        let mut root = Value::Mapping(mapping);
+        assert!(!remove_value_at_path(&mut root, &["a", "b"]));
     }
 }

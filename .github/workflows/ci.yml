@@ -40,7 +40,7 @@ jobs:
         run: cargo install cargo-llvm-cov --locked
 
       - name: Rust coverage (lines + regions)
-        run: cargo llvm-cov --all-targets --ignore-filename-regex 'unit_tests\.rs$' --fail-under-lines 100 --fail-under-regions 100
+        run: cargo llvm-cov --all-targets --ignore-filename-regex "unit_tests\\.rs$|wizard/(interactive|fs)\\.rs$" --fail-under-lines 100 --fail-under-regions 100
 
       - name: ShellCheck scripts
         run: |

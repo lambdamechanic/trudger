@@ -2,7 +2,6 @@ use clap::Parser;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +13,7 @@ use crate::doctor::run_doctor_mode;
 use crate::logger::Logger;
 use crate::run_loop::{quit, reset_task_on_exit, run_loop, validate_config, Quit, RuntimeState};
 use crate::tmux::TmuxState;
-use crate::wizard::run_wizard_interactive;
+use crate::wizard::run_wizard_cli;
 
 const PROMPT_TRUDGE: &str = ".codex/prompts/trudge.md";
 const PROMPT_REVIEW: &str = ".codex/prompts/trudge_review.md";
@@ -144,31 +143,7 @@ pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
     let config_path = config_path.unwrap_or_else(|| default_config.clone());
 
     if mode == AppMode::Wizard {
-        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-            let message =
-                "trudger wizard requires an interactive terminal (stdin and stdout must be a TTY)."
-                    .to_string();
-            eprintln!("{}", message);
-            return Err(Quit {
-                code: 1,
-                reason: message,
-            });
-        }
-
-        let result = run_wizard_interactive(&config_path).map_err(|message| Quit {
-            code: 1,
-            reason: message,
-        })?;
-
-        for warning in result.warnings {
-            eprintln!("{}", warning);
-        }
-
-        println!("Wrote config to {}", result.config_path.display());
-        if let Some(backup) = result.backup_path {
-            println!("Backup: {}", backup.display());
-        }
-        return Ok(());
+        return run_wizard_cli(&config_path);
     }
 
     if !config_path.is_file() {
@@ -260,12 +235,9 @@ pub(crate) fn run_with_args(args: Vec<OsString>) -> Result<(), Quit> {
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(err) => {
-            // clap's `Error::print()` uses termcolor and bypasses Rust's test output
-            // capturing, which can make `cargo test` look like it failed. Keep the
-            // pretty clap output for real CLI runs, but suppress it in unit tests.
-            if !cfg!(test) {
-                let _ = err.print();
-            }
+            // clap's `Error::print()` uses termcolor and can bypass Rust's test output
+            // capturing. Rendering it ourselves keeps CLI errors capture-friendly.
+            eprintln!("{err}");
             return Err(Quit {
                 code: err.exit_code(),
                 reason: "cli_parse".to_string(),

@@ -2681,6 +2681,164 @@ fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
 }
 
 #[test]
+fn reset_task_on_exit_is_noop_for_blank_task_id() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let state = RuntimeState {
+        config: Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "review".to_string(),
+            commands: Commands {
+                next_task: None,
+                task_show: "task-show".to_string(),
+                task_status: "printf 'in_progress\\n'".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: "reset-task".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 2,
+            log_path: "".to_string(),
+        },
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: Some("   \n\t".to_string()),
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    reset_task_on_exit(
+        &state,
+        &Err(Quit {
+            code: 1,
+            reason: "error".to_string(),
+        }),
+    );
+}
+
+#[test]
+fn reset_task_on_exit_skips_reset_when_task_status_is_empty() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let reset_task_log = temp.path().join("reset-task.log");
+    let state = RuntimeState {
+        config: Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "review".to_string(),
+            commands: Commands {
+                next_task: None,
+                task_show: "task-show".to_string(),
+                task_status: "printf ''".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: format!("printf reset > {}", reset_task_log.display()),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 2,
+            log_path: "".to_string(),
+        },
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: Some("tr-1".to_string()),
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    reset_task_on_exit(
+        &state,
+        &Err(Quit {
+            code: 1,
+            reason: "error".to_string(),
+        }),
+    );
+
+    assert!(
+        !reset_task_log.exists(),
+        "reset-task should not run for empty status"
+    );
+}
+
+#[test]
+fn reset_task_on_exit_skips_reset_when_task_status_command_fails_to_spawn() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let old_path = env::var_os("PATH");
+    env::set_var("PATH", "");
+
+    let temp = TempDir::new().expect("temp dir");
+    let state = RuntimeState {
+        config: Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "review".to_string(),
+            commands: Commands {
+                next_task: None,
+                task_show: "task-show".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: "reset-task".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 2,
+            log_path: "".to_string(),
+        },
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: Some("tr-1".to_string()),
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    reset_task_on_exit(
+        &state,
+        &Err(Quit {
+            code: 1,
+            reason: "error".to_string(),
+        }),
+    );
+
+    match old_path {
+        Some(value) => env::set_var("PATH", value),
+        None => env::remove_var("PATH"),
+    }
+}
+
+#[test]
 fn hook_failure_after_closed_does_not_reset_task_on_exit() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
@@ -3064,6 +3222,64 @@ fn run_with_cli_rejects_invalid_manual_task_values() {
     })
     .expect_err("expected manual task parse error");
     assert_eq!(err.code, 1);
+}
+
+#[test]
+fn run_with_cli_rejects_wizard_positional_args() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let err = run_with_cli(Cli {
+        config: None,
+        task: Vec::new(),
+        positional: vec!["extra".to_string()],
+        command: Some(CliCommand::Wizard),
+    })
+    .expect_err("expected positional args error");
+    assert_eq!(err.code, 1);
+    assert!(err.reason.contains("wizard mode"));
+}
+
+#[test]
+fn run_with_cli_rejects_wizard_task_flag() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let err = run_with_cli(Cli {
+        config: None,
+        task: vec!["tr-1".to_string()],
+        positional: Vec::new(),
+        command: Some(CliCommand::Wizard),
+    })
+    .expect_err("expected wizard -t error");
+    assert_eq!(err.code, 1);
+    assert!(err.reason.contains("wizard mode"));
+}
+
+#[test]
+fn run_with_cli_invokes_wizard_runner_without_tty() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let err = run_with_cli(Cli {
+        config: None,
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: Some(CliCommand::Wizard),
+    })
+    .expect_err("expected wizard TTY error");
+    assert_eq!(err.code, 1);
+    assert!(err.reason.contains("requires an interactive terminal"));
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
 }
 
 #[test]

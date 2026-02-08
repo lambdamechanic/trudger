@@ -60,24 +60,42 @@ const TRACKING_BD_LABELS: &str = include_str!("../config_templates/tracking/bd-l
 const DEFAULTS: &str = include_str!("../config_templates/defaults.yml");
 
 pub(crate) fn load_embedded_wizard_templates() -> Result<WizardTemplates, String> {
-    let agents = vec![
-        parse_template("config_templates/agents/codex.yml", AGENT_CODEX)?,
-        parse_template("config_templates/agents/claude.yml", AGENT_CLAUDE)?,
-        parse_template("config_templates/agents/pi.yml", AGENT_PI)?,
-    ];
+    load_wizard_templates_from_sources(
+        &[
+            ("config_templates/agents/codex.yml", AGENT_CODEX),
+            ("config_templates/agents/claude.yml", AGENT_CLAUDE),
+            ("config_templates/agents/pi.yml", AGENT_PI),
+        ],
+        &[
+            (
+                "config_templates/tracking/br-next-task.yml",
+                TRACKING_BR_NEXT_TASK,
+            ),
+            (
+                "config_templates/tracking/bd-labels.yml",
+                TRACKING_BD_LABELS,
+            ),
+        ],
+        ("config_templates/defaults.yml", DEFAULTS),
+    )
+}
 
-    let tracking = vec![
-        parse_template(
-            "config_templates/tracking/br-next-task.yml",
-            TRACKING_BR_NEXT_TASK,
-        )?,
-        parse_template(
-            "config_templates/tracking/bd-labels.yml",
-            TRACKING_BD_LABELS,
-        )?,
-    ];
+fn load_wizard_templates_from_sources(
+    agents: &[(&str, &str)],
+    tracking: &[(&str, &str)],
+    defaults: (&str, &str),
+) -> Result<WizardTemplates, String> {
+    let agents: Vec<AgentTemplate> = agents
+        .iter()
+        .map(|(path, contents)| parse_template(path, contents))
+        .collect::<Result<Vec<_>, _>>()?;
 
-    let defaults: DefaultsTemplate = parse_template("config_templates/defaults.yml", DEFAULTS)?;
+    let tracking: Vec<TrackingTemplate> = tracking
+        .iter()
+        .map(|(path, contents)| parse_template(path, contents))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let defaults: DefaultsTemplate = parse_template(defaults.0, defaults.1)?;
 
     validate_required_templates(&agents, &tracking, &defaults)?;
 
@@ -178,23 +196,326 @@ mod tests {
         let agent_ids: std::collections::HashSet<&str> =
             templates.agents.iter().map(|t| t.id.as_str()).collect();
         for id in ["codex", "claude", "pi"] {
-            assert!(
-                agent_ids.contains(id),
-                "missing required agent template: {id}"
-            );
+            assert!(agent_ids.contains(id));
         }
 
         let tracking_ids: std::collections::HashSet<&str> =
             templates.tracking.iter().map(|t| t.id.as_str()).collect();
         for id in ["br-next-task", "bd-labels"] {
-            assert!(
-                tracking_ids.contains(id),
-                "missing required tracking template: {id}"
-            );
+            assert!(tracking_ids.contains(id));
         }
 
         assert!(templates.defaults.review_loop_limit > 0);
         assert!(!templates.defaults.log_path.trim().is_empty());
+    }
+
+    #[test]
+    fn parse_template_includes_path_on_yaml_error() {
+        let err = parse_template::<AgentTemplate>("some/path.yml", ":\n - invalid")
+            .expect_err("expected parse error");
+        assert!(err.contains("some/path.yml"));
+        assert!(err.contains("Failed to parse embedded"));
+    }
+
+    #[test]
+    fn load_templates_propagates_agent_parse_errors() {
+        let err = load_wizard_templates_from_sources(
+            &[("agent.yml", ":\n - invalid")],
+            &[(
+                "tracking.yml",
+                r#"
+id: "br-next-task"
+label: "Br"
+description: "desc"
+commands:
+  next_task: "x"
+  task_show: "x"
+  task_status: "x"
+  task_update_in_progress: "x"
+  reset_task: "x"
+hooks:
+  on_completed: "x"
+  on_requires_human: "x"
+"#,
+            )],
+            (
+                "defaults.yml",
+                r#"
+review_loop_limit: 1
+log_path: "./x"
+"#,
+            ),
+        )
+        .expect_err("expected agent parse error");
+        assert!(err.contains("agent.yml"));
+    }
+
+    #[test]
+    fn load_templates_propagates_tracking_parse_errors() {
+        let err = load_wizard_templates_from_sources(
+            &[(
+                "agent.yml",
+                r#"
+id: "codex"
+label: "Codex"
+description: "desc"
+agent_command: "x"
+agent_review_command: "y"
+"#,
+            )],
+            &[("tracking.yml", ":\n - invalid")],
+            (
+                "defaults.yml",
+                r#"
+review_loop_limit: 1
+log_path: "./x"
+"#,
+            ),
+        )
+        .expect_err("expected tracking parse error");
+        assert!(err.contains("tracking.yml"));
+    }
+
+    #[test]
+    fn load_templates_propagates_defaults_parse_errors() {
+        let err = load_wizard_templates_from_sources(
+            &[(
+                "agent.yml",
+                r#"
+id: "codex"
+label: "Codex"
+description: "desc"
+agent_command: "x"
+agent_review_command: "y"
+"#,
+            )],
+            &[(
+                "tracking.yml",
+                r#"
+id: "br-next-task"
+label: "Br"
+description: "desc"
+commands:
+  next_task: "x"
+  task_show: "x"
+  task_status: "x"
+  task_update_in_progress: "x"
+  reset_task: "x"
+hooks:
+  on_completed: "x"
+  on_requires_human: "x"
+"#,
+            )],
+            ("defaults.yml", ":\n - invalid"),
+        )
+        .expect_err("expected defaults parse error");
+        assert!(err.contains("defaults.yml"));
+    }
+
+    #[test]
+    fn load_templates_propagates_validation_errors() {
+        let err = load_wizard_templates_from_sources(
+            &[("agent.yml", AGENT_CODEX)],
+            &[
+                ("tracking1.yml", TRACKING_BR_NEXT_TASK),
+                ("tracking2.yml", TRACKING_BD_LABELS),
+            ],
+            ("defaults.yml", DEFAULTS),
+        )
+        .expect_err("expected validation error");
+        assert!(err.contains("missing required ids"));
+    }
+
+    #[test]
+    fn validate_required_templates_rejects_zero_review_loop_limit() {
+        fn agent(id: &str) -> AgentTemplate {
+            AgentTemplate {
+                id: id.to_string(),
+                label: id.to_string(),
+                description: "desc".to_string(),
+                agent_command: "cmd".to_string(),
+                agent_review_command: "review".to_string(),
+            }
+        }
+
+        fn tracking(id: &str) -> TrackingTemplate {
+            TrackingTemplate {
+                id: id.to_string(),
+                label: id.to_string(),
+                description: "desc".to_string(),
+                commands: TrackingCommands {
+                    next_task: "x".to_string(),
+                    task_show: "x".to_string(),
+                    task_status: "x".to_string(),
+                    task_update_in_progress: "x".to_string(),
+                    reset_task: "x".to_string(),
+                },
+                hooks: TrackingHooks {
+                    on_completed: "x".to_string(),
+                    on_requires_human: "x".to_string(),
+                    on_doctor_setup: None,
+                },
+            }
+        }
+
+        let agents = vec![agent("codex"), agent("claude"), agent("pi")];
+        let tracking = vec![tracking("br-next-task"), tracking("bd-labels")];
+        let defaults = DefaultsTemplate {
+            review_loop_limit: 0,
+            log_path: "./x".to_string(),
+        };
+
+        let err = validate_required_templates(&agents, &tracking, &defaults)
+            .expect_err("expected invalid defaults error");
+        assert!(err.contains("review_loop_limit"));
+    }
+
+    #[test]
+    fn validate_required_templates_rejects_empty_log_path() {
+        fn agent(id: &str) -> AgentTemplate {
+            AgentTemplate {
+                id: id.to_string(),
+                label: id.to_string(),
+                description: "desc".to_string(),
+                agent_command: "cmd".to_string(),
+                agent_review_command: "review".to_string(),
+            }
+        }
+
+        fn tracking(id: &str) -> TrackingTemplate {
+            TrackingTemplate {
+                id: id.to_string(),
+                label: id.to_string(),
+                description: "desc".to_string(),
+                commands: TrackingCommands {
+                    next_task: "x".to_string(),
+                    task_show: "x".to_string(),
+                    task_status: "x".to_string(),
+                    task_update_in_progress: "x".to_string(),
+                    reset_task: "x".to_string(),
+                },
+                hooks: TrackingHooks {
+                    on_completed: "x".to_string(),
+                    on_requires_human: "x".to_string(),
+                    on_doctor_setup: None,
+                },
+            }
+        }
+
+        let agents = vec![agent("codex"), agent("claude"), agent("pi")];
+        let tracking = vec![tracking("br-next-task"), tracking("bd-labels")];
+        let defaults = DefaultsTemplate {
+            review_loop_limit: 1,
+            log_path: "   ".to_string(),
+        };
+
+        let err = validate_required_templates(&agents, &tracking, &defaults)
+            .expect_err("expected invalid defaults error");
+        assert!(err.contains("log_path"));
+    }
+
+    #[test]
+    fn validate_required_templates_rejects_duplicate_ids() {
+        let agents = vec![
+            AgentTemplate {
+                id: "codex".to_string(),
+                label: "Codex".to_string(),
+                description: "desc".to_string(),
+                agent_command: "cmd".to_string(),
+                agent_review_command: "review".to_string(),
+            },
+            AgentTemplate {
+                id: "codex".to_string(),
+                label: "Codex".to_string(),
+                description: "desc".to_string(),
+                agent_command: "cmd".to_string(),
+                agent_review_command: "review".to_string(),
+            },
+        ];
+        let tracking = vec![TrackingTemplate {
+            id: "br-next-task".to_string(),
+            label: "Br".to_string(),
+            description: "desc".to_string(),
+            commands: TrackingCommands {
+                next_task: "x".to_string(),
+                task_show: "x".to_string(),
+                task_status: "x".to_string(),
+                task_update_in_progress: "x".to_string(),
+                reset_task: "x".to_string(),
+            },
+            hooks: TrackingHooks {
+                on_completed: "x".to_string(),
+                on_requires_human: "x".to_string(),
+                on_doctor_setup: None,
+            },
+        }];
+        let defaults = DefaultsTemplate {
+            review_loop_limit: 1,
+            log_path: "./x".to_string(),
+        };
+
+        let err = validate_required_templates(&agents, &tracking, &defaults)
+            .expect_err("expected duplicate id error");
+        assert!(err.contains("duplicated"));
+    }
+
+    #[test]
+    fn validate_required_templates_rejects_duplicate_tracking_ids() {
+        fn agent(id: &str) -> AgentTemplate {
+            AgentTemplate {
+                id: id.to_string(),
+                label: id.to_string(),
+                description: "desc".to_string(),
+                agent_command: "cmd".to_string(),
+                agent_review_command: "review".to_string(),
+            }
+        }
+
+        let agents = vec![agent("codex"), agent("claude"), agent("pi")];
+        let tracking = vec![
+            TrackingTemplate {
+                id: "br-next-task".to_string(),
+                label: "Br".to_string(),
+                description: "desc".to_string(),
+                commands: TrackingCommands {
+                    next_task: "x".to_string(),
+                    task_show: "x".to_string(),
+                    task_status: "x".to_string(),
+                    task_update_in_progress: "x".to_string(),
+                    reset_task: "x".to_string(),
+                },
+                hooks: TrackingHooks {
+                    on_completed: "x".to_string(),
+                    on_requires_human: "x".to_string(),
+                    on_doctor_setup: None,
+                },
+            },
+            TrackingTemplate {
+                id: "br-next-task".to_string(),
+                label: "Br".to_string(),
+                description: "desc".to_string(),
+                commands: TrackingCommands {
+                    next_task: "x".to_string(),
+                    task_show: "x".to_string(),
+                    task_status: "x".to_string(),
+                    task_update_in_progress: "x".to_string(),
+                    reset_task: "x".to_string(),
+                },
+                hooks: TrackingHooks {
+                    on_completed: "x".to_string(),
+                    on_requires_human: "x".to_string(),
+                    on_doctor_setup: None,
+                },
+            },
+        ];
+        let defaults = DefaultsTemplate {
+            review_loop_limit: 1,
+            log_path: "./x".to_string(),
+        };
+
+        let err = validate_required_templates(&agents, &tracking, &defaults)
+            .expect_err("expected duplicate id error");
+        assert!(err.contains("tracking template"));
     }
 
     #[test]
@@ -238,11 +559,11 @@ mod tests {
 
         let err = validate_required_templates(&agents, &tracking, &defaults)
             .expect_err("expected missing required agent ids error");
-        assert!(err.contains("missing required ids"), "err: {err}");
-        assert!(err.contains("agent template"), "err: {err}");
-        assert!(err.contains("claude"), "err: {err}");
-        assert!(err.contains("pi"), "err: {err}");
-        assert!(err.contains("reinstall/upgrade"), "err: {err}");
+        assert!(err.contains("missing required ids"));
+        assert!(err.contains("agent template"));
+        assert!(err.contains("claude"));
+        assert!(err.contains("pi"));
+        assert!(err.contains("reinstall/upgrade"));
     }
 
     #[test]
@@ -286,9 +607,9 @@ mod tests {
 
         let err = validate_required_templates(&agents, &tracking, &defaults)
             .expect_err("expected missing required tracking ids error");
-        assert!(err.contains("missing required ids"), "err: {err}");
-        assert!(err.contains("tracking template"), "err: {err}");
-        assert!(err.contains("bd-labels"), "err: {err}");
-        assert!(err.contains("reinstall/upgrade"), "err: {err}");
+        assert!(err.contains("missing required ids"));
+        assert!(err.contains("tracking template"));
+        assert!(err.contains("bd-labels"));
+        assert!(err.contains("reinstall/upgrade"));
     }
 }

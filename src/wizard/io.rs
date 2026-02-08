@@ -1,4 +1,5 @@
-use std::io::{self, Write};
+#[cfg(test)]
+use std::collections::VecDeque;
 
 pub(super) trait WizardIo {
     fn write_out(&mut self, s: &str) -> Result<(), String>;
@@ -6,58 +7,6 @@ pub(super) trait WizardIo {
     fn flush_out(&mut self) -> Result<(), String>;
     fn read_line(&mut self) -> Result<Option<String>, String>;
 }
-
-pub(super) struct TerminalWizardIo {
-    stdin: io::Stdin,
-    stdout: io::Stdout,
-    stderr: io::Stderr,
-}
-
-impl TerminalWizardIo {
-    pub(super) fn new() -> Self {
-        Self {
-            stdin: io::stdin(),
-            stdout: io::stdout(),
-            stderr: io::stderr(),
-        }
-    }
-}
-
-impl WizardIo for TerminalWizardIo {
-    fn write_out(&mut self, s: &str) -> Result<(), String> {
-        self.stdout
-            .write_all(s.as_bytes())
-            .map_err(|err| format!("Failed to write stdout: {}", err))
-    }
-
-    fn write_err(&mut self, s: &str) -> Result<(), String> {
-        self.stderr
-            .write_all(s.as_bytes())
-            .map_err(|err| format!("Failed to write stderr: {}", err))
-    }
-
-    fn flush_out(&mut self) -> Result<(), String> {
-        self.stdout
-            .flush()
-            .map_err(|err| format!("Failed to flush stdout: {}", err))
-    }
-
-    fn read_line(&mut self) -> Result<Option<String>, String> {
-        let mut input = String::new();
-        let bytes = self
-            .stdin
-            .read_line(&mut input)
-            .map_err(|err| format!("Failed to read selection: {}", err))?;
-        if bytes == 0 {
-            Ok(None)
-        } else {
-            Ok(Some(input))
-        }
-    }
-}
-
-#[cfg(test)]
-use std::collections::VecDeque;
 
 #[cfg(test)]
 pub(super) struct TestWizardIo {
