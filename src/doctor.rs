@@ -5,8 +5,8 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::config::Config;
-use crate::logger::Logger;
 use crate::logger::sanitize_log_value;
+use crate::logger::Logger;
 use crate::run_loop::{quit, validate_config, Quit};
 use crate::shell::{
     run_shell_command_capture, run_shell_command_status, CommandEnv, CommandResult,
@@ -104,9 +104,7 @@ impl DoctorCtx<'_> {
             scratch_dir: Some(self.scratch_path.to_string()),
             task_id: task.task_id.map(|value| value.to_string()),
             task_show: task.task_show.map(|value| value.to_string()),
-            task_status: task
-                .task_status
-                .map(|value| value.as_str().to_string()),
+            task_status: task.task_status.map(|value| value.as_str().to_string()),
             prompt: None,
             review_prompt: None,
             completed: None,
@@ -752,8 +750,7 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
-        let err =
-            doctor_run_task_show(&ctx, &task("tr-1")).expect_err("expected task_show error");
+        let err = doctor_run_task_show(&ctx, &task("tr-1")).expect_err("expected task_show error");
         assert!(err.contains("commands.task_show failed"));
     }
 

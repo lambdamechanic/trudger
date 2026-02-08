@@ -129,9 +129,12 @@ fn build_command_env(
         cwd: None,
         config_path: state.config_path.display().to_string(),
         scratch_dir: None,
-        task_id: task_id
-            .map(|value| value.to_string())
-            .or_else(|| state.current_task_id.as_ref().map(|value| value.to_string())),
+        task_id: task_id.map(|value| value.to_string()).or_else(|| {
+            state
+                .current_task_id
+                .as_ref()
+                .map(|value| value.to_string())
+        }),
         task_show: state.current_task_show.clone(),
         task_status: state
             .current_task_status
@@ -283,7 +286,10 @@ fn get_next_task_id(state: &RuntimeState) -> Result<Option<TaskId>, Quit> {
 fn ensure_task_ready(state: &mut RuntimeState, task_id: &TaskId) -> Result<(), Quit> {
     run_task_status(state, task_id)
         .map_err(|err| quit(&state.logger, &format!("task_status_failed:{err}"), 1))?;
-    let status = state.current_task_status.clone().unwrap_or(TaskStatus::Unknown(String::new()));
+    let status = state
+        .current_task_status
+        .clone()
+        .unwrap_or(TaskStatus::Unknown(String::new()));
     if status.is_ready() {
         return Ok(());
     }
@@ -336,10 +342,7 @@ fn reset_task(state: &RuntimeState, task_id: &TaskId) -> Result<(), String> {
     Ok(())
 }
 
-fn task_status_token(
-    state: &RuntimeState,
-    task_id: &TaskId,
-) -> Result<Option<TaskStatus>, String> {
+fn task_status_token(state: &RuntimeState, task_id: &TaskId) -> Result<Option<TaskStatus>, String> {
     let output = run_config_command(
         state,
         &state.config.commands.task_status,
@@ -836,8 +839,7 @@ mod tests {
         let mut state = base_state(&temp);
 
         std::env::set_var("PATH", temp.path());
-        let err =
-            run_task_show(&mut state, &task("tr-1"), &[]).expect_err("expected spawn error");
+        let err = run_task_show(&mut state, &task("tr-1"), &[]).expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -853,8 +855,7 @@ mod tests {
         let mut state = base_state(&temp);
 
         std::env::set_var("PATH", temp.path());
-        let err =
-            run_task_status(&mut state, &task("tr-1")).expect_err("expected spawn error");
+        let err = run_task_status(&mut state, &task("tr-1")).expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -870,8 +871,8 @@ mod tests {
         let state = base_state(&temp);
 
         std::env::set_var("PATH", temp.path());
-        let err =
-            update_task_status(&state, &task("tr-1"), TaskStatus::InProgress).expect_err("spawn error");
+        let err = update_task_status(&state, &task("tr-1"), TaskStatus::InProgress)
+            .expect_err("spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();

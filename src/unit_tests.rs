@@ -16,8 +16,8 @@ use crate::doctor::run_doctor_mode;
 use crate::logger::{sanitize_log_value, Logger};
 use crate::run_loop::{reset_task_on_exit, run_loop, validate_config, Quit, RuntimeState};
 use crate::shell::render_args;
-use crate::tmux::{build_tmux_name, TmuxState};
 use crate::task_types::{Phase, ReviewLoopLimit, TaskId};
+use crate::tmux::{build_tmux_name, TmuxState};
 
 pub(crate) static ENV_MUTEX: Mutex<()> = Mutex::new(());
 static ORIGINAL_PATH: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
