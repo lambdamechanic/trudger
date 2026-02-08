@@ -31,6 +31,7 @@ pub(crate) fn reset_test_env() {
         "NEXT_TASK_EXIT_CODE",
         "NEXT_TASK_OUTPUT_QUEUE",
         "NEXT_TASK_OUTPUT",
+        "TASK_STATUS_EXIT_CODE",
         "TASK_STATUS_QUEUE",
         "TASK_STATUS_OUTPUT",
         "TASK_SHOW_QUEUE",
@@ -1133,7 +1134,10 @@ fn reset_task_runs_on_exit_with_active_task() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
     let temp = TempDir::new().expect("temp dir");
+    let task_status_log = temp.path().join("task-status.log");
     let reset_task_log = temp.path().join("reset-task.log");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "in_progress\n").expect("write status queue");
 
     let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -1141,6 +1145,8 @@ fn reset_task_runs_on_exit_with_active_task() {
         .join("bin");
     let old_path = env::var("PATH").unwrap_or_default();
     env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    env::set_var("TASK_STATUS_LOG", &task_status_log);
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
     env::set_var("RESET_TASK_LOG", &reset_task_log);
 
     let config = Config {
@@ -1183,6 +1189,11 @@ fn reset_task_runs_on_exit_with_active_task() {
         reason: "error".to_string(),
     });
     reset_task_on_exit(&state, &result);
+
+    assert!(
+        task_status_log.exists(),
+        "task-status should run to confirm in_progress at exit"
+    );
 
     let contents = fs::read_to_string(&reset_task_log).expect("read reset task log");
     assert!(
@@ -2634,7 +2645,7 @@ fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
             commands: Commands {
                 next_task: None,
                 task_show: "task-show".to_string(),
-                task_status: "task-status".to_string(),
+                task_status: "printf 'in_progress\\n'".to_string(),
                 task_update_in_progress: "task-update".to_string(),
                 reset_task: "exit 1".to_string(),
             },
@@ -2666,6 +2677,346 @@ fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
             code: 1,
             reason: "error".to_string(),
         }),
+    );
+}
+
+#[test]
+fn hook_failure_after_closed_does_not_reset_task_on_exit() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let task_status_log = temp.path().join("task-status.log");
+    let reset_task_log = temp.path().join("reset-task.log");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "closed\n").expect("write status queue");
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    env::set_var("TASK_STATUS_LOG", &task_status_log);
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+    env::set_var("RESET_TASK_LOG", &reset_task_log);
+
+    let state = RuntimeState {
+        config: Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "review".to_string(),
+            commands: Commands {
+                next_task: None,
+                task_show: "task-show".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: "reset-task".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 1,
+            log_path: "".to_string(),
+        },
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: Some("tr-1".to_string()),
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    reset_task_on_exit(
+        &state,
+        &Err(Quit {
+            code: 1,
+            reason: "error:hook_failed".to_string(),
+        }),
+    );
+
+    assert!(task_status_log.exists(), "task-status should run at exit");
+    assert!(
+        !reset_task_log.exists(),
+        "reset-task should not run when task is closed"
+    );
+}
+
+#[test]
+fn hook_failure_after_blocked_does_not_reset_task_on_exit() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let task_status_log = temp.path().join("task-status.log");
+    let reset_task_log = temp.path().join("reset-task.log");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "blocked\n").expect("write status queue");
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    env::set_var("TASK_STATUS_LOG", &task_status_log);
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+    env::set_var("RESET_TASK_LOG", &reset_task_log);
+
+    let state = RuntimeState {
+        config: Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "review".to_string(),
+            commands: Commands {
+                next_task: None,
+                task_show: "task-show".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: "reset-task".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 1,
+            log_path: "".to_string(),
+        },
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: Some("tr-1".to_string()),
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    reset_task_on_exit(
+        &state,
+        &Err(Quit {
+            code: 1,
+            reason: "error:hook_failed".to_string(),
+        }),
+    );
+
+    assert!(task_status_log.exists(), "task-status should run at exit");
+    assert!(
+        !reset_task_log.exists(),
+        "reset-task should not run when task is blocked"
+    );
+}
+
+#[test]
+fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let task_status_log = temp.path().join("task-status.log");
+    let reset_task_log = temp.path().join("reset-task.log");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "in_progress\n").expect("write status queue");
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    env::set_var("TASK_STATUS_LOG", &task_status_log);
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+    env::set_var("RESET_TASK_LOG", &reset_task_log);
+
+    let state = RuntimeState {
+        config: Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "review".to_string(),
+            commands: Commands {
+                next_task: None,
+                task_show: "task-show".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: "reset-task".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 1,
+            log_path: "".to_string(),
+        },
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: Some("tr-1".to_string()),
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    reset_task_on_exit(
+        &state,
+        &Err(Quit {
+            code: 1,
+            reason: "solve_failed:tr-1".to_string(),
+        }),
+    );
+
+    assert!(task_status_log.exists(), "task-status should run at exit");
+    assert!(reset_task_log.exists(), "reset-task should run for in_progress");
+}
+
+#[test]
+fn sigint_while_in_progress_invokes_reset_task_on_exit() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let task_status_log = temp.path().join("task-status.log");
+    let reset_task_log = temp.path().join("reset-task.log");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "in_progress\n").expect("write status queue");
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    env::set_var("TASK_STATUS_LOG", &task_status_log);
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+    env::set_var("RESET_TASK_LOG", &reset_task_log);
+
+    let state = RuntimeState {
+        config: Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "review".to_string(),
+            commands: Commands {
+                next_task: None,
+                task_show: "task-show".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: "reset-task".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 1,
+            log_path: "".to_string(),
+        },
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: Some("tr-1".to_string()),
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    reset_task_on_exit(
+        &state,
+        &Err(Quit {
+            code: 130,
+            reason: "interrupted".to_string(),
+        }),
+    );
+
+    assert!(task_status_log.exists(), "task-status should run at exit");
+    assert!(reset_task_log.exists(), "reset-task should run for in_progress");
+}
+
+#[test]
+fn status_check_failure_at_exit_does_not_invoke_reset_task() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let task_status_log = temp.path().join("task-status.log");
+    let reset_task_log = temp.path().join("reset-task.log");
+    let status_queue = temp.path().join("status-queue.txt");
+    fs::write(&status_queue, "in_progress\n").expect("write status queue");
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    env::set_var("TASK_STATUS_EXIT_CODE", "2");
+    env::set_var("TASK_STATUS_LOG", &task_status_log);
+    env::set_var("TASK_STATUS_QUEUE", &status_queue);
+    env::set_var("RESET_TASK_LOG", &reset_task_log);
+
+    let state = RuntimeState {
+        config: Config {
+            agent_command: "agent".to_string(),
+            agent_review_command: "review".to_string(),
+            commands: Commands {
+                next_task: None,
+                task_show: "task-show".to_string(),
+                task_status: "task-status".to_string(),
+                task_update_in_progress: "task-update".to_string(),
+                reset_task: "reset-task".to_string(),
+            },
+            hooks: Hooks {
+                on_completed: "true".to_string(),
+                on_requires_human: "true".to_string(),
+                on_doctor_setup: None,
+            },
+            review_loop_limit: 1,
+            log_path: "".to_string(),
+        },
+        config_path: temp.path().join("trudger.yml"),
+        prompt_trudge: "Task context".to_string(),
+        prompt_review: "Review context".to_string(),
+        logger: Logger::new(None),
+        tmux: TmuxState::disabled(),
+        interrupt_flag: Arc::new(AtomicBool::new(false)),
+        manual_tasks: Vec::new(),
+        completed_tasks: Vec::new(),
+        needs_human_tasks: Vec::new(),
+        current_task_id: Some("tr-1".to_string()),
+        current_task_show: None,
+        current_task_status: None,
+    };
+
+    reset_task_on_exit(
+        &state,
+        &Err(Quit {
+            code: 1,
+            reason: "error".to_string(),
+        }),
+    );
+
+    assert!(task_status_log.exists(), "task-status should run at exit");
+    assert!(
+        !reset_task_log.exists(),
+        "reset-task should not run when status check fails"
     );
 }
 

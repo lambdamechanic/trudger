@@ -321,6 +321,28 @@ fn reset_task(state: &RuntimeState, task_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn task_status_token(state: &RuntimeState, task_id: &str) -> Result<String, String> {
+    let output = run_config_command(
+        state,
+        &state.config.commands.task_status,
+        Some(task_id),
+        "task",
+        &[],
+    )?;
+    if output.exit_code != 0 {
+        return Err(format!(
+            "task_status failed with exit code {}",
+            output.exit_code
+        ));
+    }
+    Ok(output
+        .stdout
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string())
+}
+
 pub(crate) fn reset_task_on_exit(state: &RuntimeState, result: &Result<(), Quit>) {
     if result.is_ok() {
         return;
@@ -328,6 +350,46 @@ pub(crate) fn reset_task_on_exit(state: &RuntimeState, result: &Result<(), Quit>
     let Some(task_id) = state.current_task_id.as_deref() else {
         return;
     };
+    if task_id.trim().is_empty() {
+        return;
+    }
+
+    let status = match task_status_token(state, task_id) {
+        Ok(status) => status,
+        Err(err) => {
+            eprintln!(
+                "Warning: failed to check task status for task {}, skipping reset: {}",
+                task_id, err
+            );
+            state.logger.log_transition(&format!(
+                "reset_task_skip task={} reason=task_status_failed err={}",
+                task_id,
+                sanitize_log_value(&err)
+            ));
+            return;
+        }
+    };
+
+    if status.is_empty() {
+        eprintln!(
+            "Warning: commands.task_status returned an empty status for task {}, skipping reset.",
+            task_id
+        );
+        state.logger.log_transition(&format!(
+            "reset_task_skip task={} reason=task_status_empty",
+            task_id
+        ));
+        return;
+    }
+
+    if status != "in_progress" {
+        state.logger.log_transition(&format!(
+            "reset_task_skip task={} status={}",
+            task_id, status
+        ));
+        return;
+    }
+
     match reset_task(state, task_id) {
         Ok(()) => state
             .logger
