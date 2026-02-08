@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::shell::command_exists;
+use crate::task_types::{Phase, TaskId};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TmuxState {
@@ -71,15 +72,21 @@ impl TmuxState {
 
     pub(crate) fn update_name(
         &self,
-        phase: &str,
-        task_id: &str,
-        completed: &[String],
-        needs_human: &[String],
+        phase: Phase,
+        task_id: &TaskId,
+        completed: &[TaskId],
+        needs_human: &[TaskId],
     ) {
         if !self.enabled {
             return;
         }
-        let name = build_tmux_name(&self.base_name, phase, task_id, completed, needs_human);
+        let name = build_tmux_name(
+            &self.base_name,
+            Some(phase),
+            task_id,
+            completed,
+            needs_human,
+        );
         self.select_pane(&name);
     }
 
@@ -170,19 +177,26 @@ fn default_tmux_base_name() -> String {
     format!("({}) {}: {}", host, folder, command)
 }
 
-fn format_task_list(label: &str, tasks: &[String]) -> String {
+fn format_task_list(label: &str, tasks: &[TaskId]) -> String {
     if tasks.is_empty() {
         return String::new();
     }
-    format!("{} [{}]", label, tasks.join(", "))
+    let mut joined = String::new();
+    for (index, task) in tasks.iter().enumerate() {
+        if index > 0 {
+            joined.push_str(", ");
+        }
+        joined.push_str(task.as_str());
+    }
+    format!("{} [{}]", label, joined)
 }
 
 pub(crate) fn build_tmux_name(
     base_name: &str,
-    phase: &str,
-    task_id: &str,
-    completed: &[String],
-    needs_human: &[String],
+    phase: Option<Phase>,
+    task_id: &TaskId,
+    completed: &[TaskId],
+    needs_human: &[TaskId],
 ) -> String {
     let mut base = base_name.to_string();
     if let Some((prefix, command)) = base_name.rsplit_once(": ") {
@@ -192,10 +206,10 @@ pub(crate) fn build_tmux_name(
     }
 
     let activity = match phase {
-        "SOLVING" => format!("SOLVING {}", task_id),
-        "REVIEWING" => format!("REVIEWING {}", task_id),
-        "ERROR" => format!("HALTED ON ERROR {}", task_id),
-        _ => String::new(),
+        Some(Phase::Solving) => format!("SOLVING {}", task_id),
+        Some(Phase::Reviewing) => format!("REVIEWING {}", task_id),
+        Some(Phase::Error) => format!("HALTED ON ERROR {}", task_id),
+        None => String::new(),
     };
 
     let mut parts = Vec::new();

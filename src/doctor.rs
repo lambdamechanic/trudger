@@ -6,23 +6,25 @@ use std::path::Path;
 
 use crate::config::Config;
 use crate::logger::Logger;
-use crate::run_loop::{is_ready_status, quit, validate_config, Quit};
+use crate::logger::sanitize_log_value;
+use crate::run_loop::{quit, validate_config, Quit};
 use crate::shell::{
     run_shell_command_capture, run_shell_command_status, CommandEnv, CommandResult,
 };
+use crate::task_types::{TaskId, TaskStatus};
 
 #[derive(Debug, serde::Deserialize)]
 struct DoctorIssueSnapshot {
-    id: String,
+    id: TaskId,
     #[serde(default)]
     status: String,
 }
 
-fn load_doctor_issue_statuses(path: &Path) -> Result<BTreeMap<String, String>, String> {
+fn load_doctor_issue_statuses(path: &Path) -> Result<BTreeMap<TaskId, TaskStatus>, String> {
     let file = fs::File::open(path)
         .map_err(|err| format!("doctor failed to read issues {}: {}", path.display(), err))?;
     let reader = BufReader::new(file);
-    let mut latest: BTreeMap<String, String> = BTreeMap::new();
+    let mut latest: BTreeMap<TaskId, TaskStatus> = BTreeMap::new();
 
     for (index, line) in reader.lines().enumerate() {
         let line = line.map_err(|err| {
@@ -45,7 +47,9 @@ fn load_doctor_issue_statuses(path: &Path) -> Result<BTreeMap<String, String>, S
                 err
             )
         })?;
-        latest.insert(snapshot.id, snapshot.status);
+        let status = TaskStatus::parse(&snapshot.status)
+            .unwrap_or_else(|| TaskStatus::Unknown(snapshot.status.clone()));
+        latest.insert(snapshot.id, status);
     }
 
     Ok(latest)
@@ -53,9 +57,9 @@ fn load_doctor_issue_statuses(path: &Path) -> Result<BTreeMap<String, String>, S
 
 #[derive(Clone, Copy, Debug)]
 struct DoctorTaskEnv<'a> {
-    task_id: Option<&'a str>,
+    task_id: Option<&'a TaskId>,
     task_show: Option<&'a str>,
-    task_status: Option<&'a str>,
+    task_status: Option<&'a TaskStatus>,
 }
 
 impl<'a> DoctorTaskEnv<'a> {
@@ -67,7 +71,7 @@ impl<'a> DoctorTaskEnv<'a> {
         }
     }
 
-    fn for_task(task_id: &'a str) -> Self {
+    fn for_task(task_id: &'a TaskId) -> Self {
         Self {
             task_id: Some(task_id),
             task_show: None,
@@ -78,9 +82,9 @@ impl<'a> DoctorTaskEnv<'a> {
 
 #[derive(Debug)]
 struct DoctorHookTask<'a> {
-    id: &'a str,
+    id: &'a TaskId,
     show: &'a str,
-    status: &'a str,
+    status: &'a TaskStatus,
 }
 
 #[derive(Debug)]
@@ -100,7 +104,9 @@ impl DoctorCtx<'_> {
             scratch_dir: Some(self.scratch_path.to_string()),
             task_id: task.task_id.map(|value| value.to_string()),
             task_show: task.task_show.map(|value| value.to_string()),
-            task_status: task.task_status.map(|value| value.to_string()),
+            task_status: task
+                .task_status
+                .map(|value| value.as_str().to_string()),
             prompt: None,
             review_prompt: None,
             completed: None,
@@ -154,7 +160,12 @@ fn doctor_run_next_task(ctx: &DoctorCtx<'_>) -> Result<(), String> {
     match output.exit_code {
         0 => {
             // Empty output is valid ("no tasks") in Trudger semantics.
-            let _task_id = output.stdout.split_whitespace().next().unwrap_or("");
+            let token = output.stdout.split_whitespace().next().unwrap_or("");
+            if !token.trim().is_empty() {
+                let _task_id = TaskId::try_from(token).map_err(|err| {
+                    format!("commands.next_task returned an invalid task id: {}", err)
+                })?;
+            }
         }
         1 => {
             // Exit 1 means "no selectable tasks" in Trudger semantics.
@@ -166,11 +177,11 @@ fn doctor_run_next_task(ctx: &DoctorCtx<'_>) -> Result<(), String> {
     Ok(())
 }
 
-fn doctor_run_task_show(ctx: &DoctorCtx<'_>, task_id: &str) -> Result<String, String> {
+fn doctor_run_task_show(ctx: &DoctorCtx<'_>, task_id: &TaskId) -> Result<String, String> {
     let output = ctx.run_capture(
         &ctx.config.commands.task_show,
         "doctor-task-show",
-        task_id,
+        task_id.as_str(),
         &[],
         DoctorTaskEnv::for_task(task_id),
     )?;
@@ -183,11 +194,11 @@ fn doctor_run_task_show(ctx: &DoctorCtx<'_>, task_id: &str) -> Result<String, St
     Ok(output.stdout)
 }
 
-fn doctor_run_task_status(ctx: &DoctorCtx<'_>, task_id: &str) -> Result<String, String> {
+fn doctor_run_task_status(ctx: &DoctorCtx<'_>, task_id: &TaskId) -> Result<TaskStatus, String> {
     let output = ctx.run_capture(
         &ctx.config.commands.task_status,
         "doctor-task-status",
-        task_id,
+        task_id.as_str(),
         &[],
         DoctorTaskEnv::for_task(task_id),
     )?;
@@ -197,45 +208,52 @@ fn doctor_run_task_status(ctx: &DoctorCtx<'_>, task_id: &str) -> Result<String, 
             output.exit_code
         ));
     }
-    let status = output
-        .stdout
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string();
-    if status.is_empty() {
+    let token = output.stdout.split_whitespace().next().unwrap_or("");
+    let Some(status) = TaskStatus::parse(token) else {
         return Err("commands.task_status returned an empty status.".to_string());
+    };
+    if status.is_unknown() {
+        ctx.logger.log_transition(&format!(
+            "unknown_task_status task={} status={}",
+            task_id,
+            sanitize_log_value(status.as_str())
+        ));
     }
     Ok(status)
 }
 
 fn doctor_run_task_update_status(
     ctx: &DoctorCtx<'_>,
-    task_id: &str,
-    status: &str,
+    task_id: &TaskId,
+    status: TaskStatus,
 ) -> Result<(), String> {
-    let args = vec!["--status".to_string(), status.to_string()];
+    debug_assert!(
+        !status.is_unknown(),
+        "doctor_run_task_update_status must not be called with an unknown status"
+    );
+    let args = vec!["--status".to_string(), status.as_str().to_string()];
     let exit = ctx.run_status(
         &ctx.config.commands.task_update_in_progress,
         "doctor-task-update",
-        task_id,
+        task_id.as_str(),
         &args,
         DoctorTaskEnv::for_task(task_id),
     )?;
     if exit != 0 {
         return Err(format!(
             "commands.task_update_in_progress failed to set status {} (exit code {})",
-            status, exit
+            status.as_str(),
+            exit
         ));
     }
     Ok(())
 }
 
-fn doctor_run_reset_task(ctx: &DoctorCtx<'_>, task_id: &str) -> Result<(), String> {
+fn doctor_run_reset_task(ctx: &DoctorCtx<'_>, task_id: &TaskId) -> Result<(), String> {
     let exit = ctx.run_status(
         &ctx.config.commands.reset_task,
         "doctor-reset-task",
-        task_id,
+        task_id.as_str(),
         &[],
         DoctorTaskEnv::for_task(task_id),
     )?;
@@ -259,7 +277,7 @@ fn doctor_run_hook(
         task_show: Some(task.show),
         task_status: Some(task.status),
     };
-    let exit = ctx.run_status(hook_command, hook_name, task.id, &[], env)?;
+    let exit = ctx.run_status(hook_command, hook_name, task.id.as_str(), &[], env)?;
     if exit != 0 {
         return Err(format!("hook {} failed with exit code {}", hook_name, exit));
     }
@@ -287,7 +305,7 @@ fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
     let task_id = statuses
         .iter()
         .find_map(|(id, status)| {
-            if is_ready_status(status) {
+            if status.is_ready() {
                 Some(id.clone())
             } else {
                 None
@@ -299,7 +317,7 @@ fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
     // (reset -> open, update -> in_progress, etc.). Don't reuse that same task for the "closed
     // parsing" verification.
     let closed_task_id = statuses.iter().find_map(|(id, status)| {
-        if status == "closed" && id != &task_id {
+        if status == &TaskStatus::Closed && id != &task_id {
             Some(id.clone())
         } else {
             None
@@ -309,7 +327,7 @@ fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
     // Verify reset -> ready/open parsing.
     doctor_run_reset_task(ctx, &task_id)?;
     let status = doctor_run_task_status(ctx, &task_id)?;
-    if !is_ready_status(&status) {
+    if !status.is_ready() {
         return Err(format!(
             "doctor expected commands.task_status to return ready/open after reset_task, got '{}'.",
             status
@@ -320,9 +338,9 @@ fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
     let show = doctor_run_task_show(ctx, &task_id)?;
 
     // Verify update -> in_progress parsing.
-    doctor_run_task_update_status(ctx, &task_id, "in_progress")?;
+    doctor_run_task_update_status(ctx, &task_id, TaskStatus::InProgress)?;
     let status = doctor_run_task_status(ctx, &task_id)?;
-    if status != "in_progress" {
+    if status != TaskStatus::InProgress {
         return Err(format!(
             "doctor expected commands.task_status to return 'in_progress' after task_update_in_progress, got '{}'.",
             status
@@ -332,7 +350,7 @@ fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
     // Verify reset works again and yields ready/open.
     doctor_run_reset_task(ctx, &task_id)?;
     let status = doctor_run_task_status(ctx, &task_id)?;
-    if !is_ready_status(&status) {
+    if !status.is_ready() {
         return Err(format!(
             "doctor expected commands.task_status to return ready/open after reset_task, got '{}'.",
             status
@@ -365,7 +383,7 @@ fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
     match closed_task_id {
         Some(closed_task_id) => {
             let closed_status = doctor_run_task_status(ctx, &closed_task_id)?;
-            if closed_status != "closed" {
+            if closed_status != TaskStatus::Closed {
                 return Err(format!(
                     "doctor expected commands.task_status to return 'closed' for task {}, got '{}'.",
                     closed_task_id, closed_status
@@ -373,9 +391,9 @@ fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
             }
         }
         None => {
-            doctor_run_task_update_status(ctx, &task_id, "closed")?;
+            doctor_run_task_update_status(ctx, &task_id, TaskStatus::Closed)?;
             let closed_status = doctor_run_task_status(ctx, &task_id)?;
-            if closed_status != "closed" {
+            if closed_status != TaskStatus::Closed {
                 return Err(format!(
                     "doctor expected commands.task_status to return 'closed' after setting status closed, got '{}'.",
                     closed_status
@@ -488,6 +506,10 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    fn task(id: &str) -> TaskId {
+        TaskId::try_from(id).expect("task id")
+    }
+
     fn base_config() -> Config {
         Config {
             agent_command: "agent".to_string(),
@@ -504,7 +526,8 @@ mod tests {
                 on_requires_human: "exit 0".to_string(),
                 on_doctor_setup: Some("exit 0".to_string()),
             },
-            review_loop_limit: 1,
+            review_loop_limit: crate::task_types::ReviewLoopLimit::new(1)
+                .expect("review_loop_limit"),
             log_path: "".to_string(),
         }
     }
@@ -599,8 +622,8 @@ mod tests {
         let statuses =
             load_doctor_issue_statuses(&scratch.path().join(".beads").join("issues.jsonl"))
                 .expect("load");
-        assert!(statuses.contains_key("tr-1"));
-        assert!(statuses.contains_key("tr-2"));
+        assert!(statuses.contains_key(&task("tr-1")));
+        assert!(statuses.contains_key(&task("tr-2")));
     }
 
     #[test]
@@ -729,7 +752,8 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
-        let err = doctor_run_task_show(&ctx, "tr-1").expect_err("expected task_show error");
+        let err =
+            doctor_run_task_show(&ctx, &task("tr-1")).expect_err("expected task_show error");
         assert!(err.contains("commands.task_show failed"));
     }
 
@@ -755,7 +779,7 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
-        let err = doctor_run_task_show(&ctx, "tr-1").expect_err("expected spawn error");
+        let err = doctor_run_task_show(&ctx, &task("tr-1")).expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -780,7 +804,8 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
-        let err = doctor_run_task_status(&ctx, "tr-1").expect_err("expected task_status error");
+        let err =
+            doctor_run_task_status(&ctx, &task("tr-1")).expect_err("expected task_status error");
         assert!(err.contains("commands.task_status failed"));
     }
 
@@ -803,7 +828,8 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
-        let err = doctor_run_task_status(&ctx, "tr-1").expect_err("expected empty status error");
+        let err =
+            doctor_run_task_status(&ctx, &task("tr-1")).expect_err("expected empty status error");
         assert!(err.contains("returned an empty status"));
     }
 
@@ -829,7 +855,7 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
-        let err = doctor_run_task_status(&ctx, "tr-1").expect_err("expected spawn error");
+        let err = doctor_run_task_status(&ctx, &task("tr-1")).expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -854,7 +880,7 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
-        let err = doctor_run_task_update_status(&ctx, "tr-1", "closed")
+        let err = doctor_run_task_update_status(&ctx, &task("tr-1"), TaskStatus::Closed)
             .expect_err("expected update error");
         assert!(err.contains("failed to set status"));
     }
@@ -881,7 +907,7 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
-        let err = doctor_run_task_update_status(&ctx, "tr-1", "closed")
+        let err = doctor_run_task_update_status(&ctx, &task("tr-1"), TaskStatus::Closed)
             .expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
@@ -907,7 +933,7 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
-        let err = doctor_run_reset_task(&ctx, "tr-1").expect_err("expected reset error");
+        let err = doctor_run_reset_task(&ctx, &task("tr-1")).expect_err("expected reset error");
         assert!(err.contains("commands.reset_task failed"));
     }
 
@@ -933,7 +959,7 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
-        let err = doctor_run_reset_task(&ctx, "tr-1").expect_err("expected spawn error");
+        let err = doctor_run_reset_task(&ctx, &task("tr-1")).expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -956,14 +982,16 @@ mod tests {
             scratch_path: &scratch_path,
             logger: &logger,
         };
+        let id = task("tr-1");
+        let status = TaskStatus::Open;
         let err = doctor_run_hook(
             "exit 2",
             &ctx,
             "doctor-hook",
             DoctorHookTask {
-                id: "tr-1",
+                id: &id,
                 show: "show",
-                status: "open",
+                status: &status,
             },
         )
         .expect_err("expected hook error");
@@ -991,14 +1019,16 @@ mod tests {
         };
 
         env::set_var("PATH", temp.path());
+        let id = task("tr-1");
+        let status = TaskStatus::Open;
         let err = doctor_run_hook(
             "hook",
             &ctx,
             "doctor-hook",
             DoctorHookTask {
-                id: "tr-1",
+                id: &id,
                 show: "show",
-                status: "open",
+                status: &status,
             },
         )
         .expect_err("expected spawn error");

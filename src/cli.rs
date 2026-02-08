@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use crate::task_types::TaskId;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "trudger",
@@ -48,7 +50,7 @@ pub(crate) enum CliCommand {
     Doctor,
 }
 
-pub(crate) fn parse_manual_tasks(raw_values: &[String]) -> Result<Vec<String>, String> {
+pub(crate) fn parse_manual_tasks(raw_values: &[String]) -> Result<Vec<TaskId>, String> {
     let mut tasks = Vec::new();
     for raw in raw_values {
         for (index, segment) in raw.split(',').enumerate() {
@@ -59,7 +61,13 @@ pub(crate) fn parse_manual_tasks(raw_values: &[String]) -> Result<Vec<String>, S
                     raw, index
                 ));
             }
-            tasks.push(trimmed.to_string());
+            let task_id = TaskId::try_from(trimmed).map_err(|err| {
+                format!(
+                    "Invalid -t/--task value: {:?} at index {}: {}.",
+                    raw, index, err
+                )
+            })?;
+            tasks.push(task_id);
         }
     }
     Ok(tasks)

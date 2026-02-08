@@ -7,6 +7,7 @@ mod doctor;
 mod logger;
 mod run_loop;
 mod shell;
+mod task_types;
 mod tmux;
 mod wizard;
 mod wizard_templates;

@@ -980,7 +980,7 @@ hooks:
         let contents = fs::read_to_string(&config_path).expect("read config");
         let loaded = load_config_from_str("<test>", &contents).expect("load config");
         assert_eq!(
-            loaded.config.review_loop_limit,
+            loaded.config.review_loop_limit.get(),
             templates.defaults.review_loop_limit
         );
         assert_eq!(loaded.config.log_path, templates.defaults.log_path);
@@ -1059,7 +1059,7 @@ log_path: "./custom.log"
 
         let contents = fs::read_to_string(&config_path).expect("read config");
         let loaded = load_config_from_str("<test>", &contents).expect("load config");
-        assert_eq!(loaded.config.review_loop_limit, 99);
+        assert_eq!(loaded.config.review_loop_limit.get(), 99);
         assert_eq!(loaded.config.log_path, "./custom.log");
     }
 

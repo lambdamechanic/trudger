@@ -9,6 +9,7 @@ use crate::logger::{sanitize_log_value, Logger};
 use crate::shell::{
     run_shell_command_capture, run_shell_command_status, CommandEnv, CommandResult,
 };
+use crate::task_types::{Phase, TaskId, TaskStatus};
 use crate::tmux::TmuxState;
 
 #[derive(Debug)]
@@ -20,12 +21,12 @@ pub(crate) struct RuntimeState {
     pub(crate) logger: Logger,
     pub(crate) tmux: TmuxState,
     pub(crate) interrupt_flag: Arc<AtomicBool>,
-    pub(crate) manual_tasks: Vec<String>,
-    pub(crate) completed_tasks: Vec<String>,
-    pub(crate) needs_human_tasks: Vec<String>,
-    pub(crate) current_task_id: Option<String>,
+    pub(crate) manual_tasks: Vec<TaskId>,
+    pub(crate) completed_tasks: Vec<TaskId>,
+    pub(crate) needs_human_tasks: Vec<TaskId>,
+    pub(crate) current_task_id: Option<TaskId>,
     pub(crate) current_task_show: Option<String>,
-    pub(crate) current_task_status: Option<String>,
+    pub(crate) current_task_status: Option<TaskStatus>,
 }
 
 #[derive(Debug)]
@@ -54,18 +55,12 @@ pub(crate) fn quit(logger: &Logger, reason: &str, code: i32) -> Quit {
     }
 }
 
-pub(crate) fn validate_config(config: &Config, manual_tasks: &[String]) -> Result<(), String> {
+pub(crate) fn validate_config(config: &Config, manual_tasks: &[TaskId]) -> Result<(), String> {
     if config.agent_command.trim().is_empty() {
         return Err("agent_command must not be empty.".to_string());
     }
     if config.agent_review_command.trim().is_empty() {
         return Err("agent_review_command must not be empty.".to_string());
-    }
-    if config.review_loop_limit < 1 {
-        return Err(format!(
-            "review_loop_limit must be a positive integer (got {}).",
-            config.review_loop_limit
-        ));
     }
 
     let next_task = config.commands.next_task.as_deref().unwrap_or("").trim();
@@ -104,19 +99,30 @@ pub(crate) fn validate_config(config: &Config, manual_tasks: &[String]) -> Resul
 
 fn build_command_env(
     state: &RuntimeState,
-    task_id: Option<&str>,
+    task_id: Option<&TaskId>,
     prompt: Option<String>,
     review_prompt: Option<String>,
 ) -> CommandEnv {
+    fn join_task_ids(tasks: &[TaskId]) -> String {
+        let mut out = String::new();
+        for (index, task) in tasks.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push_str(task.as_str());
+        }
+        out
+    }
+
     let completed = if state.completed_tasks.is_empty() {
         None
     } else {
-        Some(state.completed_tasks.join(","))
+        Some(join_task_ids(&state.completed_tasks))
     };
     let needs_human = if state.needs_human_tasks.is_empty() {
         None
     } else {
-        Some(state.needs_human_tasks.join(","))
+        Some(join_task_ids(&state.needs_human_tasks))
     };
 
     CommandEnv {
@@ -125,9 +131,12 @@ fn build_command_env(
         scratch_dir: None,
         task_id: task_id
             .map(|value| value.to_string())
-            .or_else(|| state.current_task_id.clone()),
+            .or_else(|| state.current_task_id.as_ref().map(|value| value.to_string())),
         task_show: state.current_task_show.clone(),
-        task_status: state.current_task_status.clone(),
+        task_status: state
+            .current_task_status
+            .as_ref()
+            .map(|value| value.as_str().to_string()),
         prompt,
         review_prompt,
         completed,
@@ -138,7 +147,7 @@ fn build_command_env(
 fn run_config_command(
     state: &RuntimeState,
     command: &str,
-    task_id: Option<&str>,
+    task_id: Option<&TaskId>,
     log_label: &str,
     args: &[String],
 ) -> Result<CommandResult, String> {
@@ -146,7 +155,7 @@ fn run_config_command(
     run_shell_command_capture(
         command,
         log_label,
-        task_id.unwrap_or("none"),
+        task_id.map(|value| value.as_str()).unwrap_or("none"),
         args,
         &env,
         &state.logger,
@@ -156,7 +165,7 @@ fn run_config_command(
 fn run_config_command_status(
     state: &RuntimeState,
     command: &str,
-    task_id: Option<&str>,
+    task_id: Option<&TaskId>,
     log_label: &str,
     args: &[String],
 ) -> Result<i32, String> {
@@ -164,7 +173,7 @@ fn run_config_command_status(
     run_shell_command_status(
         command,
         log_label,
-        task_id.unwrap_or("none"),
+        task_id.map(|value| value.as_str()).unwrap_or("none"),
         args,
         &env,
         &state.logger,
@@ -183,7 +192,11 @@ fn run_agent_command(
     run_shell_command_status(command, log_label, "none", args, &env, &state.logger)
 }
 
-fn run_task_show(state: &mut RuntimeState, task_id: &str, args: &[String]) -> Result<(), String> {
+fn run_task_show(
+    state: &mut RuntimeState,
+    task_id: &TaskId,
+    args: &[String],
+) -> Result<(), String> {
     state.current_task_show = None;
     let output = run_config_command(
         state,
@@ -202,7 +215,7 @@ fn run_task_show(state: &mut RuntimeState, task_id: &str, args: &[String]) -> Re
     Ok(())
 }
 
-fn run_task_status(state: &mut RuntimeState, task_id: &str) -> Result<(), String> {
+fn run_task_status(state: &mut RuntimeState, task_id: &TaskId) -> Result<(), String> {
     state.current_task_status = None;
     let output = run_config_command(
         state,
@@ -217,21 +230,22 @@ fn run_task_status(state: &mut RuntimeState, task_id: &str) -> Result<(), String
             output.exit_code
         ));
     }
-    let status = output
-        .stdout
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string();
-    state.current_task_status = if status.is_empty() {
-        None
-    } else {
-        Some(status)
-    };
+    let token = output.stdout.split_whitespace().next().unwrap_or("");
+    let parsed = TaskStatus::parse(token);
+    if let Some(status) = parsed.as_ref() {
+        if status.is_unknown() {
+            state.logger.log_transition(&format!(
+                "unknown_task_status task={} status={}",
+                task_id,
+                sanitize_log_value(status.as_str())
+            ));
+        }
+    }
+    state.current_task_status = parsed;
     Ok(())
 }
 
-fn get_next_task_id(state: &RuntimeState) -> Result<String, Quit> {
+fn get_next_task_id(state: &RuntimeState) -> Result<Option<TaskId>, Quit> {
     let output = run_config_command(
         state,
         state.config.commands.next_task.as_deref().unwrap_or(""),
@@ -257,24 +271,20 @@ fn get_next_task_id(state: &RuntimeState) -> Result<String, Quit> {
         ));
     }
 
-    let task_id = output
-        .stdout
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string();
-    Ok(task_id)
+    let token = output.stdout.split_whitespace().next().unwrap_or("");
+    if token.trim().is_empty() {
+        return Ok(None);
+    }
+    let task_id = TaskId::try_from(token)
+        .map_err(|err| quit(&state.logger, &format!("next_task_invalid_id:{err}"), 1))?;
+    Ok(Some(task_id))
 }
 
-pub(crate) fn is_ready_status(status: &str) -> bool {
-    status == "ready" || status == "open"
-}
-
-fn ensure_task_ready(state: &mut RuntimeState, task_id: &str) -> Result<(), Quit> {
+fn ensure_task_ready(state: &mut RuntimeState, task_id: &TaskId) -> Result<(), Quit> {
     run_task_status(state, task_id)
         .map_err(|err| quit(&state.logger, &format!("task_status_failed:{err}"), 1))?;
-    let status = state.current_task_status.clone().unwrap_or_default();
-    if is_ready_status(&status) {
+    let status = state.current_task_status.clone().unwrap_or(TaskStatus::Unknown(String::new()));
+    if status.is_ready() {
         return Ok(());
     }
     eprintln!("Task {} is not ready (status: {}).", task_id, status);
@@ -285,8 +295,12 @@ fn ensure_task_ready(state: &mut RuntimeState, task_id: &str) -> Result<(), Quit
     ))
 }
 
-fn update_task_status(state: &RuntimeState, task_id: &str, status: &str) -> Result<(), String> {
-    let args = vec!["--status".to_string(), status.to_string()];
+fn update_task_status(
+    state: &RuntimeState,
+    task_id: &TaskId,
+    status: TaskStatus,
+) -> Result<(), String> {
+    let args = vec!["--status".to_string(), status.as_str().to_string()];
     let exit = run_config_command_status(
         state,
         &state.config.commands.task_update_in_progress,
@@ -297,17 +311,18 @@ fn update_task_status(state: &RuntimeState, task_id: &str, status: &str) -> Resu
     if exit != 0 {
         return Err(format!(
             "task_update_in_progress failed to set status {} (exit code {})",
-            status, exit
+            status.as_str(),
+            exit
         ));
     }
     Ok(())
 }
 
-fn update_in_progress(state: &RuntimeState, task_id: &str) -> Result<(), String> {
-    update_task_status(state, task_id, "in_progress")
+fn update_in_progress(state: &RuntimeState, task_id: &TaskId) -> Result<(), String> {
+    update_task_status(state, task_id, TaskStatus::InProgress)
 }
 
-fn reset_task(state: &RuntimeState, task_id: &str) -> Result<(), String> {
+fn reset_task(state: &RuntimeState, task_id: &TaskId) -> Result<(), String> {
     let exit = run_config_command_status(
         state,
         &state.config.commands.reset_task,
@@ -321,7 +336,10 @@ fn reset_task(state: &RuntimeState, task_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn task_status_token(state: &RuntimeState, task_id: &str) -> Result<String, String> {
+fn task_status_token(
+    state: &RuntimeState,
+    task_id: &TaskId,
+) -> Result<Option<TaskStatus>, String> {
     let output = run_config_command(
         state,
         &state.config.commands.task_status,
@@ -335,24 +353,17 @@ fn task_status_token(state: &RuntimeState, task_id: &str) -> Result<String, Stri
             output.exit_code
         ));
     }
-    Ok(output
-        .stdout
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string())
+    let token = output.stdout.split_whitespace().next().unwrap_or("");
+    Ok(TaskStatus::parse(token))
 }
 
 pub(crate) fn reset_task_on_exit(state: &RuntimeState, result: &Result<(), Quit>) {
     if result.is_ok() {
         return;
     }
-    let Some(task_id) = state.current_task_id.as_deref() else {
+    let Some(task_id) = state.current_task_id.as_ref() else {
         return;
     };
-    if task_id.trim().is_empty() {
-        return;
-    }
 
     let status = match task_status_token(state, task_id) {
         Ok(status) => status,
@@ -370,7 +381,7 @@ pub(crate) fn reset_task_on_exit(state: &RuntimeState, result: &Result<(), Quit>
         }
     };
 
-    if status.is_empty() {
+    let Some(status) = status else {
         eprintln!(
             "Warning: commands.task_status returned an empty status for task {}, skipping reset.",
             task_id
@@ -380,9 +391,9 @@ pub(crate) fn reset_task_on_exit(state: &RuntimeState, result: &Result<(), Quit>
             task_id
         ));
         return;
-    }
+    };
 
-    if status != "in_progress" {
+    if status != TaskStatus::InProgress {
         state.logger.log_transition(&format!(
             "reset_task_skip task={} status={}",
             task_id, status
@@ -415,7 +426,7 @@ fn check_interrupted(state: &RuntimeState) -> Result<(), Quit> {
 fn run_hook(
     state: &RuntimeState,
     hook_command: &str,
-    task_id: &str,
+    task_id: &TaskId,
     hook_name: &str,
 ) -> Result<(), String> {
     if hook_command.trim().is_empty() {
@@ -491,23 +502,24 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             let mut skip_count = 0usize;
             let selected = loop {
                 check_interrupted(state)?;
-                let task_id = get_next_task_id(state)?;
-                if task_id.trim().is_empty() {
-                    state.logger.log_transition("idle no_task");
-                    return Err(quit(&state.logger, "no_task", 0));
-                }
+                let task_id = match get_next_task_id(state)? {
+                    Some(task_id) => task_id,
+                    None => {
+                        state.logger.log_transition("idle no_task");
+                        return Err(quit(&state.logger, "no_task", 0));
+                    }
+                };
                 run_task_status(state, &task_id)
                     .map_err(|err| quit(&state.logger, &format!("task_status_failed:{err}"), 1))?;
-                let status = state.current_task_status.clone().unwrap_or_default();
-                if status.is_empty() {
+                let Some(status) = state.current_task_status.clone() else {
                     eprintln!("Task {} missing status.", task_id);
                     return Err(quit(
                         &state.logger,
                         &format!("task_missing_status:{}", task_id),
                         1,
                     ));
-                }
-                if is_ready_status(&status) {
+                };
+                if status.is_ready() {
                     break task_id;
                 }
                 state.logger.log_transition(&format!(
@@ -526,11 +538,6 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             selected
         };
 
-        if task_id.trim().is_empty() {
-            state.logger.log_transition("idle no_task");
-            return Err(quit(&state.logger, "no_task", 0));
-        }
-
         state.current_task_id = Some(task_id.clone());
         state.current_task_show = None;
         state.current_task_status = None;
@@ -540,7 +547,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         loop {
             check_interrupted(state)?;
             state.tmux.update_name(
-                "SOLVING",
+                Phase::Solving,
                 &task_id,
                 &state.completed_tasks,
                 &state.needs_human_tasks,
@@ -552,7 +559,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
 
             if let Err(err) = update_in_progress(state, &task_id) {
                 state.tmux.update_name(
-                    "ERROR",
+                    Phase::Error,
                     &task_id,
                     &state.completed_tasks,
                     &state.needs_human_tasks,
@@ -563,7 +570,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             check_interrupted(state)?;
             if let Err(err) = run_task_show(state, &task_id, &[]) {
                 state.tmux.update_name(
-                    "ERROR",
+                    Phase::Error,
                     &task_id,
                     &state.completed_tasks,
                     &state.needs_human_tasks,
@@ -578,7 +585,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             let solve_args: &[String] = if review_loops == 0 { &[] } else { &resume_args };
             if let Err(_err) = run_agent_solve(state, solve_args) {
                 state.tmux.update_name(
-                    "ERROR",
+                    Phase::Error,
                     &task_id,
                     &state.completed_tasks,
                     &state.needs_human_tasks,
@@ -591,7 +598,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             }
 
             state.tmux.update_name(
-                "REVIEWING",
+                Phase::Reviewing,
                 &task_id,
                 &state.completed_tasks,
                 &state.needs_human_tasks,
@@ -604,7 +611,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             check_interrupted(state)?;
             if let Err(err) = run_task_show(state, &task_id, &[]) {
                 state.tmux.update_name(
-                    "ERROR",
+                    Phase::Error,
                     &task_id,
                     &state.completed_tasks,
                     &state.needs_human_tasks,
@@ -615,7 +622,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             check_interrupted(state)?;
             if let Err(_err) = run_agent_review(state) {
                 state.tmux.update_name(
-                    "ERROR",
+                    Phase::Error,
                     &task_id,
                     &state.completed_tasks,
                     &state.needs_human_tasks,
@@ -634,14 +641,9 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             check_interrupted(state)?;
             run_task_status(state, &task_id)
                 .map_err(|err| quit(&state.logger, &format!("task_status_failed:{err}"), 1))?;
-            let status = state.current_task_status.clone().unwrap_or_default();
-            state
-                .logger
-                .log_transition(&format!("review_state task={} status={}", task_id, status));
-
-            if status.is_empty() {
+            let Some(status) = state.current_task_status.clone() else {
                 state.tmux.update_name(
-                    "ERROR",
+                    Phase::Error,
                     &task_id,
                     &state.completed_tasks,
                     &state.needs_human_tasks,
@@ -655,9 +657,12 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                     &format!("task_missing_status_after_review:{}", task_id),
                     1,
                 ));
-            }
+            };
+            state
+                .logger
+                .log_transition(&format!("review_state task={} status={}", task_id, status));
 
-            if status == "closed" {
+            if status == TaskStatus::Closed {
                 state.completed_tasks.push(task_id.clone());
                 state
                     .logger
@@ -673,7 +678,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 break;
             }
 
-            if status == "blocked" {
+            if status == TaskStatus::Blocked {
                 state.needs_human_tasks.push(task_id.clone());
                 state
                     .logger
@@ -690,7 +695,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             }
 
             review_loops += 1;
-            if review_loops < state.config.review_loop_limit {
+            if review_loops < state.config.review_loop_limit.get() {
                 state.logger.log_transition(&format!(
                     "review_loop_retry task={} loop={} limit={}",
                     task_id, review_loops, state.config.review_loop_limit
@@ -702,16 +707,16 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 "review_loop_exhausted task={} loops={} limit={}",
                 task_id, review_loops, state.config.review_loop_limit
             ));
-            if let Err(err) = update_task_status(state, &task_id, "blocked") {
+            if let Err(err) = update_task_status(state, &task_id, TaskStatus::Blocked) {
                 state.tmux.update_name(
-                    "ERROR",
+                    Phase::Error,
                     &task_id,
                     &state.completed_tasks,
                     &state.needs_human_tasks,
                 );
                 return Err(quit(&state.logger, &format!("error:{err}"), 1));
             }
-            state.current_task_status = Some("blocked".to_string());
+            state.current_task_status = Some(TaskStatus::Blocked);
 
             state.needs_human_tasks.push(task_id.clone());
             state
@@ -728,8 +733,18 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             break;
         }
 
-        let completed_env = state.completed_tasks.join(",");
-        let needs_human_env = state.needs_human_tasks.join(",");
+        let completed_env = state
+            .completed_tasks
+            .iter()
+            .map(|task| task.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let needs_human_env = state
+            .needs_human_tasks
+            .iter()
+            .map(|task| task.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
         state.logger.log_transition(&format!(
             "task_lists completed={} needs_human={}",
             completed_env, needs_human_env
@@ -745,6 +760,10 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn task(id: &str) -> TaskId {
+        TaskId::try_from(id).expect("task id")
+    }
 
     fn base_state(temp: &TempDir) -> RuntimeState {
         RuntimeState {
@@ -763,7 +782,8 @@ mod tests {
                     on_requires_human: "true".to_string(),
                     on_doctor_setup: None,
                 },
-                review_loop_limit: 1,
+                review_loop_limit: crate::task_types::ReviewLoopLimit::new(1)
+                    .expect("review_loop_limit"),
                 log_path: "".to_string(),
             },
             config_path: temp.path().join("trudger.yml"),
@@ -789,7 +809,7 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let state = base_state(&temp);
 
-        run_hook(&state, "", "tr-1", "hook").expect("hook should succeed");
+        run_hook(&state, "", &task("tr-1"), "hook").expect("hook should succeed");
     }
 
     #[test]
@@ -801,7 +821,8 @@ mod tests {
         let mut state = base_state(&temp);
         state.config.commands.task_status = "exit 2".to_string();
 
-        let err = run_task_status(&mut state, "tr-1").expect_err("expected task_status failure");
+        let err =
+            run_task_status(&mut state, &task("tr-1")).expect_err("expected task_status failure");
         assert!(err.contains("task_status failed"));
     }
 
@@ -815,7 +836,8 @@ mod tests {
         let mut state = base_state(&temp);
 
         std::env::set_var("PATH", temp.path());
-        let err = run_task_show(&mut state, "tr-1", &[]).expect_err("expected spawn error");
+        let err =
+            run_task_show(&mut state, &task("tr-1"), &[]).expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -831,7 +853,8 @@ mod tests {
         let mut state = base_state(&temp);
 
         std::env::set_var("PATH", temp.path());
-        let err = run_task_status(&mut state, "tr-1").expect_err("expected spawn error");
+        let err =
+            run_task_status(&mut state, &task("tr-1")).expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -847,7 +870,8 @@ mod tests {
         let state = base_state(&temp);
 
         std::env::set_var("PATH", temp.path());
-        let err = update_task_status(&state, "tr-1", "in_progress").expect_err("spawn error");
+        let err =
+            update_task_status(&state, &task("tr-1"), TaskStatus::InProgress).expect_err("spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -863,7 +887,7 @@ mod tests {
         let state = base_state(&temp);
 
         std::env::set_var("PATH", temp.path());
-        let err = reset_task(&state, "tr-1").expect_err("spawn error");
+        let err = reset_task(&state, &task("tr-1")).expect_err("spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -928,7 +952,7 @@ mod tests {
         let mut state = base_state(&temp);
         state.config.commands.task_status = "exit 2".to_string();
 
-        let quit = ensure_task_ready(&mut state, "tr-1").expect_err("expected quit");
+        let quit = ensure_task_ready(&mut state, &task("tr-1")).expect_err("expected quit");
         assert_eq!(quit.code, 1);
         assert!(quit.reason.contains("task_status_failed:"));
     }
@@ -943,7 +967,8 @@ mod tests {
         let state = base_state(&temp);
 
         std::env::set_var("PATH", temp.path());
-        let err = run_hook(&state, "hook", "tr-1", "hook").expect_err("expected spawn error");
+        let err =
+            run_hook(&state, "hook", &task("tr-1"), "hook").expect_err("expected spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();
@@ -1012,7 +1037,8 @@ mod tests {
 
         let interrupt_flag = Arc::new(AtomicBool::new(false));
         state.interrupt_flag = Arc::clone(&interrupt_flag);
-        state.manual_tasks = (0..10_000).map(|_| "x".repeat(1024)).collect();
+        let filler = TaskId::try_from("x".repeat(1024)).expect("task id");
+        state.manual_tasks = vec![filler; 10_000];
 
         let setter = Arc::clone(&interrupt_flag);
         let handle = std::thread::spawn(move || {

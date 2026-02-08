@@ -3,13 +3,15 @@ use serde_yaml::{Mapping, Value};
 use std::fs;
 use std::path::Path;
 
+use crate::task_types::ReviewLoopLimit;
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub agent_command: String,
     pub agent_review_command: String,
     pub commands: Commands,
     pub hooks: Hooks,
-    pub review_loop_limit: u64,
+    pub review_loop_limit: ReviewLoopLimit,
     #[serde(default)]
     pub log_path: String,
 }
@@ -56,7 +58,11 @@ pub(crate) fn load_config_from_str(label: &str, content: &str) -> Result<LoadedC
     emit_unknown_key_warnings(&warnings);
     validate_required_fields(&mapping)?;
 
-    let config: Config = serde_yaml::from_value(Value::Mapping(mapping))
+    // `serde_yaml` doesn't reliably include the failing key path for custom
+    // deserialization errors (like `ReviewLoopLimit`). Track the path explicitly
+    // so errors remain actionable.
+    let deserializer = serde_yaml::Deserializer::from_str(content);
+    let config: Config = serde_path_to_error::deserialize(deserializer)
         .map_err(|err| format!("Failed to parse config {}: {}", label, err))?;
 
     Ok(LoadedConfig { config, warnings })
@@ -411,6 +417,38 @@ hooks:
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected null review_loop_limit");
         assert!(err.contains("review_loop_limit"));
+    }
+
+    #[test]
+    fn zero_review_loop_limit_is_rejected_with_actionable_error() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 0
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected zero review_loop_limit");
+        assert!(
+            err.contains("review_loop_limit"),
+            "expected error to mention review_loop_limit, got: {err}"
+        );
+        assert!(
+            err.contains("positive integer") || err.contains("got 0"),
+            "expected error to explain non-zero constraint, got: {err}"
+        );
+        assert!(
+            err.contains(&file.path().display().to_string()),
+            "expected error to include path, got: {err}"
+        );
     }
 
     #[test]

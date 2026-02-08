@@ -17,6 +17,7 @@ use crate::logger::{sanitize_log_value, Logger};
 use crate::run_loop::{reset_task_on_exit, run_loop, validate_config, Quit, RuntimeState};
 use crate::shell::render_args;
 use crate::tmux::{build_tmux_name, TmuxState};
+use crate::task_types::{Phase, ReviewLoopLimit, TaskId};
 
 pub(crate) static ENV_MUTEX: Mutex<()> = Mutex::new(());
 static ORIGINAL_PATH: OnceLock<Option<std::ffi::OsString>> = OnceLock::new();
@@ -57,6 +58,14 @@ pub(crate) fn reset_test_env() {
     ] {
         env::remove_var(key);
     }
+}
+
+fn task(id: &str) -> TaskId {
+    TaskId::try_from(id).expect("task id")
+}
+
+fn limit(value: u64) -> ReviewLoopLimit {
+    ReviewLoopLimit::new(value).expect("review_loop_limit")
 }
 
 #[cfg(unix)]
@@ -292,29 +301,43 @@ fn require_file_reports_missing() {
 
 #[test]
 fn build_tmux_name_trims_fg_and_codex_suffixes() {
-    assert_eq!(build_tmux_name("host: fg", "", "tr-1", &[], &[]), "host");
-    assert_eq!(build_tmux_name("host: codex", "", "tr-1", &[], &[]), "host");
+    let task_id = task("tr-1");
     assert_eq!(
-        build_tmux_name("host: other", "", "tr-1", &[], &[]),
+        build_tmux_name("host: fg", None, &task_id, &[], &[]),
+        "host"
+    );
+    assert_eq!(
+        build_tmux_name("host: codex", None, &task_id, &[], &[]),
+        "host"
+    );
+    assert_eq!(
+        build_tmux_name("host: other", None, &task_id, &[], &[]),
         "host: other"
     );
 }
 
 #[test]
 fn build_tmux_name_formats_task_lists_and_phase_suffixes() {
-    let completed = vec!["tr-1".to_string(), "tr-2".to_string()];
-    let needs_human = vec!["tr-3".to_string()];
+    let completed = vec![task("tr-1"), task("tr-2")];
+    let needs_human = vec![task("tr-3")];
+    let task_id = task("tr-9");
 
     assert_eq!(
-        build_tmux_name("base", "SOLVING", "tr-9", &completed, &needs_human),
+        build_tmux_name(
+            "base",
+            Some(Phase::Solving),
+            &task_id,
+            &completed,
+            &needs_human
+        ),
         "base COMPLETED [tr-1, tr-2] NEEDS_HUMAN [tr-3] SOLVING tr-9"
     );
     assert_eq!(
-        build_tmux_name("base", "REVIEWING", "tr-9", &[], &needs_human),
+        build_tmux_name("base", Some(Phase::Reviewing), &task_id, &[], &needs_human),
         "base NEEDS_HUMAN [tr-3] REVIEWING tr-9"
     );
     assert_eq!(
-        build_tmux_name("base", "ERROR", "tr-9", &completed, &[]),
+        build_tmux_name("base", Some(Phase::Error), &task_id, &completed, &[]),
         "base COMPLETED [tr-1, tr-2] HALTED ON ERROR tr-9"
     );
 }
@@ -368,7 +391,7 @@ fn run_loop_executes_commands_and_hooks_with_env() {
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: log_path.display().to_string(),
     };
 
@@ -511,7 +534,7 @@ fn manual_task_not_ready_fails_fast_without_invoking_next_task() {
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: temp.path().join("trudger.log").display().to_string(),
     };
 
@@ -523,7 +546,7 @@ fn manual_task_not_ready_fails_fast_without_invoking_next_task() {
         logger: Logger::new(None),
         tmux: TmuxState::disabled(),
         interrupt_flag: Arc::new(AtomicBool::new(false)),
-        manual_tasks: vec!["tr-1".to_string()],
+        manual_tasks: vec![task("tr-1")],
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
         current_task_id: None,
@@ -595,7 +618,7 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: log_path.display().to_string(),
     };
 
@@ -621,7 +644,7 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
         logger: Logger::new(Some(log_path)),
         tmux: TmuxState::disabled(),
         interrupt_flag,
-        manual_tasks: vec!["tr-1".to_string()],
+        manual_tasks: vec![task("tr-1")],
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
         current_task_id: None,
@@ -633,7 +656,7 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
     interrupter.join().expect("interrupter thread");
     assert_eq!(result.code, 130, "expected interrupt exit");
     assert_eq!(result.reason, "interrupted");
-    assert_eq!(state.completed_tasks, vec!["tr-1"]);
+    assert_eq!(state.completed_tasks, vec![task("tr-1")]);
 
     assert!(
         !next_task_log.exists(),
@@ -715,7 +738,7 @@ fn review_loop_limit_retries_until_closed() {
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: log_path.display().to_string(),
     };
 
@@ -801,7 +824,7 @@ fn review_loop_limit_exhaustion_marks_blocked_and_requires_human() {
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: log_path.display().to_string(),
     };
 
@@ -823,7 +846,7 @@ fn review_loop_limit_exhaustion_marks_blocked_and_requires_human() {
 
     let result = run_loop(&mut state).expect_err("should exit after queue drained");
     assert_eq!(result.code, 0, "expected graceful exit");
-    assert_eq!(state.needs_human_tasks, vec!["tr-1"]);
+    assert_eq!(state.needs_human_tasks, vec![task("tr-1")]);
     assert!(state.completed_tasks.is_empty());
 
     let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
@@ -886,7 +909,7 @@ fn next_task_exit_1_exits_zero_without_running_commands() {
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: log_path.display().to_string(),
     };
 
@@ -967,7 +990,7 @@ fn hook_uses_env_task_id_in_shell() {
             on_requires_human: "hook --human \"$TRUDGER_TASK_ID\"".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: log_path.display().to_string(),
     };
 
@@ -1038,7 +1061,7 @@ fn skip_not_ready_respects_limit() {
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: log_path.display().to_string(),
     };
 
@@ -1110,7 +1133,7 @@ fn missing_status_after_review_errors() {
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: log_path.display().to_string(),
     };
 
@@ -1174,7 +1197,7 @@ fn reset_task_runs_on_exit_with_active_task() {
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: temp.path().join("trudger.log").display().to_string(),
     };
 
@@ -1189,7 +1212,7 @@ fn reset_task_runs_on_exit_with_active_task() {
         manual_tasks: Vec::new(),
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
-        current_task_id: Some("tr-1".to_string()),
+        current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
     };
@@ -1223,7 +1246,7 @@ fn parse_manual_tasks_trims_and_rejects_empty_segments() {
 
     let tasks =
         parse_manual_tasks(&[" tr-1, tr-2 ".to_string(), "tr-3".to_string()]).expect("parse tasks");
-    assert_eq!(tasks, vec!["tr-1", "tr-2", "tr-3"]);
+    assert_eq!(tasks, vec![task("tr-1"), task("tr-2"), task("tr-3")]);
 
     let err = parse_manual_tasks(&["tr-1,,tr-2".to_string()]).expect_err("should error");
     assert!(
@@ -1547,7 +1570,7 @@ fn doctor_cleanup_failure_is_an_error() {
             on_requires_human: "true".to_string(),
             on_doctor_setup: Some(hook),
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: temp.path().join("trudger.log").display().to_string(),
     };
     let logger = Logger::new(None);
@@ -1883,7 +1906,7 @@ fn validate_config_rejects_missing_and_empty_values() {
             on_requires_human: "hook --human".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -1896,10 +1919,6 @@ fn validate_config_rejects_missing_and_empty_values() {
     assert!(validate_config(&config, &[]).is_err());
 
     let mut config = base.clone();
-    config.review_loop_limit = 0;
-    assert!(validate_config(&config, &[]).is_err());
-
-    let mut config = base.clone();
     config.commands.next_task = Some("".to_string());
     assert!(validate_config(&config, &[]).is_err());
 
@@ -1909,7 +1928,7 @@ fn validate_config_rejects_missing_and_empty_values() {
 
     let mut config = base.clone();
     config.commands.next_task = Some("".to_string());
-    assert!(validate_config(&config, &["tr-1".to_string()]).is_ok());
+    assert!(validate_config(&config, &[task("tr-1")]).is_ok());
 
     let mut config = base.clone();
     config.commands.task_show = "".to_string();
@@ -1957,7 +1976,7 @@ fn run_loop_errors_when_next_task_command_missing() {
             on_requires_human: "true".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -2012,7 +2031,7 @@ fn run_loop_propagates_next_task_exit_code_other_than_1() {
             on_requires_human: "true".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -2069,7 +2088,7 @@ fn run_loop_errors_when_selected_task_has_empty_status() {
             on_requires_human: "true".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -2094,48 +2113,12 @@ fn run_loop_errors_when_selected_task_has_empty_status() {
 }
 
 #[test]
-fn run_loop_errors_when_manual_task_is_empty_string() {
+fn task_id_rejects_empty_string() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
 
-    let temp = TempDir::new().expect("temp dir");
-    let config = Config {
-        agent_command: "agent".to_string(),
-        agent_review_command: "agent-review".to_string(),
-        commands: Commands {
-            next_task: None,
-            task_show: "task-show".to_string(),
-            task_status: "printf 'open\\n'".to_string(),
-            task_update_in_progress: "task-update".to_string(),
-            reset_task: "reset-task".to_string(),
-        },
-        hooks: Hooks {
-            on_completed: "true".to_string(),
-            on_requires_human: "true".to_string(),
-            on_doctor_setup: None,
-        },
-        review_loop_limit: 2,
-        log_path: "".to_string(),
-    };
-
-    let mut state = RuntimeState {
-        config,
-        config_path: temp.path().join("trudger.yml"),
-        prompt_trudge: "Task context".to_string(),
-        prompt_review: "Review context".to_string(),
-        logger: Logger::new(None),
-        tmux: TmuxState::disabled(),
-        interrupt_flag: Arc::new(AtomicBool::new(false)),
-        manual_tasks: vec!["".to_string()],
-        completed_tasks: Vec::new(),
-        needs_human_tasks: Vec::new(),
-        current_task_id: None,
-        current_task_show: None,
-        current_task_status: None,
-    };
-
-    let err = run_loop(&mut state).expect_err("expected empty task");
-    assert_eq!(err.code, 0);
+    let err = TaskId::try_from("").expect_err("expected empty task id to error");
+    assert!(err.contains("must not be empty"), "unexpected err: {err}");
 }
 
 #[test]
@@ -2159,7 +2142,7 @@ fn run_loop_errors_when_update_in_progress_fails() {
             on_requires_human: "true".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -2204,7 +2187,7 @@ fn run_loop_errors_when_task_show_fails_during_solve() {
             on_requires_human: "true".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -2249,7 +2232,7 @@ fn run_loop_errors_when_agent_solve_fails() {
             on_requires_human: "true".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -2309,7 +2292,7 @@ fn run_loop_errors_when_task_show_fails_during_review() {
             on_requires_human: "true".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -2354,7 +2337,7 @@ fn run_loop_errors_when_agent_review_fails() {
             on_requires_human: "true".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -2411,7 +2394,7 @@ fn run_loop_errors_when_on_completed_hook_fails() {
             on_requires_human: "true".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -2468,7 +2451,7 @@ fn run_loop_errors_when_on_requires_human_hook_fails_on_blocked_status() {
             on_requires_human: "exit 1".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 2,
+        review_loop_limit: limit(2),
         log_path: "".to_string(),
     };
 
@@ -2526,7 +2509,7 @@ fn run_loop_errors_when_blocked_status_update_fails_after_exhausting_review_loop
             on_requires_human: "true".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 1,
+        review_loop_limit: limit(1),
         log_path: "".to_string(),
     };
 
@@ -2583,7 +2566,7 @@ fn run_loop_errors_when_on_requires_human_hook_fails_after_exhausting_review_loo
             on_requires_human: "exit 1".to_string(),
             on_doctor_setup: None,
         },
-        review_loop_limit: 1,
+        review_loop_limit: limit(1),
         log_path: "".to_string(),
     };
 
@@ -2630,7 +2613,7 @@ fn reset_task_on_exit_is_noop_for_ok_or_missing_task_id() {
                 on_requires_human: "true".to_string(),
                 on_doctor_setup: None,
             },
-            review_loop_limit: 2,
+            review_loop_limit: limit(2),
             log_path: "".to_string(),
         },
         config_path: temp.path().join("trudger.yml"),
@@ -2679,7 +2662,7 @@ fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
                 on_requires_human: "true".to_string(),
                 on_doctor_setup: None,
             },
-            review_loop_limit: 2,
+            review_loop_limit: limit(2),
             log_path: "".to_string(),
         },
         config_path: temp.path().join("trudger.yml"),
@@ -2691,7 +2674,7 @@ fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
         manual_tasks: Vec::new(),
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
-        current_task_id: Some("tr-1".to_string()),
+        current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
     };
@@ -2706,51 +2689,12 @@ fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
 }
 
 #[test]
-fn reset_task_on_exit_is_noop_for_blank_task_id() {
+fn task_id_rejects_whitespace_only() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
 
-    let temp = TempDir::new().expect("temp dir");
-    let state = RuntimeState {
-        config: Config {
-            agent_command: "agent".to_string(),
-            agent_review_command: "review".to_string(),
-            commands: Commands {
-                next_task: None,
-                task_show: "task-show".to_string(),
-                task_status: "printf 'in_progress\\n'".to_string(),
-                task_update_in_progress: "task-update".to_string(),
-                reset_task: "reset-task".to_string(),
-            },
-            hooks: Hooks {
-                on_completed: "true".to_string(),
-                on_requires_human: "true".to_string(),
-                on_doctor_setup: None,
-            },
-            review_loop_limit: 2,
-            log_path: "".to_string(),
-        },
-        config_path: temp.path().join("trudger.yml"),
-        prompt_trudge: "Task context".to_string(),
-        prompt_review: "Review context".to_string(),
-        logger: Logger::new(None),
-        tmux: TmuxState::disabled(),
-        interrupt_flag: Arc::new(AtomicBool::new(false)),
-        manual_tasks: Vec::new(),
-        completed_tasks: Vec::new(),
-        needs_human_tasks: Vec::new(),
-        current_task_id: Some("   \n\t".to_string()),
-        current_task_show: None,
-        current_task_status: None,
-    };
-
-    reset_task_on_exit(
-        &state,
-        &Err(Quit {
-            code: 1,
-            reason: "error".to_string(),
-        }),
-    );
+    let err = TaskId::try_from("   \n\t").expect_err("expected whitespace task id to error");
+    assert!(err.contains("must not be empty"), "unexpected err: {err}");
 }
 
 #[test]
@@ -2776,7 +2720,7 @@ fn reset_task_on_exit_skips_reset_when_task_status_is_empty() {
                 on_requires_human: "true".to_string(),
                 on_doctor_setup: None,
             },
-            review_loop_limit: 2,
+            review_loop_limit: limit(2),
             log_path: "".to_string(),
         },
         config_path: temp.path().join("trudger.yml"),
@@ -2788,7 +2732,7 @@ fn reset_task_on_exit_skips_reset_when_task_status_is_empty() {
         manual_tasks: Vec::new(),
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
-        current_task_id: Some("tr-1".to_string()),
+        current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
     };
@@ -2832,7 +2776,7 @@ fn reset_task_on_exit_skips_reset_when_task_status_command_fails_to_spawn() {
                 on_requires_human: "true".to_string(),
                 on_doctor_setup: None,
             },
-            review_loop_limit: 2,
+            review_loop_limit: limit(2),
             log_path: "".to_string(),
         },
         config_path: temp.path().join("trudger.yml"),
@@ -2844,7 +2788,7 @@ fn reset_task_on_exit_skips_reset_when_task_status_command_fails_to_spawn() {
         manual_tasks: Vec::new(),
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
-        current_task_id: Some("tr-1".to_string()),
+        current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
     };
@@ -2900,7 +2844,7 @@ fn hook_failure_after_closed_does_not_reset_task_on_exit() {
                 on_requires_human: "true".to_string(),
                 on_doctor_setup: None,
             },
-            review_loop_limit: 1,
+            review_loop_limit: limit(1),
             log_path: "".to_string(),
         },
         config_path: temp.path().join("trudger.yml"),
@@ -2912,7 +2856,7 @@ fn hook_failure_after_closed_does_not_reset_task_on_exit() {
         manual_tasks: Vec::new(),
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
-        current_task_id: Some("tr-1".to_string()),
+        current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
     };
@@ -2969,7 +2913,7 @@ fn hook_failure_after_blocked_does_not_reset_task_on_exit() {
                 on_requires_human: "true".to_string(),
                 on_doctor_setup: None,
             },
-            review_loop_limit: 1,
+            review_loop_limit: limit(1),
             log_path: "".to_string(),
         },
         config_path: temp.path().join("trudger.yml"),
@@ -2981,7 +2925,7 @@ fn hook_failure_after_blocked_does_not_reset_task_on_exit() {
         manual_tasks: Vec::new(),
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
-        current_task_id: Some("tr-1".to_string()),
+        current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
     };
@@ -3038,7 +2982,7 @@ fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
                 on_requires_human: "true".to_string(),
                 on_doctor_setup: None,
             },
-            review_loop_limit: 1,
+            review_loop_limit: limit(1),
             log_path: "".to_string(),
         },
         config_path: temp.path().join("trudger.yml"),
@@ -3050,7 +2994,7 @@ fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
         manual_tasks: Vec::new(),
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
-        current_task_id: Some("tr-1".to_string()),
+        current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
     };
@@ -3107,7 +3051,7 @@ fn sigint_while_in_progress_invokes_reset_task_on_exit() {
                 on_requires_human: "true".to_string(),
                 on_doctor_setup: None,
             },
-            review_loop_limit: 1,
+            review_loop_limit: limit(1),
             log_path: "".to_string(),
         },
         config_path: temp.path().join("trudger.yml"),
@@ -3119,7 +3063,7 @@ fn sigint_while_in_progress_invokes_reset_task_on_exit() {
         manual_tasks: Vec::new(),
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
-        current_task_id: Some("tr-1".to_string()),
+        current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
     };
@@ -3177,7 +3121,7 @@ fn status_check_failure_at_exit_does_not_invoke_reset_task() {
                 on_requires_human: "true".to_string(),
                 on_doctor_setup: None,
             },
-            review_loop_limit: 1,
+            review_loop_limit: limit(1),
             log_path: "".to_string(),
         },
         config_path: temp.path().join("trudger.yml"),
@@ -3189,7 +3133,7 @@ fn status_check_failure_at_exit_does_not_invoke_reset_task() {
         manual_tasks: Vec::new(),
         completed_tasks: Vec::new(),
         needs_human_tasks: Vec::new(),
-        current_task_id: Some("tr-1".to_string()),
+        current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
     };
@@ -3835,7 +3779,7 @@ fn tmux_state_enabled_reads_title_and_updates_pane_name() {
     env::remove_var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE");
 
     let state = TmuxState::new();
-    state.update_name("SOLVING", "tr-9", &["tr-1".to_string()], &[]);
+    state.update_name(Phase::Solving, &task("tr-9"), &[task("tr-1")], &[]);
     state.restore();
 
     let log_contents = fs::read_to_string(&tmux_log).unwrap_or_default();
@@ -4091,6 +4035,6 @@ fn tmux_state_tolerates_tmux_spawn_failures() {
     env::set_var("TRUDGER_TMUX_ORIGINAL_PANE_TITLE", " ");
 
     let state = TmuxState::new();
-    state.update_name("SOLVING", "tr-1", &[], &[]);
+    state.update_name(Phase::Solving, &task("tr-1"), &[], &[]);
     state.restore();
 }
