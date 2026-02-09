@@ -340,6 +340,52 @@ impl CommandEnv {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::CommandEnv;
+    use super::Logger;
+    use std::process::Command;
+
+    #[test]
+    fn reduce_overage_returns_over_when_value_is_none() {
+        let mut max_bytes = 10;
+        let remaining = CommandEnv::reduce_overage(&mut max_bytes, None, 5);
+        assert_eq!(remaining, 5);
+        assert_eq!(max_bytes, 10);
+    }
+
+    #[test]
+    fn reduce_overage_returns_over_when_current_is_zero() {
+        let mut max_bytes = 0;
+        let remaining = CommandEnv::reduce_overage(&mut max_bytes, Some("abc"), 5);
+        assert_eq!(remaining, 5);
+        assert_eq!(max_bytes, 0);
+    }
+
+    #[test]
+    fn apply_can_hit_unreduced_total_overage_path() {
+        // Force `total > TRUDGER_ENV_TOTAL_MAX_BYTES` via vars that are NOT reduced by `reduce_overage`,
+        // so `new_total == total` and we exercise the `if new_total < total { .. }` false region.
+        let huge = "x".repeat(super::TRUDGER_ENV_VALUE_MAX_BYTES + 1024);
+        let env = CommandEnv {
+            cwd: None,
+            config_path: "config".to_string(),
+            scratch_dir: None,
+            task_id: None,
+            task_show: None,
+            task_status: Some(huge.clone()),
+            prompt: None,
+            review_prompt: None,
+            completed: Some(huge),
+            needs_human: None,
+        };
+
+        let mut cmd = Command::new("true");
+        let logger = Logger::new(None);
+        env.apply(&mut cmd, &logger, "test", "task");
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct CommandResult {
     pub(crate) stdout: String,

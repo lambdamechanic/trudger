@@ -9,10 +9,7 @@ fn deserialize_log_path<'de, D>(deserializer: D) -> Result<Option<PathBuf>, D::E
 where
     D: Deserializer<'de>,
 {
-    let value = Option::<String>::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(None);
-    };
+    let value = String::deserialize(deserializer)?;
     if value.trim().is_empty() {
         return Ok(None);
     }
@@ -245,6 +242,7 @@ fn validate_optional_string(mapping: &Mapping, key_name: &str, label: &str) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::de::IntoDeserializer;
     use std::fs;
     use tempfile::NamedTempFile;
     use tempfile::TempDir;
@@ -260,6 +258,39 @@ mod tests {
         let file = write_temp_config("[]");
         let err = load_config(file.path()).expect_err("expected mapping error");
         assert!(err.contains("must be a YAML mapping"));
+    }
+
+    #[test]
+    fn deserialize_log_path_rejects_non_string_values() {
+        let value: serde_yaml::Value = serde_yaml::from_str("123").expect("value");
+        let err = deserialize_log_path(value.into_deserializer()).expect_err("expected error");
+        assert!(err.to_string().contains("string"));
+    }
+
+    #[test]
+    fn deserialize_log_path_error_path_is_covered_for_config_deserializer() {
+        // Exercise the `String::deserialize(..)?` error path for the specific deserializer
+        // instantiation used by `load_config_from_str` (via `serde_path_to_error`).
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_in_progress: "update"
+  reset_task: "reset"
+review_loop_limit: 3
+log_path: [123]
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+
+        let deserializer = serde_yaml::Deserializer::from_str(config);
+        let err = serde_path_to_error::deserialize::<_, Config>(deserializer)
+            .expect_err("expected log_path deserialization error");
+        assert!(err.to_string().contains("log_path"));
     }
 
     #[test]

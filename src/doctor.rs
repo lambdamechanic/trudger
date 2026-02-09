@@ -739,10 +739,7 @@ mod tests {
         };
 
         let err = doctor_run_next_task(&ctx).expect_err("expected invalid id error");
-        assert!(
-            err.contains("invalid task id") || err.contains("invalid task"),
-            "unexpected err: {err}"
-        );
+        assert!(err.contains("invalid task id"));
     }
 
     #[test]

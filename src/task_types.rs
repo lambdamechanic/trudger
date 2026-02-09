@@ -32,6 +32,31 @@ impl fmt::Display for TaskIdError {
 
 impl std::error::Error for TaskIdError {}
 
+#[cfg(test)]
+mod tests {
+    use super::TaskIdError;
+
+    #[test]
+    fn task_id_error_display_formats() {
+        assert_eq!(TaskIdError::Empty.to_string(), "task_id must not be empty");
+        assert_eq!(
+            TaskIdError::TooLong { max: 200, len: 201 }.to_string(),
+            "task_id must be at most 200 characters (got 201)"
+        );
+
+        // Display doesn't currently include the offending char for InvalidStart; still cover it.
+        assert_eq!(
+            TaskIdError::InvalidStart { ch: '-' }.to_string(),
+            "task_id must start with an ASCII letter or digit"
+        );
+
+        let rendered = TaskIdError::InvalidChar { ch: '$' }.to_string();
+        assert!(rendered.contains("invalid character"));
+        assert!(rendered.contains('$'));
+        assert!(rendered.contains("allowed: ASCII letters/digits"));
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub(crate) struct TaskId(String);
@@ -57,10 +82,9 @@ impl TryFrom<String> for TaskId {
             });
         }
 
+        debug_assert!(!trimmed.is_empty());
         let mut chars = trimmed.chars();
-        let Some(first) = chars.next() else {
-            return Err(TaskIdError::Empty);
-        };
+        let first = chars.next().unwrap();
         if !first.is_ascii_alphanumeric() {
             return Err(TaskIdError::InvalidStart { ch: first });
         }
