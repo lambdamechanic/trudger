@@ -1084,7 +1084,9 @@ fn skip_not_ready_respects_limit() {
     let result = run_loop(&mut state).expect_err("should fail-fast on unknown status");
     assert_eq!(result.code, 1, "expected failure exit code");
     assert!(
-        result.reason.contains("task_status_failed:unknown_task_status:tr-2:stalled"),
+        result
+            .reason
+            .contains("task_status_failed:unknown_task_status:tr-2:stalled"),
         "unexpected quit reason: {}",
         result.reason
     );
