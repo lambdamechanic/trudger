@@ -21,8 +21,9 @@ It is slower and more serial, but if you have a large number of smaller projects
 - `jq` on your PATH
 - Any task system CLIs referenced by your configured commands (for example `bd`, `br`, `bv`)
 - Whatever agent runner your config uses (for example `codex`, `claude`, `pi`, or a custom script).
-- Prompt files for task-processing mode only.
-  - For the built-in Codex template, `./install.sh` installs `prompts/trudge.md` and `prompts/trudge_review.md` to `~/.codex/prompts/`.
+- Prompt files for task-processing mode only (built-in Codex template).
+  - `trudger wizard` will offer to install missing prompts to `~/.codex/prompts/` (default Yes). If prompts exist but differ from the built-in defaults, it offers per-file overwrite (default No) and creates a timestamped `.bak-...` backup before overwriting. If prompt installation/update fails after you accept it, the wizard aborts without writing config.
+  - For repo checkouts, `./install.sh` remains an alternative: it installs `prompts/trudge.md` and `prompts/trudge_review.md` to `~/.codex/prompts/`.
   - If you use a different agent runner, you can ignore `~/.codex/prompts/` entirely as long as your agent command reads `TRUDGER_PROMPT`/`TRUDGER_REVIEW_PROMPT`.
 
 ## Usage
@@ -36,6 +37,8 @@ Generate (and install) a starter config interactively:
 ```bash
 trudger wizard
 ```
+
+If you skip prompt installation in the wizard, task-processing mode will still require the prompt files; rerun the wizard and accept prompt installation, or run `./install.sh`.
 
 Generate a config at a custom path:
 
@@ -78,6 +81,7 @@ Sample configs:
 
 Recommended bootstrap flow:
 - Run `trudger wizard` to generate `~/.config/trudger.yml` from embedded templates.
+- Accept prompt installation/update prompts when offered (for the built-in Codex template).
 - If you prefer a static starting point, copy a file from `sample_configuration/` to `~/.config/trudger.yml` and edit.
 - Run `trudger doctor` to validate your configured commands against a temporary scratch task DB.
 - Run `trudger`.
@@ -131,7 +135,7 @@ Install the Rust binary with cargo (installs to `~/.cargo/bin` by default):
 cargo install --path . --locked
 ```
 
-Install the default prompt files under `~/.codex/prompts/` (used by the built-in Codex agent template):
+Install the default prompt files under `~/.codex/prompts/` (used by the built-in Codex agent template). You can also install/update prompts from within `trudger wizard`:
 
 ```bash
 ./install.sh
@@ -153,7 +157,7 @@ Legacy: the historical Bash implementation and its old BATS test suite live unde
 
 ## Prompts
 
-The prompt sources live in `prompts/` and are installed by `./install.sh`.
+The prompt sources live in `prompts/` and are installed by `./install.sh`. The wizard uses embedded prompt defaults so it can install/update prompts even when running from an installed binary.
 - Trudger does not perform prompt substitutions; prompt content is delivered via `TRUDGER_PROMPT` and `TRUDGER_REVIEW_PROMPT`.
 - Prompt install location and prompt format are agent-runner concerns. Trudger only requires that your configured `agent_command`/`agent_review_command` can consume prompt text via the env vars above.
 
