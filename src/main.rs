@@ -6,6 +6,7 @@ mod config;
 mod doctor;
 mod logger;
 mod prompt_defaults;
+mod prompt_install;
 mod run_loop;
 mod shell;
 mod task_types;
