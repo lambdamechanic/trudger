@@ -855,6 +855,47 @@ mod tests {
         assert!(err.contains("task_status failed"));
     }
 
+    #[test]
+    fn task_status_errors_on_unknown_status() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.task_status = "printf 'stalled\\n'".to_string();
+
+        let err =
+            run_task_status(&mut state, &task("tr-1")).expect_err("expected unknown status error");
+        assert!(err.contains("unknown_task_status:tr-1:stalled"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selection_loop_exits_when_no_ready_tasks_found() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.task_status = "printf 'blocked\\n'".to_string();
+        state.config.commands.next_task = Some({
+            let queue = temp.path().join("next-task-queue.txt");
+            std::fs::write(&queue, "tr-1\ntr-2\n").expect("write queue");
+            let queue_path = queue.display();
+            // Pop the first line from a queue file and print it.
+            format!(
+                "queue='{queue_path}'; if [ ! -f \"$queue\" ]; then exit 1; fi; IFS= read -r line < \"$queue\" || exit 1; tail -n +2 \"$queue\" > \"$queue.tmp\" && mv \"$queue.tmp\" \"$queue\"; printf '%s\\n' \"$line\""
+            )
+        });
+
+        std::env::set_var("TRUDGER_SKIP_NOT_READY_LIMIT", "2");
+        let quit = run_loop(&mut state).expect_err("expected idle exit");
+        assert_eq!(quit.code, 0);
+        assert_eq!(quit.reason, "no_ready_task");
+
+        crate::unit_tests::reset_test_env();
+    }
+
     #[cfg(unix)]
     #[test]
     fn task_show_propagates_spawn_errors() {
