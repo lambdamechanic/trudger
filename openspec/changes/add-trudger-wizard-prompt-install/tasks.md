@@ -16,6 +16,6 @@
 - [ ] 4.1 Update `README.md` and CLI help text to reflect wizard-managed prompt installation while keeping `./install.sh` as an alternative.
 
 ## 5. Validation
-- [ ] 5.1 Run `cargo test` (or `cargo nextest run` if available) and fix failures.
-- [ ] 5.2 Run `cargo fmt` and `cargo clippy` (or the repo quality gates) and fix failures.
-- [ ] 5.3 Run `openspec validate add-trudger-wizard-prompt-install --strict --no-interactive`.
+- [x] 5.1 Run `cargo test` (or `cargo nextest run` if available) and fix failures.
+- [x] 5.2 Run `cargo fmt` and `cargo clippy` (or the repo quality gates) and fix failures.
+- [x] 5.3 Run `openspec validate add-trudger-wizard-prompt-install --strict --no-interactive`.
