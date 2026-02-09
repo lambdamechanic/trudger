@@ -214,6 +214,7 @@ fn normalize_prompt_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn detect_prompt_state_reports_missing() {
@@ -282,6 +283,50 @@ mod tests {
             )),
             "expected -2 suffix, got: {}",
             next.display()
+        );
+    }
+
+    #[test]
+    fn overwrite_prompt_with_backup_at_creates_timestamped_sibling_backup_before_overwrite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = dir.path().join("trudge.md");
+        std::fs::write(&prompt, "old").expect("write prompt");
+
+        let now = Utc.with_ymd_and_hms(2026, 2, 9, 12, 44, 25).unwrap();
+        let backup =
+            overwrite_prompt_with_backup_at(&prompt, "new", now).expect("overwrite with backup");
+        let backup = backup.expect("expected backup");
+        assert_eq!(
+            backup.file_name().unwrap().to_string_lossy(),
+            "trudge.md.bak-20260209T124425Z"
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(&backup).expect("read backup"),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&prompt).expect("read prompt"),
+            "new"
+        );
+    }
+
+    #[test]
+    fn overwrite_prompt_with_backup_at_adds_collision_suffix_when_backup_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = dir.path().join("trudge.md");
+        std::fs::write(&prompt, "old").expect("write prompt");
+
+        let now = Utc.with_ymd_and_hms(2026, 2, 9, 12, 44, 25).unwrap();
+        let occupied = dir.path().join("trudge.md.bak-20260209T124425Z");
+        std::fs::write(&occupied, "occupied").expect("write occupied backup");
+
+        let backup =
+            overwrite_prompt_with_backup_at(&prompt, "new", now).expect("overwrite with backup");
+        let backup = backup.expect("expected backup");
+        assert_eq!(
+            backup.file_name().unwrap().to_string_lossy(),
+            "trudge.md.bak-20260209T124425Z-2"
         );
     }
 }

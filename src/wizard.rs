@@ -1114,6 +1114,42 @@ mod tests {
         }
     }
 
+    struct TestHomeEnvGuard {
+        old_home: Option<OsString>,
+    }
+
+    impl TestHomeEnvGuard {
+        fn new(home: &Path) -> Self {
+            let old_home = env::var_os("HOME");
+            env::set_var("HOME", home);
+            Self { old_home }
+        }
+    }
+
+    impl Drop for TestHomeEnvGuard {
+        fn drop(&mut self) {
+            match self.old_home.take() {
+                Some(value) => env::set_var("HOME", value),
+                None => env::remove_var("HOME"),
+            }
+        }
+    }
+
+    fn run_interactive_wizard(
+        config_path: &Path,
+        inputs: Vec<String>,
+    ) -> (Result<WizardResult, String>, io::TestWizardIo) {
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let mut wizard_io = io::TestWizardIo::new(inputs);
+        let result = run_wizard_with_io(
+            config_path,
+            &templates,
+            WizardMergeMode::Interactive,
+            &mut wizard_io,
+        );
+        (result, wizard_io)
+    }
+
     fn maybe_insert_doctor_setup(hooks: &mut Mapping, setup: &Option<String>) {
         if let Some(value) = setup {
             hooks.insert(
@@ -2654,5 +2690,434 @@ hooks:
         );
         let mut root = Value::Mapping(mapping);
         assert!(!remove_value_at_path(&mut root, &["a", "b"]));
+    }
+
+    #[test]
+    fn wizard_installs_missing_prompts_on_accept_variants_and_writes_config() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        for input in ["\n", "y\n", " YES \n"] {
+            let home = TempDir::new().expect("home dir");
+            let _home_guard = TestHomeEnvGuard::new(home.path());
+
+            let temp = TempDir::new().expect("temp dir");
+            let config_path = temp.path().join("trudger.yml");
+
+            let inputs = vec![
+                "codex\n".to_string(),
+                "br-next-task\n".to_string(),
+                input.to_string(),
+            ];
+            let (result, _io) = run_interactive_wizard(&config_path, inputs);
+            result.expect("wizard should succeed");
+
+            let trudge_path = home.path().join(TRUDGE_PROMPT_REL);
+            let review_path = home.path().join(TRUDGE_REVIEW_PROMPT_REL);
+            assert!(config_path.is_file(), "expected config to be written");
+            assert!(trudge_path.is_file(), "expected trudge prompt to be installed");
+            assert!(review_path.is_file(), "expected review prompt to be installed");
+
+            let trudge = fs::read_to_string(&trudge_path).expect("read trudge prompt");
+            let review = fs::read_to_string(&review_path).expect("read review prompt");
+            assert_eq!(trudge, default_trudge_prompt_contents());
+            assert_eq!(review, default_trudge_review_prompt_contents());
+        }
+    }
+
+    #[test]
+    fn wizard_can_skip_prompt_installation_and_prints_follow_up_instructions() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        for input in ["n\n", " NO \n"] {
+            let home = TempDir::new().expect("home dir");
+            let _home_guard = TestHomeEnvGuard::new(home.path());
+
+            let temp = TempDir::new().expect("temp dir");
+            let config_path = temp.path().join("trudger.yml");
+
+            let inputs = vec![
+                "codex\n".to_string(),
+                "br-next-task\n".to_string(),
+                input.to_string(),
+            ];
+            let (result, io) = run_interactive_wizard(&config_path, inputs);
+            result.expect("wizard should succeed");
+            assert!(config_path.is_file(), "expected config to be written");
+
+            let trudge_path = home.path().join(TRUDGE_PROMPT_REL);
+            let review_path = home.path().join(TRUDGE_REVIEW_PROMPT_REL);
+            assert!(!trudge_path.exists(), "expected trudge prompt to remain missing");
+            assert!(!review_path.exists(), "expected review prompt to remain missing");
+
+            assert!(
+                io.stdout.contains(&trudge_path.display().to_string()),
+                "expected follow-up instructions to include trudge prompt path, got: {:?}",
+                io.stdout
+            );
+            assert!(
+                io.stdout.contains(&review_path.display().to_string()),
+                "expected follow-up instructions to include review prompt path, got: {:?}",
+                io.stdout
+            );
+            assert!(
+                io.stdout.contains("Rerun `trudger wizard`")
+                    || io.stdout.contains("install.sh")
+                    || io.stdout.contains("./install.sh"),
+                "expected follow-up instructions to suggest an install method, got: {:?}",
+                io.stdout
+            );
+        }
+    }
+
+    #[test]
+    fn wizard_reprompts_on_invalid_install_missing_input() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeEnvGuard::new(home.path());
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let inputs = vec![
+            "codex\n".to_string(),
+            "br-next-task\n".to_string(),
+            "maybe\n".to_string(),
+            "y\n".to_string(),
+        ];
+        let (result, io) = run_interactive_wizard(&config_path, inputs);
+        result.expect("wizard should succeed after reprompt");
+        assert!(
+            io.stderr.contains("Please enter 'y' to install prompts")
+                && io.stderr.contains("'n' to skip"),
+            "expected install reprompt message, got: {:?}",
+            io.stderr
+        );
+    }
+
+    #[test]
+    fn wizard_partial_missing_installs_only_missing_and_never_overwrites_without_confirmation() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeEnvGuard::new(home.path());
+
+        let trudge_path = home.path().join(TRUDGE_PROMPT_REL);
+        let review_path = home.path().join(TRUDGE_REVIEW_PROMPT_REL);
+        fs::create_dir_all(trudge_path.parent().unwrap()).expect("create prompts dir");
+        fs::write(&trudge_path, "custom").expect("write existing trudge prompt");
+        assert!(!review_path.exists(), "review prompt should start missing");
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        // Accept installing missing prompts, then keep existing differing trudge prompt.
+        let inputs = vec![
+            "codex\n".to_string(),
+            "br-next-task\n".to_string(),
+            "\n".to_string(),
+            "\n".to_string(),
+        ];
+        let (result, _io) = run_interactive_wizard(&config_path, inputs);
+        result.expect("wizard should succeed");
+
+        assert_eq!(
+            fs::read_to_string(&trudge_path).expect("read trudge"),
+            "custom"
+        );
+        assert_eq!(
+            fs::read_to_string(&review_path).expect("read review"),
+            default_trudge_review_prompt_contents()
+        );
+
+        let prompt_dir = trudge_path.parent().unwrap();
+        let trudge_backups: Vec<_> = fs::read_dir(prompt_dir)
+            .expect("read_dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("trudge.md.bak-"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert!(
+            trudge_backups.is_empty(),
+            "expected no backup when keeping existing prompt"
+        );
+    }
+
+    #[test]
+    fn wizard_overwrite_differing_requires_explicit_yes_and_creates_backup() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeEnvGuard::new(home.path());
+
+        let trudge_path = home.path().join(TRUDGE_PROMPT_REL);
+        let review_path = home.path().join(TRUDGE_REVIEW_PROMPT_REL);
+        fs::create_dir_all(trudge_path.parent().unwrap()).expect("create prompts dir");
+        fs::write(&trudge_path, "custom-trudge").expect("write trudge");
+        fs::write(&review_path, "custom-review").expect("write review");
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        // Overwrite trudge (yes), keep review (n).
+        let inputs = vec![
+            "codex\n".to_string(),
+            "br-next-task\n".to_string(),
+            "yes\n".to_string(),
+            "n\n".to_string(),
+        ];
+        let (result, _io) = run_interactive_wizard(&config_path, inputs);
+        result.expect("wizard should succeed");
+
+        assert_eq!(
+            fs::read_to_string(&trudge_path).expect("read trudge"),
+            default_trudge_prompt_contents()
+        );
+        assert_eq!(
+            fs::read_to_string(&review_path).expect("read review"),
+            "custom-review"
+        );
+
+        let prompt_dir = trudge_path.parent().unwrap();
+        let trudge_backups: Vec<_> = fs::read_dir(prompt_dir)
+            .expect("read_dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("trudge.md.bak-"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(trudge_backups.len(), 1, "expected one backup for overwrite");
+        let backup_name = trudge_backups[0]
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        assert!(backup_name.starts_with("trudge.md.bak-"));
+        let suffix = &backup_name["trudge.md.bak-".len()..];
+        assert!(
+            suffix.len() >= 16 && suffix.as_bytes()[8] == b'T' && suffix.as_bytes()[15] == b'Z',
+            "expected YYYYMMDDTHHMMSSZ timestamp (plus optional suffix), got: {backup_name}"
+        );
+        assert_eq!(
+            fs::read_to_string(&trudge_backups[0]).expect("read backup"),
+            "custom-trudge"
+        );
+    }
+
+    #[test]
+    fn wizard_reprompts_on_invalid_overwrite_input() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeEnvGuard::new(home.path());
+
+        let trudge_path = home.path().join(TRUDGE_PROMPT_REL);
+        let review_path = home.path().join(TRUDGE_REVIEW_PROMPT_REL);
+        fs::create_dir_all(trudge_path.parent().unwrap()).expect("create prompts dir");
+        fs::write(&trudge_path, "custom-trudge").expect("write trudge");
+        fs::write(&review_path, default_trudge_review_prompt_contents()).expect("write review");
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let inputs = vec![
+            "codex\n".to_string(),
+            "br-next-task\n".to_string(),
+            "maybe\n".to_string(),
+            "y\n".to_string(),
+        ];
+        let (result, io) = run_interactive_wizard(&config_path, inputs);
+        result.expect("wizard should succeed after reprompt");
+        assert!(
+            io.stderr.contains("Please enter 'y' to overwrite")
+                && io.stderr.contains("'n' to keep"),
+            "expected overwrite reprompt message, got: {:?}",
+            io.stderr
+        );
+    }
+
+    #[test]
+    fn wizard_does_not_prompt_to_install_or_update_when_prompts_match_defaults() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeGuard::new(home.path());
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let inputs = vec!["codex\n".to_string(), "br-next-task\n".to_string()];
+        let (result, io) = run_interactive_wizard(&config_path, inputs);
+        result.expect("wizard should succeed");
+        assert!(
+            !io.stdout.contains("Install missing prompts now?"),
+            "expected no install prompt, got: {:?}",
+            io.stdout
+        );
+        assert!(
+            !io.stdout.contains("Overwrite with built-in default"),
+            "expected no overwrite prompt, got: {:?}",
+            io.stdout
+        );
+    }
+
+    #[test]
+    fn wizard_prompt_state_detection_is_normalized_for_line_endings_and_trailing_newline() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeEnvGuard::new(home.path());
+
+        let trudge_path = home.path().join(TRUDGE_PROMPT_REL);
+        let review_path = home.path().join(TRUDGE_REVIEW_PROMPT_REL);
+        fs::create_dir_all(trudge_path.parent().unwrap()).expect("create prompts dir");
+
+        let mut trudge = default_trudge_prompt_contents().replace('\n', "\r\n");
+        if !trudge.ends_with("\r\n") {
+            trudge.push_str("\r\n");
+        }
+        let mut review = default_trudge_review_prompt_contents().replace('\n', "\r\n");
+        if !review.ends_with("\r\n") {
+            review.push_str("\r\n");
+        }
+        fs::write(&trudge_path, trudge).expect("write trudge prompt");
+        fs::write(&review_path, review).expect("write review prompt");
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let inputs = vec!["codex\n".to_string(), "br-next-task\n".to_string()];
+        let (result, io) = run_interactive_wizard(&config_path, inputs);
+        result.expect("wizard should succeed");
+        assert!(
+            !io.stdout.contains("Overwrite with built-in default"),
+            "expected normalized prompts to match defaults (no overwrite prompt), got: {:?}",
+            io.stdout
+        );
+    }
+
+    #[test]
+    fn wizard_aborts_on_prompt_read_or_decode_failure_and_does_not_write_config() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeEnvGuard::new(home.path());
+
+        let trudge_path = home.path().join(TRUDGE_PROMPT_REL);
+        let review_path = home.path().join(TRUDGE_REVIEW_PROMPT_REL);
+        fs::create_dir_all(trudge_path.parent().unwrap()).expect("create prompts dir");
+        fs::write(&trudge_path, [0xff, 0xfe, 0xfd]).expect("write invalid utf8");
+        fs::write(&review_path, default_trudge_review_prompt_contents()).expect("write review");
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let inputs = vec!["codex\n".to_string(), "br-next-task\n".to_string()];
+        let (result, _io) = run_interactive_wizard(&config_path, inputs);
+        let err = result.expect_err("expected wizard to fail");
+        assert!(
+            err.contains("read") && err.contains(&trudge_path.display().to_string()),
+            "expected error to include op=read and failing path, got: {err:?}"
+        );
+        assert!(
+            !config_path.exists(),
+            "config should not be written on prompt detection failure"
+        );
+    }
+
+    #[test]
+    fn wizard_aborts_when_prompt_install_write_fails_and_does_not_write_config() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeEnvGuard::new(home.path());
+
+        // Make ~/.codex/prompts a file so create_dir_all(prompts) fails.
+        let codex_dir = home.path().join(".codex");
+        fs::create_dir_all(&codex_dir).expect("create .codex");
+        let prompts_path = codex_dir.join("prompts");
+        fs::write(&prompts_path, "not-a-dir").expect("write prompts path as file");
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let inputs = vec![
+            "codex\n".to_string(),
+            "br-next-task\n".to_string(),
+            "\n".to_string(),
+        ];
+        let (result, _io) = run_interactive_wizard(&config_path, inputs);
+        let err = result.expect_err("expected wizard to fail");
+        assert!(
+            err.contains("mkdir") && err.contains(&prompts_path.display().to_string()),
+            "expected error to include op=mkdir and failing path, got: {err:?}"
+        );
+        assert!(
+            !config_path.exists(),
+            "config should not be written on prompt install failure"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wizard_aborts_when_prompt_overwrite_write_fails_and_does_not_write_config() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeEnvGuard::new(home.path());
+
+        let trudge_path = home.path().join(TRUDGE_PROMPT_REL);
+        let review_path = home.path().join(TRUDGE_REVIEW_PROMPT_REL);
+        fs::create_dir_all(trudge_path.parent().unwrap()).expect("create prompts dir");
+        fs::write(&trudge_path, "custom-trudge").expect("write trudge");
+        fs::write(&review_path, default_trudge_review_prompt_contents()).expect("write review");
+        fs::set_permissions(&trudge_path, fs::Permissions::from_mode(0o444))
+            .expect("set read-only");
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let inputs = vec![
+            "codex\n".to_string(),
+            "br-next-task\n".to_string(),
+            "y\n".to_string(),
+        ];
+        let (result, _io) = run_interactive_wizard(&config_path, inputs);
+        let err = result.expect_err("expected wizard to fail");
+        assert!(
+            err.contains("write") && err.contains(&trudge_path.display().to_string()),
+            "expected error to include op=write and failing path, got: {err:?}"
+        );
+        assert!(
+            !config_path.exists(),
+            "config should not be written on prompt overwrite failure"
+        );
+    }
+
+    #[test]
+    fn wizard_installs_prompts_from_embedded_defaults_without_repo_checkout() {
+        // This changes the process CWD; keep it serialized.
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+
+        let original_dir = std::env::current_dir().expect("current_dir");
+        let cwd = TempDir::new().expect("cwd");
+        std::env::set_current_dir(cwd.path()).expect("set_current_dir");
+
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeEnvGuard::new(home.path());
+
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let inputs = vec![
+            "codex\n".to_string(),
+            "br-next-task\n".to_string(),
+            "\n".to_string(),
+        ];
+        let (result, _io) = run_interactive_wizard(&config_path, inputs);
+        std::env::set_current_dir(&original_dir).expect("restore cwd");
+
+        result.expect("wizard should succeed");
+        assert!(home.path().join(TRUDGE_PROMPT_REL).is_file());
+        assert!(home.path().join(TRUDGE_REVIEW_PROMPT_REL).is_file());
     }
 }
