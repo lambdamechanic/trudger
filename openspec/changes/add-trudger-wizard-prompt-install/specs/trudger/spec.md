@@ -23,7 +23,8 @@ When running `trudger wizard`, the system SHALL detect the required prompt files
 - **GIVEN** one or both prompt files do not exist
 - **WHEN** a user runs `trudger wizard`
 - **THEN** the system prompts to install the missing prompts to `~/.codex/prompts/` (default Yes)
-- **AND** it treats blank input, `y`, or `yes` (case-insensitive) as acceptance and `n` or `no` (case-insensitive) as decline
+- **AND** it trims whitespace and treats blank input, `y`, or `yes` (case-insensitive) as acceptance and `n` or `no` (case-insensitive) as decline
+- **AND** it reprompts on any other input
 - **AND** when the user accepts, it creates `~/.codex/prompts/` if needed and writes any missing prompt files
 - **AND** it does not overwrite any existing prompt file as part of this step without a separate overwrite confirmation
 
@@ -64,9 +65,11 @@ When `trudger wizard` installs prompts, the system SHALL create `~/.codex/prompt
 
 The system SHALL NOT overwrite an existing prompt file that differs from the built-in defaults without explicit user confirmation. Blank input SHALL default to "keep existing" for overwrite prompts.
 
+When comparing existing prompt content to the built-in defaults, the system SHALL compare normalized text. Normalization SHALL treat `\n`, `\r\n`, and `\r` line endings as equivalent and SHALL ignore a single trailing newline at end-of-file.
+
 When overwriting a prompt file, the system SHALL create a timestamped backup of the existing prompt file before writing the new content.
 
-The system SHALL accept `y` or `yes` (case-insensitive) as explicit overwrite confirmation; all other inputs (including blank) SHALL be treated as "keep existing".
+The system SHALL accept `y` or `yes` (case-insensitive) as explicit overwrite confirmation and SHALL accept blank input, `n`, or `no` (case-insensitive) as "keep existing". The system SHALL reprompt on any other input.
 
 Prompt backups SHALL be created as sibling files in `~/.codex/prompts/` using the naming scheme `{filename}.bak-{timestamp}` where `{timestamp}` is a UTC timestamp formatted as `YYYYMMDDTHHMMSSZ` (for example `20260209T124425Z`). If a backup path already exists, the system SHOULD select a non-colliding sibling path (for example by appending `-2`).
 
@@ -87,6 +90,15 @@ Prompt backups SHALL be created as sibling files in `~/.codex/prompts/` using th
 - **AND** the user explicitly confirms overwrite
 - **THEN** the system creates a timestamped backup of the existing prompt file
 - **AND** it overwrites the prompt file with the built-in default content
+
+### Requirement: Wizard prompt state detection is strict
+When running `trudger wizard`, the system SHALL read any existing required prompt file to determine whether it matches the built-in defaults. If reading or decoding an existing prompt file fails (including non-UTF-8 content), the wizard SHALL exit non-zero, SHALL print a clear error that includes the prompt path and indicates the failing operation, and SHALL NOT write the config file.
+
+#### Scenario: Prompt read/parse failure aborts wizard
+- **GIVEN** a required prompt file exists but cannot be read or decoded
+- **WHEN** a user runs `trudger wizard`
+- **THEN** the wizard exits non-zero and prints an error that includes the failing prompt path
+- **AND** the config file is not written
 
 ### Requirement: Wizard prompt install/update failures are actionable
 If prompt installation or update fails after the user accepts an install/overwrite action, the wizard SHALL exit non-zero, SHALL print a clear error naming the path that failed, and SHALL NOT write the config file.
