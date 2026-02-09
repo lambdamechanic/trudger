@@ -11,6 +11,9 @@ use crate::logger::{sanitize_log_value, Logger};
 // Guardrail against `execve`/`spawn` failures (E2BIG) from oversized env values.
 // Keep this conservative; prompt/show payloads are expected to be small.
 const TRUDGER_ENV_VALUE_MAX_BYTES: usize = 64 * 1024;
+// Total budget for all `TRUDGER_*` environment variables we set for a subprocess.
+// This intentionally ignores the inherited environment size; the goal is to cap our contribution.
+const TRUDGER_ENV_TOTAL_MAX_BYTES: usize = 128 * 1024;
 
 pub(crate) fn render_args(args: &[String]) -> String {
     if args.is_empty() {
@@ -50,87 +53,155 @@ impl CommandEnv {
         if let Some(cwd) = &self.cwd {
             cmd.current_dir(cwd);
         }
-        Self::apply_value(
+
+        let mut task_show_max = TRUDGER_ENV_VALUE_MAX_BYTES;
+        let mut prompt_max = TRUDGER_ENV_VALUE_MAX_BYTES;
+        let mut review_prompt_max = TRUDGER_ENV_VALUE_MAX_BYTES;
+
+        let total = Self::estimate_trudger_payload_bytes(
+            task_show_max,
+            prompt_max,
+            review_prompt_max,
+            &self.config_path,
+            self.scratch_dir.as_deref(),
+            self.task_id.as_deref(),
+            self.task_show.as_deref(),
+            self.task_status.as_deref(),
+            self.prompt.as_deref(),
+            self.review_prompt.as_deref(),
+            self.completed.as_deref(),
+            self.needs_human.as_deref(),
+        );
+
+        if total > TRUDGER_ENV_TOTAL_MAX_BYTES {
+            // Reduce the largest/least-critical payloads first. The goal is to avoid spawn failures
+            // while keeping the rest of the contract intact (vars stay set, but may be empty).
+            let mut over = total - TRUDGER_ENV_TOTAL_MAX_BYTES;
+            over = Self::reduce_overage(&mut task_show_max, self.task_show.as_deref(), over);
+            over = Self::reduce_overage(&mut prompt_max, self.prompt.as_deref(), over);
+            let _ =
+                Self::reduce_overage(&mut review_prompt_max, self.review_prompt.as_deref(), over);
+
+            let new_total = Self::estimate_trudger_payload_bytes(
+                task_show_max,
+                prompt_max,
+                review_prompt_max,
+                &self.config_path,
+                self.scratch_dir.as_deref(),
+                self.task_id.as_deref(),
+                self.task_show.as_deref(),
+                self.task_status.as_deref(),
+                self.prompt.as_deref(),
+                self.review_prompt.as_deref(),
+                self.completed.as_deref(),
+                self.needs_human.as_deref(),
+            );
+
+            if new_total < total {
+                // Avoid `eprintln!` so tests can reliably capture stderr via fd redirection.
+                let mut stderr = std::io::stderr().lock();
+                let _ = writeln!(
+                    stderr,
+                    "Warning: TRUDGER_* env payload is {} bytes; truncating to {} bytes for command execution.",
+                    total, new_total
+                );
+                logger.log_transition(&format!(
+                    "env_truncate_total label={} task={} original_bytes={} truncated_bytes={}",
+                    log_label, task_token, total, new_total
+                ));
+            }
+        }
+
+        Self::apply_value_with_max(
             cmd,
             logger,
             log_label,
             task_token,
             "TRUDGER_CONFIG_PATH",
             &self.config_path,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
         );
-        Self::apply_optional(
+        Self::apply_optional_with_max(
             cmd,
             logger,
             log_label,
             task_token,
             "TRUDGER_DOCTOR_SCRATCH_DIR",
             self.scratch_dir.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
         );
-        Self::apply_optional(
+        Self::apply_optional_with_max(
             cmd,
             logger,
             log_label,
             task_token,
             "TRUDGER_TASK_ID",
             self.task_id.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
         );
-        Self::apply_optional(
+        Self::apply_optional_with_max(
             cmd,
             logger,
             log_label,
             task_token,
             "TRUDGER_TASK_SHOW",
             self.task_show.as_deref(),
+            task_show_max,
         );
-        Self::apply_optional(
+        Self::apply_optional_with_max(
             cmd,
             logger,
             log_label,
             task_token,
             "TRUDGER_TASK_STATUS",
             self.task_status.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
         );
-        Self::apply_optional(
+        Self::apply_optional_with_max(
             cmd,
             logger,
             log_label,
             task_token,
             "TRUDGER_PROMPT",
             self.prompt.as_deref(),
+            prompt_max,
         );
-        Self::apply_optional(
+        Self::apply_optional_with_max(
             cmd,
             logger,
             log_label,
             task_token,
             "TRUDGER_REVIEW_PROMPT",
             self.review_prompt.as_deref(),
+            review_prompt_max,
         );
-        Self::apply_optional(
+        Self::apply_optional_with_max(
             cmd,
             logger,
             log_label,
             task_token,
             "TRUDGER_COMPLETED",
             self.completed.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
         );
-        Self::apply_optional(
+        Self::apply_optional_with_max(
             cmd,
             logger,
             log_label,
             task_token,
             "TRUDGER_NEEDS_HUMAN",
             self.needs_human.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
         );
     }
 
-    fn maybe_truncate_utf8(value: &str) -> (Cow<'_, str>, usize, usize) {
+    fn maybe_truncate_utf8(value: &str, max_bytes: usize) -> (Cow<'_, str>, usize, usize) {
         let bytes = value.len();
-        if bytes <= TRUDGER_ENV_VALUE_MAX_BYTES {
+        if bytes <= max_bytes {
             return (Cow::Borrowed(value), bytes, bytes);
         }
 
-        let mut cut = TRUDGER_ENV_VALUE_MAX_BYTES.min(bytes);
+        let mut cut = max_bytes.min(bytes);
         while cut > 0 && !value.is_char_boundary(cut) {
             cut -= 1;
         }
@@ -139,15 +210,100 @@ impl CommandEnv {
         (Cow::Borrowed(truncated), bytes, truncated.len())
     }
 
-    fn apply_value(
+    fn env_entry_payload_bytes(key: &str, value: Option<&str>, max_bytes: usize) -> usize {
+        let Some(value) = value else {
+            return 0;
+        };
+
+        let truncated_len = Self::maybe_truncate_utf8(value, max_bytes).2;
+        // Approximate execve accounting for "KEY=VALUE\0".
+        key.len() + 1 + truncated_len + 1
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn estimate_trudger_payload_bytes(
+        task_show_max: usize,
+        prompt_max: usize,
+        review_prompt_max: usize,
+        config_path: &str,
+        scratch_dir: Option<&str>,
+        task_id: Option<&str>,
+        task_show: Option<&str>,
+        task_status: Option<&str>,
+        prompt: Option<&str>,
+        review_prompt: Option<&str>,
+        completed: Option<&str>,
+        needs_human: Option<&str>,
+    ) -> usize {
+        let mut total = 0usize;
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_CONFIG_PATH",
+            Some(config_path),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_DOCTOR_SCRATCH_DIR",
+            scratch_dir,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total +=
+            Self::env_entry_payload_bytes("TRUDGER_TASK_ID", task_id, TRUDGER_ENV_VALUE_MAX_BYTES);
+        total += Self::env_entry_payload_bytes("TRUDGER_TASK_SHOW", task_show, task_show_max);
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_TASK_STATUS",
+            task_status,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes("TRUDGER_PROMPT", prompt, prompt_max);
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_REVIEW_PROMPT",
+            review_prompt,
+            review_prompt_max,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_COMPLETED",
+            completed,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_NEEDS_HUMAN",
+            needs_human,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total
+    }
+
+    fn reduce_overage(max_bytes: &mut usize, value: Option<&str>, over: usize) -> usize {
+        if over == 0 {
+            return 0;
+        }
+        let Some(value) = value else {
+            return over;
+        };
+
+        let current = Self::maybe_truncate_utf8(value, *max_bytes).2;
+        if current == 0 {
+            return over;
+        }
+
+        let target = current.saturating_sub(over);
+        *max_bytes = (*max_bytes).min(target);
+        let new_len = Self::maybe_truncate_utf8(value, *max_bytes).2;
+        let reduced = current.saturating_sub(new_len);
+        over.saturating_sub(reduced)
+    }
+
+    fn apply_value_with_max(
         cmd: &mut Command,
         logger: &Logger,
         log_label: &str,
         task_token: &str,
         key: &str,
         value: &str,
+        max_bytes: usize,
     ) {
-        let (rendered, original_bytes, truncated_bytes) = Self::maybe_truncate_utf8(value);
+        let (rendered, original_bytes, truncated_bytes) =
+            Self::maybe_truncate_utf8(value, max_bytes);
         if original_bytes != truncated_bytes {
             // Avoid `eprintln!` so tests can reliably capture stderr via fd redirection.
             let mut stderr = std::io::stderr().lock();
@@ -164,16 +320,19 @@ impl CommandEnv {
         cmd.env(key, rendered.as_ref());
     }
 
-    fn apply_optional(
+    fn apply_optional_with_max(
         cmd: &mut Command,
         logger: &Logger,
         log_label: &str,
         task_token: &str,
         key: &str,
         value: Option<&str>,
+        max_bytes: usize,
     ) {
         match value {
-            Some(value) => Self::apply_value(cmd, logger, log_label, task_token, key, value),
+            Some(value) => Self::apply_value_with_max(
+                cmd, logger, log_label, task_token, key, value, max_bytes,
+            ),
             None => {
                 cmd.env_remove(key);
             }

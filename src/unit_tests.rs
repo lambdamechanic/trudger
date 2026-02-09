@@ -1906,6 +1906,88 @@ fn command_env_truncates_oversized_values_and_warns() {
 
 #[cfg(unix)]
 #[test]
+fn command_env_truncates_total_trudger_payload_and_warns() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let max = 64 * 1024;
+    let large_task_show = "x".repeat(max);
+    let large_prompt = "y".repeat(max);
+
+    let temp = TempDir::new().expect("temp dir");
+    let log_path = temp.path().join("trudger.log");
+    let logger = Logger::new(Some(log_path.clone()));
+    let env = crate::shell::CommandEnv {
+        cwd: None,
+        config_path: "config".to_string(),
+        scratch_dir: None,
+        task_id: None,
+        task_show: Some(large_task_show),
+        task_status: None,
+        prompt: Some(large_prompt),
+        review_prompt: None,
+        completed: None,
+        needs_human: None,
+    };
+
+    let stderr = capture_stderr(|| {
+        let result = crate::shell::run_shell_command_capture(
+            "printf '%s,%s' \"${#TRUDGER_TASK_SHOW}\" \"${#TRUDGER_PROMPT}\"",
+            "label",
+            "none",
+            &[],
+            &env,
+            &logger,
+        )
+        .expect("capture should succeed");
+        assert_eq!(result.exit_code, 0);
+
+        let mut parts = result.stdout.trim().split(',');
+        let show_len: usize = parts
+            .next()
+            .expect("show len")
+            .parse()
+            .expect("parse show len");
+        let prompt_len: usize = parts
+            .next()
+            .expect("prompt len")
+            .parse()
+            .expect("parse prompt len");
+
+        assert!(
+            show_len < max,
+            "expected TRUDGER_TASK_SHOW to be truncated due to total payload guard"
+        );
+        assert_eq!(
+            prompt_len, max,
+            "expected TRUDGER_PROMPT to remain unmodified when TRUDGER_TASK_SHOW can be truncated"
+        );
+    });
+
+    assert!(
+        stderr.contains("Warning: TRUDGER_* env payload"),
+        "expected total-payload truncation warning, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("Warning: TRUDGER_TASK_SHOW"),
+        "expected TRUDGER_TASK_SHOW truncation warning, got: {stderr:?}"
+    );
+
+    let contents = fs::read_to_string(&log_path).expect("read log");
+    assert!(
+        contents.contains("env_truncate_total label=label task=none"),
+        "expected env_truncate_total transition log, got: {contents:?}"
+    );
+    assert!(
+        contents.contains("env_truncate label=label task=none key=TRUDGER_TASK_SHOW"),
+        "expected env_truncate transition log for TRUDGER_TASK_SHOW, got: {contents:?}"
+    );
+
+    reset_test_env();
+}
+
+#[cfg(unix)]
+#[test]
 fn run_shell_command_errors_when_bash_is_missing() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
