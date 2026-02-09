@@ -392,7 +392,7 @@ fn run_loop_executes_commands_and_hooks_with_env() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: log_path.display().to_string(),
+        log_path: Some(log_path.clone()),
     };
 
     let mut state = RuntimeState {
@@ -535,7 +535,7 @@ fn manual_task_not_ready_fails_fast_without_invoking_next_task() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: temp.path().join("trudger.log").display().to_string(),
+        log_path: Some(temp.path().join("trudger.log")),
     };
 
     let mut state = RuntimeState {
@@ -619,7 +619,7 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: log_path.display().to_string(),
+        log_path: Some(log_path.clone()),
     };
 
     let interrupt_flag = Arc::new(AtomicBool::new(false));
@@ -739,7 +739,7 @@ fn review_loop_limit_retries_until_closed() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: log_path.display().to_string(),
+        log_path: Some(log_path.clone()),
     };
 
     let mut state = RuntimeState {
@@ -825,7 +825,7 @@ fn review_loop_limit_exhaustion_marks_blocked_and_requires_human() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: log_path.display().to_string(),
+        log_path: Some(log_path.clone()),
     };
 
     let mut state = RuntimeState {
@@ -910,7 +910,7 @@ fn next_task_exit_1_exits_zero_without_running_commands() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: log_path.display().to_string(),
+        log_path: Some(log_path.clone()),
     };
 
     let mut state = RuntimeState {
@@ -991,7 +991,7 @@ fn hook_uses_env_task_id_in_shell() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: log_path.display().to_string(),
+        log_path: Some(log_path.clone()),
     };
 
     let mut state = RuntimeState {
@@ -1062,7 +1062,7 @@ fn skip_not_ready_respects_limit() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: log_path.display().to_string(),
+        log_path: Some(log_path.clone()),
     };
 
     let mut state = RuntimeState {
@@ -1134,7 +1134,7 @@ fn missing_status_after_review_errors() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: log_path.display().to_string(),
+        log_path: Some(log_path.clone()),
     };
 
     let mut state = RuntimeState {
@@ -1198,7 +1198,7 @@ fn reset_task_runs_on_exit_with_active_task() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: temp.path().join("trudger.log").display().to_string(),
+        log_path: Some(temp.path().join("trudger.log")),
     };
 
     let state = RuntimeState {
@@ -1252,6 +1252,12 @@ fn parse_manual_tasks_trims_and_rejects_empty_segments() {
     assert!(
         err.contains("empty segment"),
         "expected empty segment error, got: {err}"
+    );
+
+    let err = parse_manual_tasks(&["tr-1$".to_string()]).expect_err("should error");
+    assert!(
+        err.contains("invalid task id") && err.contains('$'),
+        "expected invalid task id error, got: {err}"
     );
 }
 
@@ -1581,7 +1587,7 @@ fn doctor_cleanup_failure_is_an_error() {
             on_doctor_setup: Some(hook),
         },
         review_loop_limit: limit(2),
-        log_path: temp.path().join("trudger.log").display().to_string(),
+        log_path: Some(temp.path().join("trudger.log")),
     };
     let logger = Logger::new(None);
 
@@ -1739,40 +1745,22 @@ fn log_transition_disables_after_write_error() {
     assert_eq!(lines.len(), 1);
 }
 
-#[cfg(unix)]
 #[test]
-fn render_args_falls_back_when_bash_unavailable() {
+fn render_args_shell_escapes_for_bash_copy_paste() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
 
-    let temp = TempDir::new().expect("temp dir");
-    env::set_var("PATH", temp.path());
-    let rendered = render_args(&["with space".to_string(), "tab\targ".to_string()]);
+    let rendered = render_args(&[
+        "with space".to_string(),
+        "tab\targ".to_string(),
+        "#start".to_string(),
+        "~home".to_string(),
+    ]);
     assert!(rendered.ends_with(' '));
-
-    reset_test_env();
-}
-
-#[cfg(unix)]
-#[test]
-fn render_args_falls_back_when_bash_exits_nonzero() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let _guard = ENV_MUTEX.lock().unwrap();
-    reset_test_env();
-
-    let temp = TempDir::new().expect("temp dir");
-    let bin = temp.path().join("bin");
-    fs::create_dir_all(&bin).expect("create bin dir");
-    let bash = bin.join("bash");
-    fs::write(&bash, "#!/usr/bin/env sh\nexit 1\n").expect("write bash");
-    fs::set_permissions(&bash, fs::Permissions::from_mode(0o755)).expect("chmod bash");
-
-    let old_path = env::var("PATH").unwrap_or_default();
-    env::set_var("PATH", format!("{}:{}", bin.display(), old_path));
-
-    let rendered = render_args(&["tab\targ".to_string()]);
-    assert!(rendered.ends_with(' '));
+    assert!(rendered.contains("'with space'"));
+    assert!(rendered.contains("'tab\targ'"));
+    assert!(rendered.contains("'#start'"));
+    assert!(rendered.contains("'~home'"));
 
     reset_test_env();
 }
@@ -1854,6 +1842,70 @@ fn run_shell_command_noops_when_command_is_empty() {
 
 #[cfg(unix)]
 #[test]
+fn command_env_truncates_oversized_values_and_warns() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let max = 64 * 1024;
+    let ch = '\u{20AC}';
+    let per_char = ch.len_utf8();
+    assert_eq!(per_char, 3, "expected 3-byte UTF-8 character");
+
+    let repeat = max / per_char + 1;
+    let large: String = std::iter::repeat_n(ch, repeat).collect();
+    assert!(
+        large.len() > max,
+        "large prompt should exceed truncation threshold"
+    );
+
+    let expected_len = (max / per_char).to_string();
+
+    let temp = TempDir::new().expect("temp dir");
+    let log_path = temp.path().join("trudger.log");
+    let logger = Logger::new(Some(log_path.clone()));
+    let env = crate::shell::CommandEnv {
+        cwd: None,
+        config_path: "config".to_string(),
+        scratch_dir: None,
+        task_id: None,
+        task_show: None,
+        task_status: None,
+        prompt: Some(large),
+        review_prompt: None,
+        completed: None,
+        needs_human: None,
+    };
+
+    let stderr = capture_stderr(|| {
+        let result = crate::shell::run_shell_command_capture(
+            "printf '%s' \"${#TRUDGER_PROMPT}\"",
+            "label",
+            "none",
+            &[],
+            &env,
+            &logger,
+        )
+        .expect("capture should succeed");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, expected_len);
+    });
+
+    assert!(
+        stderr.contains("Warning: TRUDGER_PROMPT"),
+        "expected truncation warning, got: {stderr:?}"
+    );
+
+    let contents = fs::read_to_string(&log_path).expect("read log");
+    assert!(
+        contents.contains("env_truncate label=label task=none key=TRUDGER_PROMPT"),
+        "expected env_truncate transition log, got: {contents:?}"
+    );
+
+    reset_test_env();
+}
+
+#[cfg(unix)]
+#[test]
 fn run_shell_command_errors_when_bash_is_missing() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
@@ -1917,7 +1969,7 @@ fn validate_config_rejects_missing_and_empty_values() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut config = base.clone();
@@ -1987,7 +2039,7 @@ fn run_loop_errors_when_next_task_command_missing() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2042,7 +2094,7 @@ fn run_loop_propagates_next_task_exit_code_other_than_1() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2099,7 +2151,7 @@ fn run_loop_errors_when_selected_task_has_empty_status() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2132,6 +2184,30 @@ fn task_id_rejects_empty_string() {
 }
 
 #[test]
+fn task_id_rejects_invalid_prefix_and_chars_and_length() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let err = TaskId::try_from("-tr-1").expect_err("expected invalid prefix to error");
+    assert!(
+        err.contains("must start"),
+        "expected must-start error, got: {err}"
+    );
+
+    let err = TaskId::try_from("tr-1$").expect_err("expected invalid char to error");
+    assert!(
+        err.contains("invalid character") && err.contains('$'),
+        "expected invalid character error, got: {err}"
+    );
+
+    let err = TaskId::try_from("a".repeat(201)).expect_err("expected too-long task id to error");
+    assert!(
+        err.contains("at most 200 characters"),
+        "expected length error, got: {err}"
+    );
+}
+
+#[test]
 fn run_loop_errors_when_update_in_progress_fails() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
@@ -2153,7 +2229,7 @@ fn run_loop_errors_when_update_in_progress_fails() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2198,7 +2274,7 @@ fn run_loop_errors_when_task_show_fails_during_solve() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2243,7 +2319,7 @@ fn run_loop_errors_when_agent_solve_fails() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2303,7 +2379,7 @@ fn run_loop_errors_when_task_show_fails_during_review() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2348,7 +2424,7 @@ fn run_loop_errors_when_agent_review_fails() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2405,7 +2481,7 @@ fn run_loop_errors_when_on_completed_hook_fails() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2462,7 +2538,7 @@ fn run_loop_errors_when_on_requires_human_hook_fails_on_blocked_status() {
             on_doctor_setup: None,
         },
         review_loop_limit: limit(2),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2520,7 +2596,7 @@ fn run_loop_errors_when_blocked_status_update_fails_after_exhausting_review_loop
             on_doctor_setup: None,
         },
         review_loop_limit: limit(1),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2577,7 +2653,7 @@ fn run_loop_errors_when_on_requires_human_hook_fails_after_exhausting_review_loo
             on_doctor_setup: None,
         },
         review_loop_limit: limit(1),
-        log_path: "".to_string(),
+        log_path: None,
     };
 
     let mut state = RuntimeState {
@@ -2624,7 +2700,7 @@ fn reset_task_on_exit_is_noop_for_ok_or_missing_task_id() {
                 on_doctor_setup: None,
             },
             review_loop_limit: limit(2),
-            log_path: "".to_string(),
+            log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
         prompt_trudge: "Task context".to_string(),
@@ -2673,7 +2749,7 @@ fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
                 on_doctor_setup: None,
             },
             review_loop_limit: limit(2),
-            log_path: "".to_string(),
+            log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
         prompt_trudge: "Task context".to_string(),
@@ -2731,7 +2807,7 @@ fn reset_task_on_exit_skips_reset_when_task_status_is_empty() {
                 on_doctor_setup: None,
             },
             review_loop_limit: limit(2),
-            log_path: "".to_string(),
+            log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
         prompt_trudge: "Task context".to_string(),
@@ -2787,7 +2863,7 @@ fn reset_task_on_exit_skips_reset_when_task_status_command_fails_to_spawn() {
                 on_doctor_setup: None,
             },
             review_loop_limit: limit(2),
-            log_path: "".to_string(),
+            log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
         prompt_trudge: "Task context".to_string(),
@@ -2855,7 +2931,7 @@ fn hook_failure_after_closed_does_not_reset_task_on_exit() {
                 on_doctor_setup: None,
             },
             review_loop_limit: limit(1),
-            log_path: "".to_string(),
+            log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
         prompt_trudge: "Task context".to_string(),
@@ -2924,7 +3000,7 @@ fn hook_failure_after_blocked_does_not_reset_task_on_exit() {
                 on_doctor_setup: None,
             },
             review_loop_limit: limit(1),
-            log_path: "".to_string(),
+            log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
         prompt_trudge: "Task context".to_string(),
@@ -2993,7 +3069,7 @@ fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
                 on_doctor_setup: None,
             },
             review_loop_limit: limit(1),
-            log_path: "".to_string(),
+            log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
         prompt_trudge: "Task context".to_string(),
@@ -3062,7 +3138,7 @@ fn sigint_while_in_progress_invokes_reset_task_on_exit() {
                 on_doctor_setup: None,
             },
             review_loop_limit: limit(1),
-            log_path: "".to_string(),
+            log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
         prompt_trudge: "Task context".to_string(),
@@ -3132,7 +3208,7 @@ fn status_check_failure_at_exit_does_not_invoke_reset_task() {
                 on_doctor_setup: None,
             },
             review_loop_limit: limit(1),
-            log_path: "".to_string(),
+            log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
         prompt_trudge: "Task context".to_string(),

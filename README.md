@@ -106,6 +106,7 @@ Notes:
 - Null values are treated as validation errors for required keys.
 - `commands.next_task`, `commands.task_show`, `commands.task_status`, and `commands.task_update_in_progress` must be non-empty when used.
 - `commands.next_task` runs in `bash -lc` and the first whitespace-delimited token of stdout is used as the task id.
+- Task ids are validated (manual `-t/--task` and `commands.next_task` output): max 200 chars, must start with ASCII letter/digit, and may contain only ASCII letters/digits plus `-`, `_`, `.`, `:`.
 - `commands.task_show` runs in `bash -lc`; its output is treated as prompt context only and is exposed via `TRUDGER_TASK_SHOW`.
 - `commands.task_status` runs in `bash -lc`; the first whitespace-delimited token of stdout is used as the task status (for example `ready`, `open`, or `closed`) and is exposed via `TRUDGER_TASK_STATUS`.
 - `commands.task_update_in_progress` runs in `bash -lc`; output is ignored.
@@ -113,6 +114,7 @@ Notes:
 - Commands and hooks receive task context via environment variables instead of positional arguments.
 - Trudger may append extra arguments to some commands (for example `commands.task_show` receives `--json` and `commands.task_update_in_progress` receives `--status in_progress` or `--status blocked`); include `$@` in the command string if you need them, but task id is always provided via `TRUDGER_TASK_ID`.
 - Environment variables available to commands/hooks include `TRUDGER_TASK_ID` (set when a task is selected), `TRUDGER_TASK_SHOW` (set after `commands.task_show`), `TRUDGER_TASK_STATUS` (set after `commands.task_status`), `TRUDGER_CONFIG_PATH` (always set), `TRUDGER_PROMPT` (solve prompt only; unset during review), and `TRUDGER_REVIEW_PROMPT` (review prompt only; unset during solve).
+- Oversized `TRUDGER_*` env values are truncated (at a UTF-8 boundary) to avoid `spawn` failures (E2BIG); Trudger prints a warning and logs an `env_truncate` transition when logging is enabled.
 
 ## Install
 

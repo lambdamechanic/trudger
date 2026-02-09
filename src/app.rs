@@ -163,12 +163,7 @@ pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
         reason: message,
     })?;
 
-    let log_path = loaded.config.log_path.trim();
-    let logger = Logger::new(if log_path.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(log_path))
-    });
+    let logger = Logger::new(loaded.config.log_path.clone());
 
     if mode == AppMode::Doctor {
         return run_doctor_mode(&loaded.config, &config_path, &logger);

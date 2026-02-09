@@ -3,6 +3,8 @@ use serde::{Deserialize, Deserializer};
 use std::fmt;
 use std::num::NonZeroU64;
 
+const TASK_ID_MAX_LEN: usize = 200;
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub(crate) struct TaskId(String);
@@ -20,6 +22,31 @@ impl TryFrom<String> for TaskId {
         let trimmed = value.trim();
         if trimmed.is_empty() {
             return Err("task_id must not be empty".to_string());
+        }
+        if trimmed.len() > TASK_ID_MAX_LEN {
+            return Err(format!(
+                "task_id must be at most {} characters (got {})",
+                TASK_ID_MAX_LEN,
+                trimmed.len()
+            ));
+        }
+
+        let mut chars = trimmed.chars();
+        let Some(first) = chars.next() else {
+            return Err("task_id must not be empty".to_string());
+        };
+        if !first.is_ascii_alphanumeric() {
+            return Err("task_id must start with an ASCII letter or digit".to_string());
+        }
+
+        for ch in chars {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':') {
+                continue;
+            }
+            return Err(format!(
+                "task_id contains invalid character {:?}; allowed: ASCII letters/digits plus '-', '_', '.', ':'",
+                ch
+            ));
         }
         Ok(Self(trimmed.to_string()))
     }

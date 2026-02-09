@@ -160,9 +160,12 @@ fn doctor_run_next_task(ctx: &DoctorCtx<'_>) -> Result<(), String> {
             // Empty output is valid ("no tasks") in Trudger semantics.
             let token = output.stdout.split_whitespace().next().unwrap_or("");
             if !token.trim().is_empty() {
-                // `TaskId` validation currently rejects only empty strings; the split token is
-                // guaranteed to be non-empty after the trim check above.
-                let _task_id = TaskId::try_from(token).unwrap();
+                TaskId::try_from(token).map_err(|err| {
+                    format!(
+                        "commands.next_task returned an invalid task id: {} ({})",
+                        token, err
+                    )
+                })?;
             }
         }
         1 => {
@@ -526,7 +529,7 @@ mod tests {
             },
             review_loop_limit: crate::task_types::ReviewLoopLimit::new(1)
                 .expect("review_loop_limit"),
-            log_path: "".to_string(),
+            log_path: None,
         }
     }
 
@@ -713,6 +716,33 @@ mod tests {
             logger: &logger,
         };
         doctor_run_next_task(&ctx).expect("non-empty output should be ok");
+    }
+
+    #[test]
+    fn doctor_run_next_task_errors_on_invalid_task_id_output() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let scratch = TempDir::new().expect("scratch");
+        let mut config = base_config();
+        config.commands.next_task = Some("printf '$'".to_string());
+        let logger = Logger::new(None);
+        let config_path = temp.path().join("trudger.yml");
+        let scratch_path = scratch.path().display().to_string();
+        let ctx = DoctorCtx {
+            config: &config,
+            config_path: &config_path,
+            scratch_dir: scratch.path(),
+            scratch_path: &scratch_path,
+            logger: &logger,
+        };
+
+        let err = doctor_run_next_task(&ctx).expect_err("expected invalid id error");
+        assert!(
+            err.contains("invalid task id") || err.contains("invalid task"),
+            "unexpected err: {err}"
+        );
     }
 
     #[test]

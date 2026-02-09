@@ -1,25 +1,20 @@
 use shell_escape::unix::escape;
+use std::borrow::Cow;
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::logger::{sanitize_log_value, Logger};
 
+// Guardrail against `execve`/`spawn` failures (E2BIG) from oversized env values.
+// Keep this conservative; prompt/show payloads are expected to be small.
+const TRUDGER_ENV_VALUE_MAX_BYTES: usize = 64 * 1024;
+
 pub(crate) fn render_args(args: &[String]) -> String {
     if args.is_empty() {
         return String::new();
-    }
-    let output = Command::new("bash")
-        .arg("-lc")
-        .arg("printf \"%q \" \"$@\"")
-        .arg("--")
-        .args(args)
-        .output();
-    if let Ok(output) = output {
-        if output.status.success() {
-            return String::from_utf8_lossy(&output.stdout).to_string();
-        }
     }
 
     let mut rendered = String::new();
@@ -45,26 +40,140 @@ pub(crate) struct CommandEnv {
 }
 
 impl CommandEnv {
-    pub(crate) fn apply(&self, cmd: &mut Command) {
+    pub(crate) fn apply(
+        &self,
+        cmd: &mut Command,
+        logger: &Logger,
+        log_label: &str,
+        task_token: &str,
+    ) {
         if let Some(cwd) = &self.cwd {
             cmd.current_dir(cwd);
         }
-        cmd.env("TRUDGER_CONFIG_PATH", &self.config_path);
-        Self::apply_optional(cmd, "TRUDGER_DOCTOR_SCRATCH_DIR", &self.scratch_dir);
-        Self::apply_optional(cmd, "TRUDGER_TASK_ID", &self.task_id);
-        Self::apply_optional(cmd, "TRUDGER_TASK_SHOW", &self.task_show);
-        Self::apply_optional(cmd, "TRUDGER_TASK_STATUS", &self.task_status);
-        Self::apply_optional(cmd, "TRUDGER_PROMPT", &self.prompt);
-        Self::apply_optional(cmd, "TRUDGER_REVIEW_PROMPT", &self.review_prompt);
-        Self::apply_optional(cmd, "TRUDGER_COMPLETED", &self.completed);
-        Self::apply_optional(cmd, "TRUDGER_NEEDS_HUMAN", &self.needs_human);
+        Self::apply_value(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_CONFIG_PATH",
+            &self.config_path,
+        );
+        Self::apply_optional(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_DOCTOR_SCRATCH_DIR",
+            self.scratch_dir.as_deref(),
+        );
+        Self::apply_optional(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_TASK_ID",
+            self.task_id.as_deref(),
+        );
+        Self::apply_optional(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_TASK_SHOW",
+            self.task_show.as_deref(),
+        );
+        Self::apply_optional(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_TASK_STATUS",
+            self.task_status.as_deref(),
+        );
+        Self::apply_optional(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_PROMPT",
+            self.prompt.as_deref(),
+        );
+        Self::apply_optional(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_REVIEW_PROMPT",
+            self.review_prompt.as_deref(),
+        );
+        Self::apply_optional(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_COMPLETED",
+            self.completed.as_deref(),
+        );
+        Self::apply_optional(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_NEEDS_HUMAN",
+            self.needs_human.as_deref(),
+        );
     }
 
-    fn apply_optional(cmd: &mut Command, key: &str, value: &Option<String>) {
+    fn maybe_truncate_utf8(value: &str) -> (Cow<'_, str>, usize, usize) {
+        let bytes = value.len();
+        if bytes <= TRUDGER_ENV_VALUE_MAX_BYTES {
+            return (Cow::Borrowed(value), bytes, bytes);
+        }
+
+        let mut cut = TRUDGER_ENV_VALUE_MAX_BYTES.min(bytes);
+        while cut > 0 && !value.is_char_boundary(cut) {
+            cut -= 1;
+        }
+
+        let truncated = &value[..cut];
+        (Cow::Borrowed(truncated), bytes, truncated.len())
+    }
+
+    fn apply_value(
+        cmd: &mut Command,
+        logger: &Logger,
+        log_label: &str,
+        task_token: &str,
+        key: &str,
+        value: &str,
+    ) {
+        let (rendered, original_bytes, truncated_bytes) = Self::maybe_truncate_utf8(value);
+        if original_bytes != truncated_bytes {
+            // Avoid `eprintln!` so tests can reliably capture stderr via fd redirection.
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(
+                stderr,
+                "Warning: {} is {} bytes; truncating to {} bytes for command execution.",
+                key, original_bytes, truncated_bytes
+            );
+            logger.log_transition(&format!(
+                "env_truncate label={} task={} key={} original_bytes={} truncated_bytes={}",
+                log_label, task_token, key, original_bytes, truncated_bytes
+            ));
+        }
+        cmd.env(key, rendered.as_ref());
+    }
+
+    fn apply_optional(
+        cmd: &mut Command,
+        logger: &Logger,
+        log_label: &str,
+        task_token: &str,
+        key: &str,
+        value: Option<&str>,
+    ) {
         match value {
-            Some(value) => {
-                cmd.env(key, value);
-            }
+            Some(value) => Self::apply_value(cmd, logger, log_label, task_token, key, value),
             None => {
                 cmd.env_remove(key);
             }
@@ -122,7 +231,7 @@ fn run_shell_command_bash_lc(
         }
     }
 
-    env.apply(&mut cmd);
+    env.apply(&mut cmd, logger, log_label, task_token);
 
     let (exit_code, stdout) = match stdio_mode {
         ShellCommandStdioMode::Capture => {

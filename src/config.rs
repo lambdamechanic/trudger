@@ -1,9 +1,23 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_yaml::{Mapping, Value};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::task_types::ReviewLoopLimit;
+
+fn deserialize_log_path<'de, D>(deserializer: D) -> Result<Option<PathBuf>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(PathBuf::from(value)))
+}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -12,8 +26,8 @@ pub struct Config {
     pub commands: Commands,
     pub hooks: Hooks,
     pub review_loop_limit: ReviewLoopLimit,
-    #[serde(default)]
-    pub log_path: String,
+    #[serde(default, deserialize_with = "deserialize_log_path")]
+    pub log_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -683,7 +697,7 @@ hooks:
 "#;
         let file = write_temp_config(config);
         let loaded = load_config(file.path()).expect("config should load");
-        assert_eq!(loaded.config.log_path, "");
+        assert_eq!(loaded.config.log_path, None);
     }
 
     #[test]
@@ -705,7 +719,7 @@ hooks:
 "#;
         let file = write_temp_config(config);
         let loaded = load_config(file.path()).expect("config should load");
-        assert_eq!(loaded.config.log_path, "");
+        assert_eq!(loaded.config.log_path, None);
     }
 
     #[test]

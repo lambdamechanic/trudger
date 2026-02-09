@@ -84,6 +84,8 @@ The system SHALL verify that `~/.codex/prompts/trudge.md` and `~/.codex/prompts/
 ### Requirement: Manual task ids via -t
 The system SHALL accept manual task ids via `-t/--task` options. The `-t/--task` option MAY be provided multiple times, and each value MAY contain comma-separated task ids. The system SHALL process the manual task ids in the order specified and SHALL process them before selecting tasks via `commands.next_task`.
 
+Manual task ids SHALL be validated as safe tokens: non-empty, at most 200 characters, starting with an ASCII letter or digit, and containing only ASCII letters/digits plus `-`, `_`, `.`, `:`.
+
 #### Scenario: Repeated -t preserves order
 - **WHEN** a user runs `trudger -t tr-1 -t tr-2`
 - **THEN** the system processes `tr-1` before `tr-2`
@@ -103,6 +105,10 @@ The system SHALL accept manual task ids via `-t/--task` options. The `-t/--task`
 #### Scenario: Empty comma segments error
 - **WHEN** a user runs `trudger -t "tr-1,,tr-2"`
 - **THEN** the system exits non-zero with a clear error indicating an empty task id was provided
+
+#### Scenario: Invalid manual task id errors
+- **WHEN** a user runs `trudger -t "tr-1;rm -rf /"`
+- **THEN** the system exits non-zero with a clear error indicating the task id contains invalid characters
 
 ### Requirement: Positional task ids are rejected
 The system SHALL NOT accept positional task ids. If unexpected positional arguments are provided, the system SHALL exit non-zero with a clear migration error instructing the user to use `-t/--task`.
@@ -154,13 +160,22 @@ The system SHALL execute configured commands and hooks without positional task a
 
 Agent commands SHALL receive the relevant prompt content via `TRUDGER_PROMPT` (solve) or `TRUDGER_REVIEW_PROMPT` (review); the non-relevant prompt env var SHALL be unset.
 
+Before spawning configured commands/hooks, the system SHALL truncate individual `TRUDGER_*` environment variable values that exceed 64 KiB (bytes) at a UTF-8 character boundary to reduce the risk of command spawn failures (E2BIG). When truncation occurs, the system SHALL print a warning and (when `log_path` is configured) log an `env_truncate` transition.
+
 #### Scenario: Command environment provided
 - **WHEN** Trudger executes a configured command or hook
 - **THEN** it passes task context via `TRUDGER_*` environment variables
 - **AND** it does not pass the task id as a positional argument
 
+#### Scenario: Oversized env values are truncated and warned
+- **WHEN** `TRUDGER_PROMPT` exceeds the truncation threshold
+- **THEN** Trudger truncates it before spawning the command
+- **AND** it prints a warning indicating truncation occurred
+
 ### Requirement: Task selection
 The system SHALL select the next task by running the configured `commands.next_task` command, then evaluate readiness by running `commands.task_status`, and process one task at a time.
+
+The first whitespace-delimited token of stdout from `commands.next_task` SHALL be treated as the task id and SHALL be validated as a safe token (see manual task id validation). If the token is invalid, the system SHALL exit non-zero with a clear error.
 
 #### Scenario: No selectable tasks
 - **WHEN** `commands.next_task` returns an empty result or exits with code 1
@@ -169,6 +184,10 @@ The system SHALL select the next task by running the configured `commands.next_t
 #### Scenario: Task not ready is skipped
 - **WHEN** `commands.next_task` returns a task whose `commands.task_status` result is not `ready` or `open`
 - **THEN** the system skips it and retries up to `TRUDGER_SKIP_NOT_READY_LIMIT` before idling
+
+#### Scenario: Invalid next_task output errors
+- **WHEN** `commands.next_task` returns a first token that contains invalid characters
+- **THEN** the system exits non-zero with a clear error indicating the task id is invalid
 
 ### Requirement: Agent prompt execution
 For each selected task, the system SHALL execute the configured `agent_command` for the solve step and `agent_review_command` for the review step. The system SHALL load prompt content from `~/.codex/prompts/trudge.md` and `~/.codex/prompts/trudge_review.md` without performing `$ARGUMENTS` or `$TASK_SHOW` substitutions, and SHALL provide the prompt content via `TRUDGER_PROMPT` (solve) and `TRUDGER_REVIEW_PROMPT` (review) environment variables alongside task context (`TRUDGER_*`).

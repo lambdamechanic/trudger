@@ -38,7 +38,9 @@ pub(crate) struct Quit {
 
 impl Quit {
     pub(crate) fn exit_code(&self) -> ExitCode {
-        ExitCode::from(self.code as u8)
+        // Process exit statuses are the low 8 bits on Unix (same behavior as `std::process::exit`).
+        // This is intentionally not clamped: values outside 0..=255 wrap.
+        ExitCode::from((self.code & 0xFF) as u8)
     }
 }
 
@@ -278,8 +280,14 @@ fn get_next_task_id(state: &RuntimeState) -> Result<Option<TaskId>, Quit> {
     if token.trim().is_empty() {
         return Ok(None);
     }
-    // `TaskId` validation currently rejects only empty strings; we already handled empty tokens.
-    let task_id = TaskId::try_from(token).unwrap();
+    let task_id = TaskId::try_from(token).map_err(|err| {
+        eprintln!("next_task returned an invalid task id: {} ({})", token, err);
+        quit(
+            &state.logger,
+            &format!("next_task_invalid_task_id:{err}"),
+            1,
+        )
+    })?;
     Ok(Some(task_id))
 }
 
@@ -787,7 +795,7 @@ mod tests {
                 },
                 review_loop_limit: crate::task_types::ReviewLoopLimit::new(1)
                     .expect("review_loop_limit"),
-                log_path: "".to_string(),
+                log_path: None,
             },
             config_path: temp.path().join("trudger.yml"),
             prompt_trudge: "prompt".to_string(),
@@ -958,6 +966,22 @@ mod tests {
     }
 
     #[test]
+    fn next_task_invalid_task_id_is_wrapped_in_quit() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("printf '$'".to_string());
+
+        let quit = get_next_task_id(&state).expect_err("expected quit");
+        assert_eq!(quit.code, 1);
+        assert!(quit.reason.starts_with("next_task_invalid_task_id:"));
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
     fn ensure_task_ready_wraps_task_status_errors_in_quit() {
         let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
         crate::unit_tests::reset_test_env();
@@ -1051,7 +1075,7 @@ mod tests {
 
         let interrupt_flag = Arc::new(AtomicBool::new(false));
         state.interrupt_flag = Arc::clone(&interrupt_flag);
-        let filler = TaskId::try_from("x".repeat(1024)).expect("task id");
+        let filler = TaskId::try_from("x".repeat(20)).expect("task id");
         state.manual_tasks = vec![filler; 10_000];
 
         let setter = Arc::clone(&interrupt_flag);
