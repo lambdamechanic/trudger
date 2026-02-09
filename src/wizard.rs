@@ -2713,8 +2713,14 @@ hooks:
             let trudge_path = home.path().join(TRUDGE_PROMPT_REL);
             let review_path = home.path().join(TRUDGE_REVIEW_PROMPT_REL);
             assert!(config_path.is_file(), "expected config to be written");
-            assert!(trudge_path.is_file(), "expected trudge prompt to be installed");
-            assert!(review_path.is_file(), "expected review prompt to be installed");
+            assert!(
+                trudge_path.is_file(),
+                "expected trudge prompt to be installed"
+            );
+            assert!(
+                review_path.is_file(),
+                "expected review prompt to be installed"
+            );
 
             let trudge = fs::read_to_string(&trudge_path).expect("read trudge prompt");
             let review = fs::read_to_string(&review_path).expect("read review prompt");
@@ -2744,8 +2750,14 @@ hooks:
 
             let trudge_path = home.path().join(TRUDGE_PROMPT_REL);
             let review_path = home.path().join(TRUDGE_REVIEW_PROMPT_REL);
-            assert!(!trudge_path.exists(), "expected trudge prompt to remain missing");
-            assert!(!review_path.exists(), "expected review prompt to remain missing");
+            assert!(
+                !trudge_path.exists(),
+                "expected trudge prompt to remain missing"
+            );
+            assert!(
+                !review_path.exists(),
+                "expected review prompt to remain missing"
+            );
 
             assert!(
                 io.stdout.contains(&trudge_path.display().to_string()),
