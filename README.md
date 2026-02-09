@@ -31,7 +31,7 @@ It is slower and more serial, but if you have a large number of smaller projects
 trudger
 ```
 
-Generate a config interactively:
+Generate (and install) a starter config interactively:
 
 ```bash
 trudger wizard
@@ -73,14 +73,20 @@ Sample configs:
   - On completion, removes `trudgeable`.
   - On requires-human, removes `trudgeable` and adds `human-required`.
 - `sample_configuration/robot-triage.yml`
-  - Selects tasks via `bv --robot-next`.
+  - Selects tasks via `bv --robot-triage`.
   - No label changes (hooks are no-ops).
+
+Recommended bootstrap flow:
+- Run `trudger wizard` to generate `~/.config/trudger.yml` from embedded templates.
+- If you prefer a static starting point, copy a file from `sample_configuration/` to `~/.config/trudger.yml` and edit.
+- Run `trudger doctor` to validate your configured commands against a temporary scratch task DB.
+- Run `trudger`.
 
 Example:
 
 ```yaml
-agent_command: 'codex --yolo exec --prompt "$TRUDGER_PROMPT"'
-agent_review_command: 'codex --yolo exec --prompt "$TRUDGER_REVIEW_PROMPT"'
+agent_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_PROMPT"'
+agent_review_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_REVIEW_PROMPT" "$@"'
 commands:
   next_task: 'task_id=$(br ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
   task_show: 'br show "$TRUDGER_TASK_ID"'
@@ -98,7 +104,8 @@ hooks:
 
 Notes:
 - All configured commands are executed via `bash -lc`.
-- `agent_command` is used for solve; `agent_review_command` is used for review (Trudger appends `resume --last` to the review command arguments).
+- `agent_command` is used for solve; `agent_review_command` is used for review.
+  - Trudger appends `resume --last` to the review invocation; if your `agent_review_command` needs to receive extra args, include `"$@"` in the configured command string.
 - Required keys (non-empty, non-null): `agent_command`, `agent_review_command`, `review_loop_limit`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `commands.reset_task`, `hooks.on_completed`, `hooks.on_requires_human`.
 - `log_path` is optional; omit it or set it to an empty string to disable logging.
 - `commands.next_task` is required when no manual task ids are provided.
@@ -112,7 +119,7 @@ Notes:
 - `commands.task_update_in_progress` runs in `bash -lc`; output is ignored.
 - `hooks.on_completed` and `hooks.on_requires_human` are required; label updates must happen in hooks if you want them.
 - Commands and hooks receive task context via environment variables instead of positional arguments.
-- Trudger may append extra arguments to some commands (for example `commands.task_show` receives `--json` and `commands.task_update_in_progress` receives `--status in_progress` or `--status blocked`); include `$@` in the command string if you need them, but task id is always provided via `TRUDGER_TASK_ID`.
+- Trudger may pass extra arguments to some configured commands (for example `commands.task_update_in_progress` receives `--status in_progress` or `--status blocked`); include `$@` in the command string if you need them, but task id is always provided via `TRUDGER_TASK_ID`.
 - Environment variables available to commands/hooks include `TRUDGER_TASK_ID` (set when a task is selected), `TRUDGER_TASK_SHOW` (set after `commands.task_show`), `TRUDGER_TASK_STATUS` (set after `commands.task_status`), `TRUDGER_CONFIG_PATH` (always set), `TRUDGER_PROMPT` (solve prompt only; unset during review), and `TRUDGER_REVIEW_PROMPT` (review prompt only; unset during solve).
 - Oversized `TRUDGER_*` env values are truncated (at a UTF-8 boundary) to avoid `spawn` failures (E2BIG); Trudger prints a warning and logs an `env_truncate` transition when logging is enabled.
 
