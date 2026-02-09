@@ -6,7 +6,8 @@
 - [ ] 2.1 Detect prompt state (`missing`, `matches_default`, `differs`) for each required prompt path.
 - [ ] 2.2 If one or both prompts are missing, offer to install missing prompts (default Yes).
 - [ ] 2.3 If any existing prompt differs from defaults, offer to overwrite each differing prompt (default No; require explicit confirmation).
-- [ ] 2.4 Print a clear end-of-wizard summary for config + prompts (installed/updated/unchanged/skipped) and actionable follow-up instructions when prompts remain missing.
+- [ ] 2.4 Ensure prompt install/update (when accepted) occurs before config write; on failure, exit non-zero and do not write the config file.
+- [ ] 2.5 Print a clear end-of-wizard summary for config + prompts (installed/updated/unchanged/skipped) and actionable follow-up instructions when prompts remain missing.
 
 ## 3. Tests
 - [ ] 3.1 Add tests covering install-missing, overwrite-differing, skip flows, backup behavior (if implemented), and IO/permission error handling.

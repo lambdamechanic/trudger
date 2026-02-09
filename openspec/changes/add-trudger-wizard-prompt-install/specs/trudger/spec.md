@@ -68,6 +68,8 @@ When overwriting a prompt file, the system SHALL create a timestamped backup of 
 
 The system SHALL accept `y` or `yes` (case-insensitive) as explicit overwrite confirmation; all other inputs (including blank) SHALL be treated as "keep existing".
 
+Prompt backups SHALL be created as sibling files in `~/.codex/prompts/` using the naming scheme `{filename}.bak-{timestamp}` where `{timestamp}` is a UTC timestamp formatted as `YYYYMMDDTHHMMSSZ` (for example `20260209T124425Z`). If a backup path already exists, the system SHOULD select a non-colliding sibling path (for example by appending `-2`).
+
 #### Scenario: Wizard creates prompt directory
 - **GIVEN** `~/.codex/prompts/` does not exist
 - **WHEN** a user runs `trudger wizard` and accepts prompt installation
@@ -87,10 +89,11 @@ The system SHALL accept `y` or `yes` (case-insensitive) as explicit overwrite co
 - **AND** it overwrites the prompt file with the built-in default content
 
 ### Requirement: Wizard prompt install/update failures are actionable
-If prompt installation or update fails after the user accepts an install/overwrite action, the wizard SHALL exit non-zero and SHALL print a clear error naming the path that failed.
+If prompt installation or update fails after the user accepts an install/overwrite action, the wizard SHALL exit non-zero, SHALL print a clear error naming the path that failed, and SHALL NOT write the config file.
 
 #### Scenario: Prompt write failure exits non-zero with path
 - **GIVEN** the user accepts installing or overwriting prompt files
 - **AND** writing a prompt file fails due to an IO or permission error
 - **WHEN** the wizard attempts to write the prompt file
 - **THEN** the wizard exits non-zero and prints an error that includes the failing prompt path
+- **AND** the config file is not written

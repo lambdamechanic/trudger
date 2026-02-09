@@ -43,4 +43,5 @@ Keeping both paths reduces friction: installed-binary users use the wizard; repo
 
 ## Error Handling
 - If the user opted into installing/updating prompts and an IO error occurs (directory creation, read, backup, or write), the wizard should exit non-zero and print a clear error naming the failing path.
-- Partial success is acceptable (for example one prompt written, one failed) as long as the wizard reports it and does not silently claim success.
+- If prompt installation/update fails after user acceptance, the wizard MUST abort without writing the config file (so users don't end up with a config that immediately fails at runtime).
+- Partial success is acceptable (for example one prompt written, one failed) as long as the wizard reports it, exits non-zero, and does not write the config file.
