@@ -244,6 +244,11 @@ fn run_task_status(state: &mut RuntimeState, task_id: &TaskId) -> Result<(), Str
                 task_id,
                 sanitize_log_value(status.as_str())
             ));
+            return Err(format!(
+                "unknown_task_status:{}:{}",
+                task_id,
+                sanitize_log_value(status.as_str())
+            ));
         }
     }
     state.current_task_status = parsed;

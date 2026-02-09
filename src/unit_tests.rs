@@ -1081,9 +1081,13 @@ fn skip_not_ready_respects_limit() {
         current_task_status: None,
     };
 
-    let result = run_loop(&mut state).expect_err("should exit when no ready task found");
-    assert_eq!(result.code, 0, "expected idle exit code");
-    assert_eq!(result.reason, "no_ready_task");
+    let result = run_loop(&mut state).expect_err("should fail-fast on unknown status");
+    assert_eq!(result.code, 1, "expected failure exit code");
+    assert!(
+        result.reason.contains("task_status_failed:unknown_task_status:tr-2:stalled"),
+        "unexpected quit reason: {}",
+        result.reason
+    );
     assert!(
         !codex_log.exists(),
         "codex should not run when tasks are not ready"
