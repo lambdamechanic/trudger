@@ -101,11 +101,11 @@ When running `trudger wizard`, the system SHALL read any existing required promp
 - **AND** the config file is not written
 
 ### Requirement: Wizard prompt install/update failures are actionable
-If prompt installation or update fails after the user accepts an install/overwrite action, the wizard SHALL exit non-zero, SHALL print a clear error naming the path that failed, and SHALL NOT write the config file.
+If prompt installation or update fails after the user accepts an install/overwrite action, the wizard SHALL exit non-zero, SHALL print a clear error naming the path that failed and indicating the failing operation, and SHALL NOT write the config file.
 
 #### Scenario: Prompt write failure exits non-zero with path
 - **GIVEN** the user accepts installing or overwriting prompt files
 - **AND** writing a prompt file fails due to an IO or permission error
 - **WHEN** the wizard attempts to write the prompt file
-- **THEN** the wizard exits non-zero and prints an error that includes the failing prompt path
+- **THEN** the wizard exits non-zero and prints an error that includes the failing prompt path and indicates the failing operation
 - **AND** the config file is not written
