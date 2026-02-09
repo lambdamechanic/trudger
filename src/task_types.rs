@@ -5,6 +5,33 @@ use std::num::NonZeroU64;
 
 const TASK_ID_MAX_LEN: usize = 200;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TaskIdError {
+    Empty,
+    TooLong { max: usize, len: usize },
+    InvalidStart { ch: char },
+    InvalidChar { ch: char },
+}
+
+impl fmt::Display for TaskIdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Empty => f.write_str("task_id must not be empty"),
+            Self::TooLong { max, len } => {
+                write!(f, "task_id must be at most {} characters (got {})", max, len)
+            }
+            Self::InvalidStart { .. } => f.write_str("task_id must start with an ASCII letter or digit"),
+            Self::InvalidChar { ch } => write!(
+                f,
+                "task_id contains invalid character {:?}; allowed: ASCII letters/digits plus '-', '_', '.', ':'",
+                ch
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TaskIdError {}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub(crate) struct TaskId(String);
@@ -16,44 +43,40 @@ impl TaskId {
 }
 
 impl TryFrom<String> for TaskId {
-    type Error = String;
+    type Error = TaskIdError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
-            return Err("task_id must not be empty".to_string());
+            return Err(TaskIdError::Empty);
         }
         if trimmed.len() > TASK_ID_MAX_LEN {
-            return Err(format!(
-                "task_id must be at most {} characters (got {})",
-                TASK_ID_MAX_LEN,
-                trimmed.len()
-            ));
+            return Err(TaskIdError::TooLong {
+                max: TASK_ID_MAX_LEN,
+                len: trimmed.len(),
+            });
         }
 
         let mut chars = trimmed.chars();
         let Some(first) = chars.next() else {
-            return Err("task_id must not be empty".to_string());
+            return Err(TaskIdError::Empty);
         };
         if !first.is_ascii_alphanumeric() {
-            return Err("task_id must start with an ASCII letter or digit".to_string());
+            return Err(TaskIdError::InvalidStart { ch: first });
         }
 
         for ch in chars {
             if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':') {
                 continue;
             }
-            return Err(format!(
-                "task_id contains invalid character {:?}; allowed: ASCII letters/digits plus '-', '_', '.', ':'",
-                ch
-            ));
+            return Err(TaskIdError::InvalidChar { ch });
         }
         Ok(Self(trimmed.to_string()))
     }
 }
 
 impl TryFrom<&str> for TaskId {
-    type Error = String;
+    type Error = TaskIdError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::try_from(value.to_string())

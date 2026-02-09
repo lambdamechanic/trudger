@@ -16,7 +16,7 @@ use crate::doctor::run_doctor_mode;
 use crate::logger::{sanitize_log_value, Logger};
 use crate::run_loop::{reset_task_on_exit, run_loop, validate_config, Quit, RuntimeState};
 use crate::shell::render_args;
-use crate::task_types::{Phase, ReviewLoopLimit, TaskId};
+use crate::task_types::{Phase, ReviewLoopLimit, TaskId, TaskIdError};
 use crate::tmux::{build_tmux_name, TmuxState};
 
 pub(crate) static ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -2262,7 +2262,7 @@ fn task_id_rejects_empty_string() {
     reset_test_env();
 
     let err = TaskId::try_from("").expect_err("expected empty task id to error");
-    assert!(err.contains("must not be empty"), "unexpected err: {err}");
+    assert_eq!(err, TaskIdError::Empty);
 }
 
 #[test]
@@ -2271,22 +2271,13 @@ fn task_id_rejects_invalid_prefix_and_chars_and_length() {
     reset_test_env();
 
     let err = TaskId::try_from("-tr-1").expect_err("expected invalid prefix to error");
-    assert!(
-        err.contains("must start"),
-        "expected must-start error, got: {err}"
-    );
+    assert!(matches!(err, TaskIdError::InvalidStart { ch: '-' }));
 
     let err = TaskId::try_from("tr-1$").expect_err("expected invalid char to error");
-    assert!(
-        err.contains("invalid character") && err.contains('$'),
-        "expected invalid character error, got: {err}"
-    );
+    assert!(matches!(err, TaskIdError::InvalidChar { ch: '$' }));
 
     let err = TaskId::try_from("a".repeat(201)).expect_err("expected too-long task id to error");
-    assert!(
-        err.contains("at most 200 characters"),
-        "expected length error, got: {err}"
-    );
+    assert_eq!(err, TaskIdError::TooLong { max: 200, len: 201 });
 }
 
 #[test]
@@ -2862,7 +2853,7 @@ fn task_id_rejects_whitespace_only() {
     reset_test_env();
 
     let err = TaskId::try_from("   \n\t").expect_err("expected whitespace task id to error");
-    assert!(err.contains("must not be empty"), "unexpected err: {err}");
+    assert_eq!(err, TaskIdError::Empty);
 }
 
 #[test]
