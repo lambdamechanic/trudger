@@ -1,8 +1,13 @@
 use chrono::Utc;
 use serde_yaml::{Mapping, Value};
+use std::env;
 use std::path::{Path, PathBuf};
 
 use crate::config::load_config_from_str;
+use crate::prompt_defaults::default_prompts;
+use crate::prompt_install::{
+    detect_prompt_state, overwrite_prompt_with_backup, write_prompt_if_missing, PromptState,
+};
 use crate::run_loop::validate_config;
 use crate::wizard_templates::{
     load_embedded_wizard_templates, AgentTemplate, TrackingTemplate, WizardTemplates,
@@ -225,6 +230,8 @@ fn run_wizard_selected_with_existing(
         }
     }
 
+    let prompt_report = maybe_handle_prompt_install_update(io, merge_mode)?;
+
     let (backup_path, write_warnings) = validate_then_write_config(config_path, &yaml)?;
 
     let mut all_warnings = existing.warnings;
@@ -232,6 +239,10 @@ fn run_wizard_selected_with_existing(
         all_warnings.push(warning);
     }
     all_warnings.extend(write_warnings);
+
+    if let Some(report) = prompt_report {
+        report.print(io)?;
+    }
 
     Ok(WizardResult {
         config_path: config_path.to_path_buf(),
@@ -336,6 +347,194 @@ fn extract_existing_defaults(mapping: &Mapping) -> ExistingDefaults {
     ExistingDefaults {
         review_loop_limit,
         log_path,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PromptWizardReport {
+    trudge_path: PathBuf,
+    review_path: PathBuf,
+    trudge_status: String,
+    review_status: String,
+    missing_after: Vec<PathBuf>,
+}
+
+impl PromptWizardReport {
+    fn print(&self, io: &mut dyn WizardIo) -> Result<(), String> {
+        io.write_out("\nPrompt install/update summary:\n")?;
+        io.write_out(&format!(
+            "  {}: {}\n",
+            self.trudge_path.display(),
+            self.trudge_status
+        ))?;
+        io.write_out(&format!(
+            "  {}: {}\n",
+            self.review_path.display(),
+            self.review_status
+        ))?;
+
+        if !self.missing_after.is_empty() {
+            io.write_out("\nPrompts are still missing. Trudger requires both prompt files:\n")?;
+            io.write_out(&format!("  - {}\n", self.trudge_path.display()))?;
+            io.write_out(&format!("  - {}\n", self.review_path.display()))?;
+            io.write_out("\nInstall them by either:\n")?;
+            io.write_out("  - Rerun `trudger wizard` and accept prompt installation\n")?;
+            io.write_out("  - Or run `./install.sh` from a repo checkout\n")?;
+        }
+
+        Ok(())
+    }
+}
+
+fn wizard_home_dir() -> Result<PathBuf, String> {
+    env::var("HOME")
+        .map(PathBuf::from)
+        .map_err(|_| "Missing HOME environment variable".to_string())
+}
+
+fn maybe_handle_prompt_install_update(
+    io: &mut dyn WizardIo,
+    merge_mode: WizardMergeMode,
+) -> Result<Option<PromptWizardReport>, String> {
+    if merge_mode != WizardMergeMode::Interactive {
+        return Ok(None);
+    }
+
+    let home_dir = wizard_home_dir()?;
+    let prompts = default_prompts(&home_dir);
+
+    let mut trudge_state = detect_prompt_state(&prompts[0].path, prompts[0].contents)
+        .map_err(|err| err.to_string())?;
+    let mut review_state = detect_prompt_state(&prompts[1].path, prompts[1].contents)
+        .map_err(|err| err.to_string())?;
+
+    let mut trudge_status = String::new();
+    let mut review_status = String::new();
+
+    let any_missing = trudge_state == PromptState::Missing || review_state == PromptState::Missing;
+    if any_missing {
+        let install = prompt_install_missing_prompts(io)?;
+        if install {
+            if trudge_state == PromptState::Missing {
+                write_prompt_if_missing(&prompts[0].path, prompts[0].contents)
+                    .map_err(|err| err.to_string())?;
+                trudge_state = PromptState::MatchesDefault;
+                trudge_status = "installed".to_string();
+            }
+            if review_state == PromptState::Missing {
+                write_prompt_if_missing(&prompts[1].path, prompts[1].contents)
+                    .map_err(|err| err.to_string())?;
+                review_state = PromptState::MatchesDefault;
+                review_status = "installed".to_string();
+            }
+        } else {
+            if trudge_state == PromptState::Missing {
+                trudge_status = "skipped (missing)".to_string();
+            }
+            if review_state == PromptState::Missing {
+                review_status = "skipped (missing)".to_string();
+            }
+        }
+    }
+
+    if trudge_state == PromptState::Differs {
+        if prompt_overwrite_differing_prompt(io, &prompts[0].path)? {
+            let backup = overwrite_prompt_with_backup(&prompts[0].path, prompts[0].contents, true)
+                .map_err(|err| err.to_string())?;
+            trudge_status = match backup {
+                Some(path) => format!("updated (backup: {})", path.display()),
+                None => "updated".to_string(),
+            };
+            trudge_state = PromptState::MatchesDefault;
+        } else {
+            trudge_status = "kept existing (differs)".to_string();
+        }
+    }
+
+    if review_state == PromptState::Differs {
+        if prompt_overwrite_differing_prompt(io, &prompts[1].path)? {
+            let backup = overwrite_prompt_with_backup(&prompts[1].path, prompts[1].contents, true)
+                .map_err(|err| err.to_string())?;
+            review_status = match backup {
+                Some(path) => format!("updated (backup: {})", path.display()),
+                None => "updated".to_string(),
+            };
+            review_state = PromptState::MatchesDefault;
+        } else {
+            review_status = "kept existing (differs)".to_string();
+        }
+    }
+
+    if trudge_status.is_empty() {
+        trudge_status = match trudge_state {
+            PromptState::Missing => "missing".to_string(),
+            PromptState::MatchesDefault => "unchanged".to_string(),
+            PromptState::Differs => "kept existing (differs)".to_string(),
+        };
+    }
+    if review_status.is_empty() {
+        review_status = match review_state {
+            PromptState::Missing => "missing".to_string(),
+            PromptState::MatchesDefault => "unchanged".to_string(),
+            PromptState::Differs => "kept existing (differs)".to_string(),
+        };
+    }
+
+    let mut missing_after = Vec::new();
+    if !prompts[0].path.is_file() {
+        missing_after.push(prompts[0].path.clone());
+    }
+    if !prompts[1].path.is_file() {
+        missing_after.push(prompts[1].path.clone());
+    }
+
+    Ok(Some(PromptWizardReport {
+        trudge_path: prompts[0].path.clone(),
+        review_path: prompts[1].path.clone(),
+        trudge_status,
+        review_status,
+        missing_after,
+    }))
+}
+
+fn prompt_install_missing_prompts(io: &mut dyn WizardIo) -> Result<bool, String> {
+    loop {
+        io.write_out(
+            "\nOne or more required prompt files are missing. Install missing prompts now? [Y/n] (default Y): ",
+        )?;
+        io.flush_out()?;
+
+        let Some(input) = io.read_line()? else {
+            return Err("Wizard aborted (stdin closed).".to_string());
+        };
+        let trimmed = input.trim().to_ascii_lowercase();
+        match trimmed.as_str() {
+            "" | "y" | "yes" => return Ok(true),
+            "n" | "no" => return Ok(false),
+            _ => io.write_err("Please enter 'y' to install prompts or 'n' to skip.\n\n")?,
+        }
+    }
+}
+
+fn prompt_overwrite_differing_prompt(io: &mut dyn WizardIo, path: &Path) -> Result<bool, String> {
+    loop {
+        io.write_out(&format!(
+            "\nPrompt file differs from defaults: {}\nOverwrite with built-in default (creates a .bak-YYYYMMDDTHHMMSSZ backup)? [y/N] (default N): ",
+            path.display()
+        ))?;
+        io.flush_out()?;
+
+        let Some(input) = io.read_line()? else {
+            return Err("Wizard aborted (stdin closed).".to_string());
+        };
+        let trimmed = input.trim().to_ascii_lowercase();
+        match trimmed.as_str() {
+            "y" | "yes" => return Ok(true),
+            "" | "n" | "no" => return Ok(false),
+            _ => {
+                io.write_err("Please enter 'y' to overwrite or 'n' to keep the existing file.\n\n")?
+            }
+        }
     }
 }
 
@@ -875,8 +1074,45 @@ fn next_backup_path_with_timestamp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prompt_defaults::{
+        default_trudge_prompt_contents, default_trudge_review_prompt_contents, TRUDGE_PROMPT_REL,
+        TRUDGE_REVIEW_PROMPT_REL,
+    };
+    use std::env;
+    use std::ffi::OsString;
     use std::fs;
     use tempfile::TempDir;
+
+    struct TestHomeGuard {
+        old_home: Option<OsString>,
+    }
+
+    impl TestHomeGuard {
+        fn new(home: &Path) -> Self {
+            let old_home = env::var_os("HOME");
+            env::set_var("HOME", home);
+
+            let trudge = home.join(TRUDGE_PROMPT_REL);
+            let review = home.join(TRUDGE_REVIEW_PROMPT_REL);
+            if let Some(parent) = trudge.parent() {
+                fs::create_dir_all(parent).expect("create prompts dir");
+            }
+            fs::write(&trudge, default_trudge_prompt_contents()).expect("write trudge prompt");
+            fs::write(&review, default_trudge_review_prompt_contents())
+                .expect("write review prompt");
+
+            Self { old_home }
+        }
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match self.old_home.take() {
+                Some(value) => env::set_var("HOME", value),
+                None => env::remove_var("HOME"),
+            }
+        }
+    }
 
     fn maybe_insert_doctor_setup(hooks: &mut Mapping, setup: &Option<String>) {
         if let Some(value) = setup {
@@ -1435,6 +1671,10 @@ hooks:
 
     #[test]
     fn merge_decisions_are_driven_via_io_interpreter() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeGuard::new(home.path());
+
         let temp = TempDir::new().expect("temp dir");
         let config_path = temp.path().join("trudger.yml");
 
@@ -1633,6 +1873,10 @@ hooks:
 
     #[test]
     fn wizard_interactive_merge_skips_when_no_existing_mapping() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        let home = TempDir::new().expect("home dir");
+        let _home_guard = TestHomeGuard::new(home.path());
+
         let temp = TempDir::new().expect("temp dir");
         let config_path = temp.path().join("trudger.yml");
 
