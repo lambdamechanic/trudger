@@ -61,7 +61,11 @@ pub(crate) fn codex_prompts_dir(home_dir: &Path) -> PathBuf {
 pub(crate) fn ensure_prompts_dir(home_dir: &Path) -> Result<PathBuf, PromptInstallError> {
     let dir = codex_prompts_dir(home_dir);
     std::fs::create_dir_all(&dir).map_err(|err| {
-        PromptInstallError::new("mkdir", &dir, format!("failed to create directory: {}", err))
+        PromptInstallError::new(
+            "mkdir",
+            &dir,
+            format!("failed to create directory: {}", err),
+        )
     })?;
     Ok(dir)
 }
@@ -262,9 +266,11 @@ mod tests {
         std::fs::write(&prompt, "x").expect("write prompt");
 
         let timestamp = "20260209T124425Z";
-        let first = dir
-            .path()
-            .join(format!("{}.bak-{}", prompt.file_name().unwrap().to_string_lossy(), timestamp));
+        let first = dir.path().join(format!(
+            "{}.bak-{}",
+            prompt.file_name().unwrap().to_string_lossy(),
+            timestamp
+        ));
         std::fs::write(&first, "backup").expect("write first backup");
 
         let next = next_prompt_backup_path_with_timestamp(&prompt, timestamp).expect("next");
