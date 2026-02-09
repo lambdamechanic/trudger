@@ -11,19 +11,19 @@ It is slower and more serial, but if you have a large number of smaller projects
 
 - Uses `commands.next_task` to select the next task.
 - Marks the task `in_progress` via `commands.task_update_in_progress`.
-- Runs Codex solve + review prompts for that task.
+- Runs an agent solve + review loop for that task (via `agent_command` and `agent_review_command`).
 - On success, invokes `hooks.on_completed`.
 - If the task needs a human, invokes `hooks.on_requires_human`.
 
 ## Requirements
 
 - `bash` on your PATH (configured commands are executed via `bash -lc`)
-- `codex` CLI on your PATH
 - `jq` on your PATH
 - Any task system CLIs referenced by your configured commands (for example `bd`, `br`, `bv`)
-- Prompt files installed under `~/.codex/prompts/` (task-processing mode only; see below):
-  - `trudge.md`
-  - `trudge_review.md`
+- Whatever agent runner your config uses (for example `codex`, `claude`, `pi`, or a custom script).
+- Prompt files for task-processing mode only.
+  - For the built-in Codex template, `./install.sh` installs `prompts/trudge.md` and `prompts/trudge_review.md` to `~/.codex/prompts/`.
+  - If you use a different agent runner, you can ignore `~/.codex/prompts/` entirely as long as your agent command reads `TRUDGER_PROMPT`/`TRUDGER_REVIEW_PROMPT`.
 
 ## Usage
 
@@ -131,7 +131,7 @@ Install the Rust binary with cargo (installs to `~/.cargo/bin` by default):
 cargo install --path . --locked
 ```
 
-Install prompt files under `~/.codex/prompts/`:
+Install the default prompt files under `~/.codex/prompts/` (used by the built-in Codex agent template):
 
 ```bash
 ./install.sh
@@ -155,6 +155,7 @@ Legacy: the historical Bash implementation and its old BATS test suite live unde
 
 The prompt sources live in `prompts/` and are installed by `./install.sh`.
 - Trudger does not perform prompt substitutions; prompt content is delivered via `TRUDGER_PROMPT` and `TRUDGER_REVIEW_PROMPT`.
+- Prompt install location and prompt format are agent-runner concerns. Trudger only requires that your configured `agent_command`/`agent_review_command` can consume prompt text via the env vars above.
 
 ## Development
 
