@@ -23,6 +23,7 @@ When running `trudger wizard`, the system SHALL detect the required prompt files
 - **GIVEN** one or both prompt files do not exist
 - **WHEN** a user runs `trudger wizard`
 - **THEN** the system prompts to install the missing prompts to `~/.codex/prompts/` (default Yes)
+- **AND** it treats blank input, `y`, or `yes` (case-insensitive) as acceptance and `n` or `no` (case-insensitive) as decline
 - **AND** when the user accepts, it creates `~/.codex/prompts/` if needed and writes any missing prompt files
 - **AND** it does not overwrite any existing prompt file as part of this step without a separate overwrite confirmation
 
