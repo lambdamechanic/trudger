@@ -1,12 +1,19 @@
 # Trudgeable with hooks
-# - Selects the next ready br task labeled "trudgeable".
-# - On completion, removes the "trudgeable" label.
-# - On requires-human, removes "trudgeable" and adds "human-required".
-codex_command: "codex --yolo exec"
-next_task_command: "br ready --json --label trudgeable --sort priority --limit 1 | jq -r 'if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end'"
+# - Selects the next ready br task labeled "trudgeable" (exits 1 when none).
+# - On completion, removes the "trudgeable" label (task id via TRUDGER_TASK_ID).
+# - On requires-human, removes "trudgeable" and adds "human_required" (task id via TRUDGER_TASK_ID).
+# - On interruption or failure, resets task status to open (task id via TRUDGER_TASK_ID).
+agent_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_PROMPT"'
+agent_review_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_REVIEW_PROMPT" "$@"'
+commands:
+  next_task: 'task_id=$(br ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
+  task_show: 'br show "$TRUDGER_TASK_ID"'
+  task_status: 'br show "$TRUDGER_TASK_ID" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
+  task_update_status: 'br update "$TRUDGER_TASK_ID" --status "$TRUDGER_TARGET_STATUS"'
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
 hooks:
-  on_completed: "bash -lc 'br label remove \"$1\" \"trudgeable\"'"
-  on_requires_human: "bash -lc 'br label remove \"$1\" \"trudgeable\"; br label add \"$1\" \"human-required\"'"
+  on_completed: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"'
+  on_requires_human: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"; br label add "$TRUDGER_TASK_ID" "human_required"'
+  on_doctor_setup: 'rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'

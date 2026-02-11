@@ -1,0 +1,2 @@
+review_loop_limit: 5
+log_path: "./.trudger.log"

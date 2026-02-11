@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_path="${TASK_UPDATE_LOG:-}"
+if [[ -n "${log_path}" ]]; then
+  sanitize_log_value() {
+    local value="$1"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '%s' "$value"
+  }
+  log_env_flag() {
+    local name="$1"
+    if [[ -v $name ]]; then
+      printf 'envset %s=1\n' "$name"
+    else
+      printf 'envset %s=0\n' "$name"
+    fi
+  }
+  log_env_value() {
+    local name="$1"
+    local value="${!name-}"
+    printf 'env %s=%s\n' "$name" "$(sanitize_log_value "$value")"
+  }
+  {
+    printf 'task-update args_count=%s args=%s\n' "$#" "$*"
+    printf 'cwd %s\n' "$(pwd -P)"
+    log_env_flag "TRUDGER_PROMPT"
+    log_env_flag "TRUDGER_REVIEW_PROMPT"
+    log_env_flag "TRUDGER_TASK_ID"
+    log_env_flag "TRUDGER_TASK_SHOW"
+    log_env_flag "TRUDGER_TASK_STATUS"
+    log_env_flag "TRUDGER_TARGET_STATUS"
+    log_env_flag "TRUDGER_CONFIG_PATH"
+    log_env_flag "TRUDGER_DOCTOR_SCRATCH_DIR"
+    log_env_value "TRUDGER_TASK_ID"
+    log_env_value "TRUDGER_TASK_SHOW"
+    log_env_value "TRUDGER_TASK_STATUS"
+    log_env_value "TRUDGER_TARGET_STATUS"
+    log_env_value "TRUDGER_CONFIG_PATH"
+    log_env_value "TRUDGER_DOCTOR_SCRATCH_DIR"
+  } >> "${log_path}"
+fi
+
+if [[ -n "${TASK_UPDATE_OUTPUT:-}" ]]; then
+  printf '%s\n' "${TASK_UPDATE_OUTPUT}"
+fi

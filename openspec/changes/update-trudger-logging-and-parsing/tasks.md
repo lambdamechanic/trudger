@@ -1,0 +1,11 @@
+## 1. Implementation
+- [x] 1.1 Update trudger spec deltas for logging, parsing, prompt env-var context, and reexec behavior
+- [x] 1.2 Implement YAML parse failure handling and clear error messaging
+- [x] 1.3 Ensure prompt context is passed via env vars without substitution, preserving special characters
+- [x] 1.4 Standardize quit/error logging with control-character escaping
+- [x] 1.5 Ensure error trap exits via quit path
+- [x] 1.6 Use resolved reexec path when available
+- [x] 1.7 Add tests for parse failure, env-var prompt context, and logging/error behavior
+- [x] 1.8 Run shellcheck: `shellcheck trudger tests/trudger_test.bats tests/fixtures/bin/br tests/fixtures/bin/bv tests/fixtures/bin/agent`
+- [x] 1.9 Run tests: `bats tests/trudger_test.bats`
+- [x] 1.10 Run OpenSpec validation: `openspec validate update-trudger-logging-and-parsing --strict --no-interactive`
