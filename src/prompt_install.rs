@@ -247,17 +247,11 @@ mod tests {
 
         std::fs::write(&prompt, [0xff, 0xfe, 0xfd]).expect("write invalid utf8");
         let err = detect_prompt_state(&prompt, "x").expect_err("expected error");
+        assert_eq!(err.op(), "read");
+        assert_eq!(err.path(), prompt.as_path());
         let message = err.to_string();
-        assert!(
-            message.contains("read"),
-            "expected error to mention op=read, got: {}",
-            message
-        );
-        assert!(
-            message.contains(&prompt.display().to_string()),
-            "expected error to mention failing path, got: {}",
-            message
-        );
+        assert!(message.contains("read"));
+        assert!(message.contains(&prompt.display().to_string()));
     }
 
     #[test]
@@ -275,15 +269,11 @@ mod tests {
         std::fs::write(&first, "backup").expect("write first backup");
 
         let next = next_prompt_backup_path_with_timestamp(&prompt, timestamp).expect("next");
-        assert!(
-            next.ends_with(format!(
-                "{}.bak-{}-2",
-                prompt.file_name().unwrap().to_string_lossy(),
-                timestamp
-            )),
-            "expected -2 suffix, got: {}",
-            next.display()
-        );
+        assert!(next.ends_with(format!(
+            "{}.bak-{}-2",
+            prompt.file_name().unwrap().to_string_lossy(),
+            timestamp
+        )));
     }
 
     #[test]
@@ -328,5 +318,214 @@ mod tests {
             backup.file_name().unwrap().to_string_lossy(),
             "trudge.md.bak-20260209T124425Z-2"
         );
+    }
+
+    #[test]
+    fn codex_prompts_dir_returns_expected_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let expected = dir.path().join(".codex").join("prompts");
+        assert_eq!(codex_prompts_dir(dir.path()), expected);
+    }
+
+    #[test]
+    fn ensure_prompts_dir_creates_and_returns_prompts_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompts = ensure_prompts_dir(dir.path()).expect("ensure");
+        assert_eq!(prompts, codex_prompts_dir(dir.path()));
+        assert!(prompts.is_dir());
+    }
+
+    #[test]
+    fn ensure_prompts_dir_errors_when_prompts_path_is_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let codex_dir = dir.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).expect("create .codex");
+        let prompts_path = codex_dir.join("prompts");
+        std::fs::write(&prompts_path, "not-a-dir").expect("write prompts as file");
+
+        let err = ensure_prompts_dir(dir.path()).expect_err("expected error");
+        assert_eq!(err.op(), "mkdir");
+        assert_eq!(err.path(), prompts_path.as_path());
+    }
+
+    #[test]
+    fn detect_prompt_state_errors_when_prompt_is_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = dir.path().join("trudge.md");
+        std::fs::create_dir_all(&prompt).expect("create prompt dir");
+
+        let err = detect_prompt_state(&prompt, "x").expect_err("expected error");
+        assert_eq!(err.op(), "read");
+        assert_eq!(err.path(), prompt.as_path());
+    }
+
+    #[test]
+    fn write_prompt_if_missing_returns_false_when_file_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = dir.path().join("trudge.md");
+        std::fs::write(&prompt, "existing").expect("write prompt");
+
+        let wrote = write_prompt_if_missing(&prompt, "default").expect("write");
+        assert!(!wrote);
+        assert_eq!(
+            std::fs::read_to_string(&prompt).expect("read prompt"),
+            "existing"
+        );
+    }
+
+    #[test]
+    fn write_prompt_if_missing_creates_parent_and_writes_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = dir.path().join("nested").join("trudge.md");
+
+        let wrote = write_prompt_if_missing(&prompt, "default").expect("write");
+        assert!(wrote);
+        assert_eq!(
+            std::fs::read_to_string(&prompt).expect("read prompt"),
+            "default"
+        );
+    }
+
+    #[test]
+    fn write_prompt_if_missing_errors_when_parent_is_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent = dir.path().join("not-a-dir");
+        std::fs::write(&parent, "x").expect("write parent as file");
+        let prompt = parent.join("trudge.md");
+
+        let err = write_prompt_if_missing(&prompt, "default").expect_err("expected error");
+        assert_eq!(err.op(), "mkdir");
+        assert_eq!(err.path(), parent.as_path());
+    }
+
+    #[test]
+    fn write_prompt_if_missing_skips_parent_create_when_parent_is_none() {
+        let err = write_prompt_if_missing(Path::new(""), "default").expect_err("expected error");
+        assert_eq!(err.op(), "write");
+        assert_eq!(err.path(), Path::new(""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_prompt_if_missing_errors_when_parent_not_writable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent = dir.path().join("readonly");
+        std::fs::create_dir_all(&parent).expect("create parent dir");
+        let mut permissions = std::fs::metadata(&parent).expect("metadata").permissions();
+        permissions.set_mode(0o555);
+        std::fs::set_permissions(&parent, permissions).expect("chmod readonly");
+
+        let prompt = parent.join("trudge.md");
+        let err = write_prompt_if_missing(&prompt, "default").expect_err("expected error");
+        assert_eq!(err.op(), "write");
+        assert_eq!(err.path(), prompt.as_path());
+
+        let mut permissions = std::fs::metadata(&parent).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&parent, permissions).expect("restore permissions");
+    }
+
+    #[test]
+    fn overwrite_prompt_with_backup_returns_none_when_not_confirmed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = dir.path().join("trudge.md");
+        let backup = overwrite_prompt_with_backup(&prompt, "new", false).expect("overwrite");
+        assert!(backup.is_none());
+    }
+
+    #[test]
+    fn overwrite_prompt_with_backup_at_writes_without_backup_when_prompt_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = dir.path().join("trudge.md");
+
+        let now = Utc.with_ymd_and_hms(2026, 2, 9, 12, 44, 25).unwrap();
+        let backup = overwrite_prompt_with_backup_at(&prompt, "new", now).expect("overwrite");
+        assert!(backup.is_none());
+        assert_eq!(
+            std::fs::read_to_string(&prompt).expect("read prompt"),
+            "new"
+        );
+    }
+
+    #[test]
+    fn overwrite_prompt_with_backup_at_errors_when_parent_is_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent = dir.path().join("not-a-dir");
+        std::fs::write(&parent, "x").expect("write parent as file");
+        let prompt = parent.join("trudge.md");
+        let now = Utc.with_ymd_and_hms(2026, 2, 9, 12, 44, 25).unwrap();
+
+        let err = overwrite_prompt_with_backup_at(&prompt, "new", now).expect_err("expected error");
+        assert_eq!(err.op(), "mkdir");
+        assert_eq!(err.path(), parent.as_path());
+    }
+
+    #[test]
+    fn overwrite_prompt_with_backup_at_errors_when_prompt_is_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = dir.path().join("trudge.md");
+        std::fs::create_dir_all(&prompt).expect("create prompt dir");
+        let now = Utc.with_ymd_and_hms(2026, 2, 9, 12, 44, 25).unwrap();
+
+        let err = overwrite_prompt_with_backup_at(&prompt, "new", now).expect_err("expected error");
+        assert_eq!(err.op(), "backup");
+        assert_eq!(err.path(), prompt.as_path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_prompt_with_backup_at_errors_when_prompt_has_no_filename() {
+        let now = Utc.with_ymd_and_hms(2026, 2, 9, 12, 44, 25).unwrap();
+        let err = overwrite_prompt_with_backup_at(Path::new("/"), "new", now).expect_err("error");
+        assert_eq!(err.op(), "backup");
+        assert_eq!(err.path(), Path::new("/"));
+    }
+
+    #[test]
+    fn next_prompt_backup_path_with_timestamp_errors_when_path_has_no_filename() {
+        let err = next_prompt_backup_path_with_timestamp(Path::new(""), "20260209T124425Z")
+            .expect_err("error");
+        assert_eq!(err.op(), "backup");
+        assert_eq!(err.path(), Path::new(""));
+    }
+
+    #[test]
+    fn next_prompt_backup_path_with_timestamp_skips_existing_suffixes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = dir.path().join("trudge.md");
+        std::fs::write(&prompt, "x").expect("write prompt");
+
+        let timestamp = "20260209T124425Z";
+        let base = dir.path().join("trudge.md.bak-20260209T124425Z");
+        let second = dir.path().join("trudge.md.bak-20260209T124425Z-2");
+        std::fs::write(&base, "backup").expect("write base");
+        std::fs::write(&second, "backup").expect("write second");
+
+        let next = next_prompt_backup_path_with_timestamp(&prompt, timestamp).expect("next");
+        assert!(next.ends_with("trudge.md.bak-20260209T124425Z-3"));
+    }
+
+    #[test]
+    fn next_prompt_backup_path_with_timestamp_returns_last_candidate_when_exhausted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prompt = dir.path().join("trudge.md");
+        std::fs::write(&prompt, "x").expect("write prompt");
+
+        let timestamp = "20260209T124425Z";
+        std::fs::write(dir.path().join("trudge.md.bak-20260209T124425Z"), "backup")
+            .expect("write base backup");
+        for index in 2u32..=1000 {
+            std::fs::write(
+                dir.path()
+                    .join(format!("trudge.md.bak-20260209T124425Z-{}", index)),
+                "backup",
+            )
+            .expect("write backup");
+        }
+
+        let next = next_prompt_backup_path_with_timestamp(&prompt, timestamp).expect("next");
+        assert!(next.ends_with("trudge.md.bak-20260209T124425Z-1000"));
     }
 }

@@ -51,14 +51,8 @@ mod tests {
 
     #[test]
     fn embedded_prompt_defaults_are_non_empty() {
-        assert!(
-            !default_trudge_prompt_contents().trim().is_empty(),
-            "trudge prompt default should not be empty"
-        );
-        assert!(
-            !default_trudge_review_prompt_contents().trim().is_empty(),
-            "trudge_review prompt default should not be empty"
-        );
+        assert!(!default_trudge_prompt_contents().trim().is_empty());
+        assert!(!default_trudge_review_prompt_contents().trim().is_empty());
     }
 
     #[test]
