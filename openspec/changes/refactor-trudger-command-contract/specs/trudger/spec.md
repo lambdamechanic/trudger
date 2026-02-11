@@ -15,7 +15,7 @@ The system SHALL execute configured commands and hooks without positional task a
 
 ## MODIFIED Requirements
 ### Requirement: Configuration validation
-The script SHALL require `agent_command`, `agent_review_command`, `commands.next_task`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `hooks.on_completed`, `hooks.on_requires_human`, `review_loop_limit`, and `log_path` to be present and non-empty.
+The script SHALL require `agent_command`, `agent_review_command`, `commands.next_task`, `commands.task_show`, `commands.task_status`, `commands.task_update_status`, `hooks.on_completed`, `hooks.on_requires_human`, `review_loop_limit`, and `log_path` to be present and non-empty.
 
 #### Scenario: Required config value missing
 - **WHEN** any required config value is missing or empty

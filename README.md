@@ -10,7 +10,7 @@ It is slower and more serial, but if you have a large number of smaller projects
 ## What it does
 
 - Uses `commands.next_task` to select the next task.
-- Marks the task `in_progress` via `commands.task_update_in_progress`.
+- Marks the task `in_progress` via `commands.task_update_status`.
 - Runs an agent solve + review loop for that task (via `agent_command` and `agent_review_command`).
 - On success, invokes `hooks.on_completed`.
 - If the task needs a human, invokes `hooks.on_requires_human`.
@@ -95,8 +95,7 @@ commands:
   next_task: 'task_id=$(br ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
   task_show: 'br show "$TRUDGER_TASK_ID"'
   task_status: 'br show "$TRUDGER_TASK_ID" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
-  task_update_in_progress: 'br update "$TRUDGER_TASK_ID" "$@"'
-  reset_task: 'br update "$TRUDGER_TASK_ID" --status open'
+  task_update_status: 'br update "$TRUDGER_TASK_ID" --status "$TRUDGER_TARGET_STATUS"'
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
@@ -110,21 +109,21 @@ Notes:
 - All configured commands are executed via `bash -lc`.
 - `agent_command` is used for solve; `agent_review_command` is used for review.
   - Trudger appends `resume --last` to the review invocation; if your `agent_review_command` needs to receive extra args, include `"$@"` in the configured command string.
-- Required keys (non-empty, non-null): `agent_command`, `agent_review_command`, `review_loop_limit`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `commands.reset_task`, `hooks.on_completed`, `hooks.on_requires_human`.
+- Required keys (non-empty, non-null): `agent_command`, `agent_review_command`, `review_loop_limit`, `commands.task_show`, `commands.task_status`, `commands.task_update_status`, `hooks.on_completed`, `hooks.on_requires_human`.
 - `log_path` is optional; omit it or set it to an empty string to disable logging.
 - `commands.next_task` is required when no manual task ids are provided.
 - `hooks.on_doctor_setup` is required only for `trudger doctor`.
 - Null values are treated as validation errors for required keys.
-- `commands.next_task`, `commands.task_show`, `commands.task_status`, and `commands.task_update_in_progress` must be non-empty when used.
+- `commands.next_task`, `commands.task_show`, `commands.task_status`, and `commands.task_update_status` must be non-empty when used.
 - `commands.next_task` runs in `bash -lc` and the first whitespace-delimited token of stdout is used as the task id.
 - Task ids are validated (manual `-t/--task` and `commands.next_task` output): max 200 chars, must start with ASCII letter/digit, and may contain only ASCII letters/digits plus `-`, `_`, `.`, `:`.
 - `commands.task_show` runs in `bash -lc`; its output is treated as prompt context only and is exposed via `TRUDGER_TASK_SHOW`.
 - `commands.task_status` runs in `bash -lc`; the first whitespace-delimited token of stdout is used as the task status (for example `ready`, `open`, or `closed`) and is exposed via `TRUDGER_TASK_STATUS`.
-- `commands.task_update_in_progress` runs in `bash -lc`; output is ignored.
+- `commands.task_update_status` runs in `bash -lc`; output is ignored.
 - `hooks.on_completed` and `hooks.on_requires_human` are required; label updates must happen in hooks if you want them.
 - Commands and hooks receive task context via environment variables instead of positional arguments.
-- Trudger may pass extra arguments to some configured commands (for example `commands.task_update_in_progress` receives `--status in_progress` or `--status blocked`); include `$@` in the command string if you need them, but task id is always provided via `TRUDGER_TASK_ID`.
-- Environment variables available to commands/hooks include `TRUDGER_TASK_ID` (set when a task is selected), `TRUDGER_TASK_SHOW` (set after `commands.task_show`), `TRUDGER_TASK_STATUS` (set after `commands.task_status`), `TRUDGER_CONFIG_PATH` (always set), `TRUDGER_PROMPT` (solve prompt only; unset during review), and `TRUDGER_REVIEW_PROMPT` (review prompt only; unset during solve).
+- Status transitions use environment context instead of positional args: `commands.task_update_status` receives the desired status in `TRUDGER_TARGET_STATUS` (for example `in_progress`, `blocked`, `open`, `closed`).
+- Environment variables available to commands/hooks include `TRUDGER_TASK_ID` (set when a task is selected), `TRUDGER_TASK_SHOW` (set after `commands.task_show`), `TRUDGER_TASK_STATUS` (set after `commands.task_status`), `TRUDGER_TARGET_STATUS` (set only for `commands.task_update_status`), `TRUDGER_CONFIG_PATH` (always set), `TRUDGER_PROMPT` (solve prompt only; unset during review), and `TRUDGER_REVIEW_PROMPT` (review prompt only; unset during solve).
 - Oversized `TRUDGER_*` env values are truncated (at a UTF-8 boundary) to avoid `spawn` failures (E2BIG); Trudger prints a warning and logs an `env_truncate` transition when logging is enabled.
 
 ## Install

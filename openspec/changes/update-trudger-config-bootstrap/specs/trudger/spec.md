@@ -56,10 +56,10 @@ The script SHALL obtain task state by executing `commands.task_show` with `TRUDG
 - **AND** it provides the output to the agent without parsing
 
 ### Requirement: Task update command
-Before running the solve prompt, the script SHALL execute `commands.task_update_in_progress` with `TRUDGER_TASK_ID` set in the environment and no positional task arguments. The update command output is ignored.
+Before running the solve prompt, the script SHALL execute `commands.task_update_status` with `TRUDGER_TASK_ID` set in the environment and no positional task arguments. The update command output is ignored.
 
 #### Scenario: Update command execution
-- **GIVEN** `commands.task_update_in_progress` is configured
+- **GIVEN** `commands.task_update_status` is configured
 - **WHEN** Trudger begins work on a task
 - **THEN** it executes the command with `TRUDGER_TASK_ID` set and no positional task id
 

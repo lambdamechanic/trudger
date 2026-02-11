@@ -60,6 +60,7 @@ struct DoctorTaskEnv<'a> {
     task_id: Option<&'a TaskId>,
     task_show: Option<&'a str>,
     task_status: Option<&'a TaskStatus>,
+    target_status: Option<&'a TaskStatus>,
 }
 
 impl<'a> DoctorTaskEnv<'a> {
@@ -68,6 +69,7 @@ impl<'a> DoctorTaskEnv<'a> {
             task_id: None,
             task_show: None,
             task_status: None,
+            target_status: None,
         }
     }
 
@@ -76,6 +78,7 @@ impl<'a> DoctorTaskEnv<'a> {
             task_id: Some(task_id),
             task_show: None,
             task_status: None,
+            target_status: None,
         }
     }
 }
@@ -105,6 +108,7 @@ impl DoctorCtx<'_> {
             task_id: task.task_id.map(|value| value.to_string()),
             task_show: task.task_show.map(|value| value.to_string()),
             task_status: task.task_status.map(|value| value.as_str().to_string()),
+            target_status: task.target_status.map(|value| value.as_str().to_string()),
             prompt: None,
             review_prompt: None,
             completed: None,
@@ -232,17 +236,21 @@ fn doctor_run_task_update_status(
         !status.is_unknown(),
         "doctor_run_task_update_status must not be called with an unknown status"
     );
-    let args = vec!["--status".to_string(), status.as_str().to_string()];
     let exit = ctx.run_status(
-        &ctx.config.commands.task_update_in_progress,
+        &ctx.config.commands.task_update_status,
         "doctor-task-update",
         task_id.as_str(),
-        &args,
-        DoctorTaskEnv::for_task(task_id),
+        &[],
+        DoctorTaskEnv {
+            task_id: Some(task_id),
+            task_show: None,
+            task_status: None,
+            target_status: Some(&status),
+        },
     )?;
     if exit != 0 {
         return Err(format!(
-            "commands.task_update_in_progress failed to set status {} (exit code {})",
+            "commands.task_update_status failed to set status {} (exit code {})",
             status.as_str(),
             exit
         ));
@@ -250,21 +258,9 @@ fn doctor_run_task_update_status(
     Ok(())
 }
 
+#[cfg(test)]
 fn doctor_run_reset_task(ctx: &DoctorCtx<'_>, task_id: &TaskId) -> Result<(), String> {
-    let exit = ctx.run_status(
-        &ctx.config.commands.reset_task,
-        "doctor-reset-task",
-        task_id.as_str(),
-        &[],
-        DoctorTaskEnv::for_task(task_id),
-    )?;
-    if exit != 0 {
-        return Err(format!(
-            "commands.reset_task failed with exit code {}",
-            exit
-        ));
-    }
-    Ok(())
+    doctor_run_task_update_status(ctx, task_id, TaskStatus::Open)
 }
 
 fn doctor_run_hook(
@@ -277,6 +273,7 @@ fn doctor_run_hook(
         task_id: Some(task.id),
         task_show: Some(task.show),
         task_status: Some(task.status),
+        target_status: None,
     };
     let exit = ctx.run_status(hook_command, hook_name, task.id.as_str(), &[], env)?;
     if exit != 0 {
@@ -325,12 +322,12 @@ fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
         }
     });
 
-    // Verify reset -> ready/open parsing.
-    doctor_run_reset_task(ctx, &task_id)?;
+    // Verify open status parsing.
+    doctor_run_task_update_status(ctx, &task_id, TaskStatus::Open)?;
     let status = doctor_run_task_status(ctx, &task_id)?;
     if !status.is_ready() {
         return Err(format!(
-            "doctor expected commands.task_status to return ready/open after reset_task, got '{}'.",
+            "doctor expected commands.task_status to return ready/open after task_update_status=open, got '{}'.",
             status
         ));
     }
@@ -343,17 +340,17 @@ fn run_doctor_checks(ctx: &DoctorCtx<'_>) -> Result<(), String> {
     let status = doctor_run_task_status(ctx, &task_id)?;
     if status != TaskStatus::InProgress {
         return Err(format!(
-            "doctor expected commands.task_status to return 'in_progress' after task_update_in_progress, got '{}'.",
+            "doctor expected commands.task_status to return 'in_progress' after task_update_status, got '{}'.",
             status
         ));
     }
 
-    // Verify reset works again and yields ready/open.
-    doctor_run_reset_task(ctx, &task_id)?;
+    // Verify open update works again and yields ready/open.
+    doctor_run_task_update_status(ctx, &task_id, TaskStatus::Open)?;
     let status = doctor_run_task_status(ctx, &task_id)?;
     if !status.is_ready() {
         return Err(format!(
-            "doctor expected commands.task_status to return ready/open after reset_task, got '{}'.",
+            "doctor expected commands.task_status to return ready/open after task_update_status=open, got '{}'.",
             status
         ));
     }
@@ -446,6 +443,7 @@ pub(crate) fn run_doctor_mode(
         task_id: None,
         task_show: None,
         task_status: None,
+        target_status: None,
         prompt: None,
         review_prompt: None,
         completed: None,
@@ -519,8 +517,7 @@ mod tests {
                 next_task: Some("exit 0".to_string()),
                 task_show: "printf 'SHOW'".to_string(),
                 task_status: "printf 'open\\n'".to_string(),
-                task_update_in_progress: "exit 0".to_string(),
-                reset_task: "exit 0".to_string(),
+                task_update_status: "exit 0".to_string(),
             },
             hooks: crate::config::Hooks {
                 on_completed: "exit 0".to_string(),
@@ -571,9 +568,8 @@ mod tests {
         config.commands.next_task = Some("exit 1".to_string());
         config.commands.task_show = "printf 'SHOW'".to_string();
         config.commands.task_status = format!("cat \"{}\"", status_path_str);
-        config.commands.reset_task = format!("printf 'open\\n' > \"{}\"", status_path_str);
-        config.commands.task_update_in_progress = format!(
-            "if [[ \"$1\" != \"--status\" || -z \"$2\" ]]; then exit 2; fi; printf '%s\\n' \"$2\" > \"{}\"",
+        config.commands.task_update_status = format!(
+            "status=\"${{TRUDGER_TARGET_STATUS:-}}\"; if [[ -z \"$status\" ]]; then exit 2; fi; printf '%s\\n' \"$status\" > \"{}\"",
             status_path_str
         );
 
@@ -957,7 +953,7 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let scratch = TempDir::new().expect("scratch");
         let mut config = base_config();
-        config.commands.task_update_in_progress = "exit 2".to_string();
+        config.commands.task_update_status = "exit 2".to_string();
         let logger = Logger::new(None);
         let config_path = temp.path().join("trudger.yml");
         let scratch_path = scratch.path().display().to_string();
@@ -1011,7 +1007,7 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let scratch = TempDir::new().expect("scratch");
         let mut config = base_config();
-        config.commands.task_update_in_progress = "task-update".to_string();
+        config.commands.task_update_status = "task-update".to_string();
         let logger = Logger::new(None);
 
         env::set_var("PATH", temp.path());
@@ -1039,7 +1035,7 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let scratch = TempDir::new().expect("scratch");
         let mut config = base_config();
-        config.commands.reset_task = "exit 2".to_string();
+        config.commands.task_update_status = "exit 2".to_string();
         let logger = Logger::new(None);
         let config_path = temp.path().join("trudger.yml");
         let scratch_path = scratch.path().display().to_string();
@@ -1051,7 +1047,7 @@ mod tests {
             logger: &logger,
         };
         let err = doctor_run_reset_task(&ctx, &task("tr-1")).expect_err("expected reset error");
-        assert!(err.contains("commands.reset_task failed"));
+        assert!(err.contains("commands.task_update_status failed"));
     }
 
     #[cfg(unix)]
@@ -1063,7 +1059,7 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let scratch = TempDir::new().expect("scratch");
         let mut config = base_config();
-        config.commands.reset_task = "reset-task".to_string();
+        config.commands.task_update_status = "reset-task".to_string();
         let logger = Logger::new(None);
 
         env::set_var("PATH", temp.path());
@@ -1228,13 +1224,13 @@ mod tests {
 
         let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"blocked\"}\n");
         let mut config = base_config();
-        config.commands.reset_task = "exit 2".to_string();
+        config.commands.task_update_status = "exit 2".to_string();
         let scratch_path = scratch.path().display().to_string();
         let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
         let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
-        let err = run_doctor_checks(&ctx).expect_err("expected reset_task error");
-        assert!(err.contains("commands.reset_task failed"));
+        let err = run_doctor_checks(&ctx).expect_err("expected open-status update error");
+        assert!(err.contains("commands.task_update_status failed"));
     }
 
     #[test]
@@ -1319,14 +1315,14 @@ mod tests {
 
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
-        config.commands.reset_task =
+        config.commands.task_update_status =
             format!("if [ -f '{marker_path}' ]; then exit 2; fi; touch '{marker_path}'; exit 0");
         let scratch_path = scratch.path().display().to_string();
         let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
         let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
-        let err = run_doctor_checks(&ctx).expect_err("expected reset_task error");
-        assert!(err.contains("commands.reset_task failed"));
+        let err = run_doctor_checks(&ctx).expect_err("expected open-status update error");
+        assert!(err.contains("commands.task_update_status failed"));
     }
 
     #[test]
@@ -1372,13 +1368,13 @@ mod tests {
 
         let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"open\"}\n");
         let mut config = base_config();
-        config.commands.reset_task = "exit 2".to_string();
+        config.commands.task_update_status = "exit 2".to_string();
         let scratch_path = scratch.path().display().to_string();
         let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
         let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
-        let err = run_doctor_checks(&ctx).expect_err("expected reset_task error");
-        assert!(err.contains("commands.reset_task failed"));
+        let err = run_doctor_checks(&ctx).expect_err("expected open-status update error");
+        assert!(err.contains("commands.task_update_status failed"));
     }
 
     #[test]
@@ -1407,13 +1403,13 @@ mod tests {
         let mut config = base_config();
         config.commands.task_status = "printf 'open\\n'".to_string();
         config.commands.task_show = "printf 'SHOW'".to_string();
-        config.commands.task_update_in_progress = "exit 2".to_string();
+        config.commands.task_update_status = "exit 2".to_string();
         let scratch_path = scratch.path().display().to_string();
         let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
         let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
         let err = run_doctor_checks(&ctx).expect_err("expected update error");
-        assert!(err.contains("task_update_in_progress failed"));
+        assert!(err.contains("task_update_status failed"));
     }
 
     #[test]
@@ -1529,14 +1525,14 @@ mod tests {
         fs::write(&queue_path, "open\nin_progress\nopen\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
-        config.commands.task_update_in_progress =
+        config.commands.task_update_status =
             format!("if [ -f '{marker_path}' ]; then exit 2; fi; touch '{marker_path}'; exit 0");
         let scratch_path = scratch.path().display().to_string();
         let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
         let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
-        let err = run_doctor_checks(&ctx).expect_err("expected task_update_in_progress error");
-        assert!(err.contains("failed to set status closed"));
+        let err = run_doctor_checks(&ctx).expect_err("expected task_update_status error");
+        assert!(err.contains("failed to set status in_progress"));
     }
 
     #[test]

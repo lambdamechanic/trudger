@@ -58,8 +58,7 @@ Tracking templates (labels fixed per request):
   - `commands.next_task`: `task_id=$(br ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z \"$task_id\" ]]; then exit 1; fi; printf \"%s\" \"$task_id\"`
   - `commands.task_show`: `br show "$TRUDGER_TASK_ID"`
   - `commands.task_status`: `br show "$TRUDGER_TASK_ID" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"`
-  - `commands.task_update_in_progress`: `br update "$TRUDGER_TASK_ID" "$@"`
-  - `commands.reset_task`: `br update "$TRUDGER_TASK_ID" --status open`
+  - `commands.task_update_status`: `br update "$TRUDGER_TASK_ID" --status "$TRUDGER_TARGET_STATUS"`
   - `hooks.on_completed`: `br label remove "$TRUDGER_TASK_ID" "trudgeable"`
   - `hooks.on_requires_human`: `br label remove "$TRUDGER_TASK_ID" "trudgeable"; br label add "$TRUDGER_TASK_ID" "human_required"`
   - `hooks.on_doctor_setup`: `rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"`

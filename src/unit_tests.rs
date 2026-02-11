@@ -45,6 +45,7 @@ pub(crate) fn reset_test_env() {
         "TRUDGER_TASK_ID",
         "TRUDGER_TASK_SHOW",
         "TRUDGER_TASK_STATUS",
+        "TRUDGER_TARGET_STATUS",
         "TRUDGER_COMPLETED",
         "TRUDGER_NEEDS_HUMAN",
         "CODEX_MOCK_LOG",
@@ -52,7 +53,6 @@ pub(crate) fn reset_test_env() {
         "TASK_STATUS_LOG",
         "TASK_UPDATE_LOG",
         "HOOK_MOCK_LOG",
-        "RESET_TASK_LOG",
         "NEXT_TASK_LOG",
         "TRUDGER_TEST_FORCE_ERR",
     ] {
@@ -383,8 +383,7 @@ fn run_loop_executes_commands_and_hooks_with_env() {
             next_task: Some("next-task\t--with-tab".to_string()),
             task_show: "task-show \"$@\"".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update \"$@\"".to_string(),
-            reset_task: "reset-task \"$@\"".to_string(),
+            task_update_status: "task-update \"$@\"".to_string(),
         },
         hooks: Hooks {
             on_completed: "hook --done".to_string(),
@@ -526,8 +525,7 @@ fn manual_task_not_ready_fails_fast_without_invoking_next_task() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show \"$@\"".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update \"$@\"".to_string(),
-            reset_task: "reset-task \"$@\"".to_string(),
+            task_update_status: "task-update \"$@\"".to_string(),
         },
         hooks: Hooks {
             on_completed: "hook --done".to_string(),
@@ -609,8 +607,7 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show \"$@\"".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update \"$@\"".to_string(),
-            reset_task: "reset-task \"$@\"".to_string(),
+            task_update_status: "task-update \"$@\"".to_string(),
         },
         hooks: Hooks {
             // Keep the hook running briefly so the interrupter can reliably observe its log.
@@ -730,8 +727,7 @@ fn review_loop_limit_retries_until_closed() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show \"$@\"".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update \"$@\"".to_string(),
-            reset_task: "reset-task \"$@\"".to_string(),
+            task_update_status: "task-update \"$@\"".to_string(),
         },
         hooks: Hooks {
             on_completed: "hook --done".to_string(),
@@ -773,12 +769,14 @@ fn review_loop_limit_retries_until_closed() {
 
     let update_contents = fs::read_to_string(&task_update_log).expect("read task-update log");
     assert_eq!(
-        update_contents.matches("args=--status in_progress").count(),
+        update_contents
+            .matches("env TRUDGER_TARGET_STATUS=in_progress")
+            .count(),
         2,
-        "expected task_update_in_progress to run once per solve loop, got:\n{update_contents}"
+        "expected task_update_status to run once per solve loop, got:\n{update_contents}"
     );
     assert!(
-        !update_contents.contains("args=--status blocked"),
+        !update_contents.contains("env TRUDGER_TARGET_STATUS=blocked"),
         "should not block task when closed within limit, got:\n{update_contents}"
     );
 }
@@ -816,8 +814,7 @@ fn review_loop_limit_exhaustion_marks_blocked_and_requires_human() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show \"$@\"".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update \"$@\"".to_string(),
-            reset_task: "reset-task \"$@\"".to_string(),
+            task_update_status: "task-update \"$@\"".to_string(),
         },
         hooks: Hooks {
             on_completed: "hook --done".to_string(),
@@ -865,12 +862,14 @@ fn review_loop_limit_exhaustion_marks_blocked_and_requires_human() {
 
     let update_contents = fs::read_to_string(&task_update_log).expect("read task-update log");
     assert_eq!(
-        update_contents.matches("args=--status in_progress").count(),
+        update_contents
+            .matches("env TRUDGER_TARGET_STATUS=in_progress")
+            .count(),
         2,
-        "expected task_update_in_progress to run once per solve loop, got:\n{update_contents}"
+        "expected task_update_status to run once per solve loop, got:\n{update_contents}"
     );
     assert!(
-        update_contents.contains("args=--status blocked"),
+        update_contents.contains("env TRUDGER_TARGET_STATUS=blocked"),
         "expected task to be marked blocked after exhaustion, got:\n{update_contents}"
     );
 }
@@ -901,8 +900,7 @@ fn next_task_exit_1_exits_zero_without_running_commands() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show \"$@\"".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update \"$@\"".to_string(),
-            reset_task: "reset-task \"$@\"".to_string(),
+            task_update_status: "task-update \"$@\"".to_string(),
         },
         hooks: Hooks {
             on_completed: "hook --done".to_string(),
@@ -982,8 +980,7 @@ fn hook_uses_env_task_id_in_shell() {
             next_task: Some("next-task\t--with-tab".to_string()),
             task_show: "task-show \"$@\"".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update \"$@\"".to_string(),
-            reset_task: "reset-task \"$@\"".to_string(),
+            task_update_status: "task-update \"$@\"".to_string(),
         },
         hooks: Hooks {
             on_completed: "hook --done \"$TRUDGER_TASK_ID\"".to_string(),
@@ -1053,8 +1050,7 @@ fn skip_not_ready_respects_limit() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show \"$@\"".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update \"$@\"".to_string(),
-            reset_task: "reset-task \"$@\"".to_string(),
+            task_update_status: "task-update \"$@\"".to_string(),
         },
         hooks: Hooks {
             on_completed: "hook --done".to_string(),
@@ -1131,8 +1127,7 @@ fn missing_status_after_review_errors() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show \"$@\"".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update \"$@\"".to_string(),
-            reset_task: "reset-task \"$@\"".to_string(),
+            task_update_status: "task-update \"$@\"".to_string(),
         },
         hooks: Hooks {
             on_completed: "hook --done".to_string(),
@@ -1174,7 +1169,7 @@ fn reset_task_runs_on_exit_with_active_task() {
     reset_test_env();
     let temp = TempDir::new().expect("temp dir");
     let task_status_log = temp.path().join("task-status.log");
-    let reset_task_log = temp.path().join("reset-task.log");
+    let reset_task_log = temp.path().join("task-update.log");
     let status_queue = temp.path().join("status-queue.txt");
     fs::write(&status_queue, "in_progress\n").expect("write status queue");
 
@@ -1186,7 +1181,7 @@ fn reset_task_runs_on_exit_with_active_task() {
     env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
     env::set_var("TASK_STATUS_LOG", &task_status_log);
     env::set_var("TASK_STATUS_QUEUE", &status_queue);
-    env::set_var("RESET_TASK_LOG", &reset_task_log);
+    env::set_var("TASK_UPDATE_LOG", &reset_task_log);
 
     let config = Config {
         agent_command: "codex --yolo exec --default".to_string(),
@@ -1195,8 +1190,7 @@ fn reset_task_runs_on_exit_with_active_task() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show \"$@\"".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update \"$@\"".to_string(),
-            reset_task: "reset-task \"$@\"".to_string(),
+            task_update_status: "task-update \"$@\"".to_string(),
         },
         hooks: Hooks {
             on_completed: "hook --done".to_string(),
@@ -1236,12 +1230,12 @@ fn reset_task_runs_on_exit_with_active_task() {
 
     let contents = fs::read_to_string(&reset_task_log).expect("read reset task log");
     assert!(
-        contents.contains("reset-task args_count=0 args="),
-        "reset-task should run without args"
+        contents.contains("task-update args_count=0 args="),
+        "task-update should run without args"
     );
     assert!(
         contents.contains("env TRUDGER_TASK_ID=tr-1"),
-        "reset-task should receive task id in env"
+        "task-update should receive task id in env"
     );
 }
 
@@ -1351,13 +1345,11 @@ fn doctor_does_not_require_prompts_and_cleans_scratch_dir() {
     let task_show_log = temp.path().join("task-show.log");
     let task_status_log = temp.path().join("task-status.log");
     let task_update_log = temp.path().join("task-update.log");
-    let reset_task_log = temp.path().join("reset-task.log");
     env::set_var("HOOK_MOCK_LOG", &hook_log);
     env::set_var("NEXT_TASK_LOG", &next_task_log);
     env::set_var("TASK_SHOW_LOG", &task_show_log);
     env::set_var("TASK_STATUS_LOG", &task_status_log);
     env::set_var("TASK_UPDATE_LOG", &task_update_log);
-    env::set_var("RESET_TASK_LOG", &reset_task_log);
 
     // Ensure the setup hook sees these as unset even if present in the parent process env.
     env::set_var("TRUDGER_TASK_ID", "PARENT_TASK");
@@ -1399,8 +1391,7 @@ commands:
   next_task: "next-task"
   task_show: "task-show"
   task_status: "task-status"
-  task_update_in_progress: "task-update \"$@\""
-  reset_task: "reset-task"
+  task_update_status: "task-update \"$@\""
 review_loop_limit: 2
 log_path: "./.trudger.log"
 hooks:
@@ -1514,21 +1505,15 @@ hooks:
         "task-update should run from scratch dir, got:\n{task_update_contents}"
     );
     assert!(
-        task_update_contents.contains("args_count=2 args=--status in_progress"),
+        task_update_contents.contains("env TRUDGER_TARGET_STATUS=in_progress"),
         "task-update should set in_progress, got:\n{task_update_contents}"
     );
-
-    let reset_task_contents = fs::read_to_string(&reset_task_log).expect("read reset-task log");
-    assert!(
-        reset_task_contents.contains(&format!("cwd {}", scratch_dir)),
-        "reset-task should run from scratch dir, got:\n{reset_task_contents}"
-    );
     assert_eq!(
-        reset_task_contents
-            .matches("reset-task args_count=0 args=")
+        task_update_contents
+            .matches("env TRUDGER_TARGET_STATUS=open")
             .count(),
         2,
-        "expected reset-task to run twice, got:\n{reset_task_contents}"
+        "expected task-update open transitions to run twice, got:\n{task_update_contents}"
     );
 
     assert!(
@@ -1584,8 +1569,7 @@ fn doctor_cleanup_failure_is_an_error() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "task-update".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -1698,8 +1682,7 @@ commands:
       mv "$tmp" "$queue"
       if [ -n "$line" ]; then printf '%s\n' "$line"; fi
     fi
-  task_update_in_progress: "exit 0"
-  reset_task: "exit 0"
+  task_update_status: "exit 0"
 review_loop_limit: 1
 hooks:
   on_completed: "exit 0"
@@ -1830,6 +1813,7 @@ fn run_shell_command_noops_when_command_is_empty() {
         task_id: None,
         task_show: None,
         task_status: None,
+        target_status: None,
         prompt: None,
         review_prompt: None,
         completed: None,
@@ -1876,6 +1860,7 @@ fn command_env_truncates_oversized_values_and_warns() {
         task_id: None,
         task_show: None,
         task_status: None,
+        target_status: None,
         prompt: Some(large),
         review_prompt: None,
         completed: None,
@@ -1930,6 +1915,7 @@ fn command_env_truncates_total_trudger_payload_and_warns() {
         task_id: None,
         task_show: Some(large_task_show),
         task_status: None,
+        target_status: None,
         prompt: Some(large_prompt),
         review_prompt: None,
         completed: None,
@@ -2009,6 +1995,7 @@ fn run_shell_command_errors_when_bash_is_missing() {
         task_id: None,
         task_show: None,
         task_status: None,
+        target_status: None,
         prompt: None,
         review_prompt: None,
         completed: None,
@@ -2048,8 +2035,7 @@ fn validate_config_rejects_missing_and_empty_values() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "task-update".to_string(),
         },
         hooks: Hooks {
             on_completed: "hook --done".to_string(),
@@ -2089,11 +2075,11 @@ fn validate_config_rejects_missing_and_empty_values() {
     assert!(validate_config(&config, &[]).is_err());
 
     let mut config = base.clone();
-    config.commands.task_update_in_progress = "".to_string();
+    config.commands.task_update_status = "".to_string();
     assert!(validate_config(&config, &[]).is_err());
 
     let mut config = base.clone();
-    config.commands.reset_task = "".to_string();
+    config.commands.task_update_status = "".to_string();
     assert!(validate_config(&config, &[]).is_err());
 
     let mut config = base.clone();
@@ -2118,8 +2104,7 @@ fn run_loop_errors_when_next_task_command_missing() {
             next_task: None,
             task_show: "task-show".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "task-update".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2173,8 +2158,7 @@ fn run_loop_propagates_next_task_exit_code_other_than_1() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "task-update".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2230,8 +2214,7 @@ fn run_loop_errors_when_selected_task_has_empty_status() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "task-update".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "task-update".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2299,8 +2282,7 @@ fn run_loop_errors_when_update_in_progress_fails() {
             next_task: Some("printf 'tr-1'".to_string()),
             task_show: "task-show".to_string(),
             task_status: "printf 'open\\n'".to_string(),
-            task_update_in_progress: "exit 1".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "exit 1".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2344,8 +2326,7 @@ fn run_loop_errors_when_task_show_fails_during_solve() {
             next_task: Some("printf 'tr-1'".to_string()),
             task_show: "exit 1".to_string(),
             task_status: "printf 'open\\n'".to_string(),
-            task_update_in_progress: "true".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "true".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2389,8 +2370,7 @@ fn run_loop_errors_when_agent_solve_fails() {
             next_task: Some("printf 'tr-1'".to_string()),
             task_show: "printf 'SHOW\\n'".to_string(),
             task_status: "printf 'open\\n'".to_string(),
-            task_update_in_progress: "true".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "true".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2449,8 +2429,7 @@ fn run_loop_errors_when_task_show_fails_during_review() {
             next_task: Some("printf 'tr-1'".to_string()),
             task_show: task_show.display().to_string(),
             task_status: "printf 'open\\n'".to_string(),
-            task_update_in_progress: "true".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "true".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2494,8 +2473,7 @@ fn run_loop_errors_when_agent_review_fails() {
             next_task: Some("printf 'tr-1'".to_string()),
             task_show: "printf 'SHOW\\n'".to_string(),
             task_status: "printf 'open\\n'".to_string(),
-            task_update_in_progress: "true".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "true".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2551,8 +2529,7 @@ fn run_loop_errors_when_on_completed_hook_fails() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "true".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "true".to_string(),
         },
         hooks: Hooks {
             on_completed: "exit 1".to_string(),
@@ -2608,8 +2585,7 @@ fn run_loop_errors_when_on_requires_human_hook_fails_on_blocked_status() {
             next_task: Some("next-task".to_string()),
             task_show: "task-show".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "true".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "true".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2665,9 +2641,9 @@ fn run_loop_errors_when_blocked_status_update_fails_after_exhausting_review_loop
             next_task: Some("next-task".to_string()),
             task_show: "task-show".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "if [[ \"$*\" == *\"blocked\"* ]]; then exit 1; fi; exit 0"
-                .to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status:
+                "if [[ \"${TRUDGER_TARGET_STATUS:-}\" == \"blocked\" ]]; then exit 1; fi; exit 0"
+                    .to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2723,8 +2699,7 @@ fn run_loop_errors_when_on_requires_human_hook_fails_after_exhausting_review_loo
             next_task: Some("next-task".to_string()),
             task_show: "task-show".to_string(),
             task_status: "task-status".to_string(),
-            task_update_in_progress: "true".to_string(),
-            reset_task: "reset-task".to_string(),
+            task_update_status: "true".to_string(),
         },
         hooks: Hooks {
             on_completed: "true".to_string(),
@@ -2770,8 +2745,7 @@ fn reset_task_on_exit_is_noop_for_ok_or_missing_task_id() {
                 next_task: None,
                 task_show: "task-show".to_string(),
                 task_status: "task-status".to_string(),
-                task_update_in_progress: "task-update".to_string(),
-                reset_task: "reset-task".to_string(),
+                task_update_status: "task-update".to_string(),
             },
             hooks: Hooks {
                 on_completed: "true".to_string(),
@@ -2819,8 +2793,7 @@ fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
                 next_task: None,
                 task_show: "task-show".to_string(),
                 task_status: "printf 'in_progress\\n'".to_string(),
-                task_update_in_progress: "task-update".to_string(),
-                reset_task: "exit 1".to_string(),
+                task_update_status: "task-update".to_string(),
             },
             hooks: Hooks {
                 on_completed: "true".to_string(),
@@ -2868,7 +2841,7 @@ fn reset_task_on_exit_skips_reset_when_task_status_is_empty() {
     reset_test_env();
 
     let temp = TempDir::new().expect("temp dir");
-    let reset_task_log = temp.path().join("reset-task.log");
+    let reset_task_log = temp.path().join("task-update.log");
     let state = RuntimeState {
         config: Config {
             agent_command: "agent".to_string(),
@@ -2877,8 +2850,7 @@ fn reset_task_on_exit_skips_reset_when_task_status_is_empty() {
                 next_task: None,
                 task_show: "task-show".to_string(),
                 task_status: "printf ''".to_string(),
-                task_update_in_progress: "task-update".to_string(),
-                reset_task: format!("printf reset > {}", reset_task_log.display()),
+                task_update_status: "task-update".to_string(),
             },
             hooks: Hooks {
                 on_completed: "true".to_string(),
@@ -2912,7 +2884,7 @@ fn reset_task_on_exit_skips_reset_when_task_status_is_empty() {
 
     assert!(
         !reset_task_log.exists(),
-        "reset-task should not run for empty status"
+        "task-update should not run for empty status"
     );
 }
 
@@ -2933,8 +2905,7 @@ fn reset_task_on_exit_skips_reset_when_task_status_command_fails_to_spawn() {
                 next_task: None,
                 task_show: "task-show".to_string(),
                 task_status: "task-status".to_string(),
-                task_update_in_progress: "task-update".to_string(),
-                reset_task: "reset-task".to_string(),
+                task_update_status: "task-update".to_string(),
             },
             hooks: Hooks {
                 on_completed: "true".to_string(),
@@ -2979,7 +2950,7 @@ fn hook_failure_after_closed_does_not_reset_task_on_exit() {
 
     let temp = TempDir::new().expect("temp dir");
     let task_status_log = temp.path().join("task-status.log");
-    let reset_task_log = temp.path().join("reset-task.log");
+    let reset_task_log = temp.path().join("task-update.log");
     let status_queue = temp.path().join("status-queue.txt");
     fs::write(&status_queue, "closed\n").expect("write status queue");
 
@@ -2991,7 +2962,7 @@ fn hook_failure_after_closed_does_not_reset_task_on_exit() {
     env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
     env::set_var("TASK_STATUS_LOG", &task_status_log);
     env::set_var("TASK_STATUS_QUEUE", &status_queue);
-    env::set_var("RESET_TASK_LOG", &reset_task_log);
+    env::set_var("TASK_UPDATE_LOG", &reset_task_log);
 
     let state = RuntimeState {
         config: Config {
@@ -3001,8 +2972,7 @@ fn hook_failure_after_closed_does_not_reset_task_on_exit() {
                 next_task: None,
                 task_show: "task-show".to_string(),
                 task_status: "task-status".to_string(),
-                task_update_in_progress: "task-update".to_string(),
-                reset_task: "reset-task".to_string(),
+                task_update_status: "task-update".to_string(),
             },
             hooks: Hooks {
                 on_completed: "true".to_string(),
@@ -3037,7 +3007,7 @@ fn hook_failure_after_closed_does_not_reset_task_on_exit() {
     assert!(task_status_log.exists(), "task-status should run at exit");
     assert!(
         !reset_task_log.exists(),
-        "reset-task should not run when task is closed"
+        "task-update should not run when task is closed"
     );
 }
 
@@ -3048,7 +3018,7 @@ fn hook_failure_after_blocked_does_not_reset_task_on_exit() {
 
     let temp = TempDir::new().expect("temp dir");
     let task_status_log = temp.path().join("task-status.log");
-    let reset_task_log = temp.path().join("reset-task.log");
+    let reset_task_log = temp.path().join("task-update.log");
     let status_queue = temp.path().join("status-queue.txt");
     fs::write(&status_queue, "blocked\n").expect("write status queue");
 
@@ -3060,7 +3030,7 @@ fn hook_failure_after_blocked_does_not_reset_task_on_exit() {
     env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
     env::set_var("TASK_STATUS_LOG", &task_status_log);
     env::set_var("TASK_STATUS_QUEUE", &status_queue);
-    env::set_var("RESET_TASK_LOG", &reset_task_log);
+    env::set_var("TASK_UPDATE_LOG", &reset_task_log);
 
     let state = RuntimeState {
         config: Config {
@@ -3070,8 +3040,7 @@ fn hook_failure_after_blocked_does_not_reset_task_on_exit() {
                 next_task: None,
                 task_show: "task-show".to_string(),
                 task_status: "task-status".to_string(),
-                task_update_in_progress: "task-update".to_string(),
-                reset_task: "reset-task".to_string(),
+                task_update_status: "task-update".to_string(),
             },
             hooks: Hooks {
                 on_completed: "true".to_string(),
@@ -3106,7 +3075,7 @@ fn hook_failure_after_blocked_does_not_reset_task_on_exit() {
     assert!(task_status_log.exists(), "task-status should run at exit");
     assert!(
         !reset_task_log.exists(),
-        "reset-task should not run when task is blocked"
+        "task-update should not run when task is blocked"
     );
 }
 
@@ -3117,7 +3086,7 @@ fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
 
     let temp = TempDir::new().expect("temp dir");
     let task_status_log = temp.path().join("task-status.log");
-    let reset_task_log = temp.path().join("reset-task.log");
+    let reset_task_log = temp.path().join("task-update.log");
     let status_queue = temp.path().join("status-queue.txt");
     fs::write(&status_queue, "in_progress\n").expect("write status queue");
 
@@ -3129,7 +3098,7 @@ fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
     env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
     env::set_var("TASK_STATUS_LOG", &task_status_log);
     env::set_var("TASK_STATUS_QUEUE", &status_queue);
-    env::set_var("RESET_TASK_LOG", &reset_task_log);
+    env::set_var("TASK_UPDATE_LOG", &reset_task_log);
 
     let state = RuntimeState {
         config: Config {
@@ -3139,8 +3108,7 @@ fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
                 next_task: None,
                 task_show: "task-show".to_string(),
                 task_status: "task-status".to_string(),
-                task_update_in_progress: "task-update".to_string(),
-                reset_task: "reset-task".to_string(),
+                task_update_status: "task-update".to_string(),
             },
             hooks: Hooks {
                 on_completed: "true".to_string(),
@@ -3175,7 +3143,7 @@ fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
     assert!(task_status_log.exists(), "task-status should run at exit");
     assert!(
         reset_task_log.exists(),
-        "reset-task should run for in_progress"
+        "task-update should run for in_progress"
     );
 }
 
@@ -3186,7 +3154,7 @@ fn sigint_while_in_progress_invokes_reset_task_on_exit() {
 
     let temp = TempDir::new().expect("temp dir");
     let task_status_log = temp.path().join("task-status.log");
-    let reset_task_log = temp.path().join("reset-task.log");
+    let reset_task_log = temp.path().join("task-update.log");
     let status_queue = temp.path().join("status-queue.txt");
     fs::write(&status_queue, "in_progress\n").expect("write status queue");
 
@@ -3198,7 +3166,7 @@ fn sigint_while_in_progress_invokes_reset_task_on_exit() {
     env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
     env::set_var("TASK_STATUS_LOG", &task_status_log);
     env::set_var("TASK_STATUS_QUEUE", &status_queue);
-    env::set_var("RESET_TASK_LOG", &reset_task_log);
+    env::set_var("TASK_UPDATE_LOG", &reset_task_log);
 
     let state = RuntimeState {
         config: Config {
@@ -3208,8 +3176,7 @@ fn sigint_while_in_progress_invokes_reset_task_on_exit() {
                 next_task: None,
                 task_show: "task-show".to_string(),
                 task_status: "task-status".to_string(),
-                task_update_in_progress: "task-update".to_string(),
-                reset_task: "reset-task".to_string(),
+                task_update_status: "task-update".to_string(),
             },
             hooks: Hooks {
                 on_completed: "true".to_string(),
@@ -3244,7 +3211,7 @@ fn sigint_while_in_progress_invokes_reset_task_on_exit() {
     assert!(task_status_log.exists(), "task-status should run at exit");
     assert!(
         reset_task_log.exists(),
-        "reset-task should run for in_progress"
+        "task-update should run for in_progress"
     );
 }
 
@@ -3255,7 +3222,7 @@ fn status_check_failure_at_exit_does_not_invoke_reset_task() {
 
     let temp = TempDir::new().expect("temp dir");
     let task_status_log = temp.path().join("task-status.log");
-    let reset_task_log = temp.path().join("reset-task.log");
+    let reset_task_log = temp.path().join("task-update.log");
     let status_queue = temp.path().join("status-queue.txt");
     fs::write(&status_queue, "in_progress\n").expect("write status queue");
 
@@ -3268,7 +3235,7 @@ fn status_check_failure_at_exit_does_not_invoke_reset_task() {
     env::set_var("TASK_STATUS_EXIT_CODE", "2");
     env::set_var("TASK_STATUS_LOG", &task_status_log);
     env::set_var("TASK_STATUS_QUEUE", &status_queue);
-    env::set_var("RESET_TASK_LOG", &reset_task_log);
+    env::set_var("TASK_UPDATE_LOG", &reset_task_log);
 
     let state = RuntimeState {
         config: Config {
@@ -3278,8 +3245,7 @@ fn status_check_failure_at_exit_does_not_invoke_reset_task() {
                 next_task: None,
                 task_show: "task-show".to_string(),
                 task_status: "task-status".to_string(),
-                task_update_in_progress: "task-update".to_string(),
-                reset_task: "reset-task".to_string(),
+                task_update_status: "task-update".to_string(),
             },
             hooks: Hooks {
                 on_completed: "true".to_string(),
@@ -3314,7 +3280,7 @@ fn status_check_failure_at_exit_does_not_invoke_reset_task() {
     assert!(task_status_log.exists(), "task-status should run at exit");
     assert!(
         !reset_task_log.exists(),
-        "reset-task should not run when status check fails"
+        "task-update should not run when status check fails"
     );
 }
 
@@ -3513,8 +3479,7 @@ agent_review_command: "agent-review"
 commands:
   task_show: "task-show"
   task_status: "task-status"
-  task_update_in_progress: "task-update"
-  reset_task: "reset-task"
+  task_update_status: "task-update"
 review_loop_limit: 2
 hooks:
   on_completed: "true"
@@ -3558,8 +3523,7 @@ commands:
   next_task: "next-task"
   task_show: "task-show"
   task_status: "task-status"
-  task_update_in_progress: "task-update"
-  reset_task: "reset-task"
+  task_update_status: "task-update"
 review_loop_limit: 2
 hooks:
   on_completed: "true"
@@ -3619,8 +3583,7 @@ commands:
   next_task: "next-task"
   task_show: "task-show"
   task_status: "task-status"
-  task_update_in_progress: "task-update"
-  reset_task: "reset-task"
+  task_update_status: "task-update"
 review_loop_limit: 2
 hooks:
   on_completed: "true"
@@ -3682,8 +3645,7 @@ commands:
   next_task: "next-task"
   task_show: "task-show"
   task_status: "task-status"
-  task_update_in_progress: "task-update"
-  reset_task: "reset-task"
+  task_update_status: "task-update"
 review_loop_limit: 2
 hooks:
   on_completed: "true"
@@ -3751,8 +3713,7 @@ commands:
   next_task: "next-task"
   task_show: "task-show"
   task_status: "task-status"
-  task_update_in_progress: "true"
-  reset_task: "true"
+  task_update_status: "true"
 review_loop_limit: 2
 hooks:
   on_completed: "true"
@@ -3816,8 +3777,7 @@ commands:
   next_task: "next-task"
   task_show: "task-show"
   task_status: "task-status"
-  task_update_in_progress: "true"
-  reset_task: "true"
+  task_update_status: "true"
 review_loop_limit: 2
 hooks:
   on_completed: "true"
@@ -3882,8 +3842,7 @@ commands:
   next_task: "next-task"
   task_show: "task-show"
   task_status: "task-status"
-  task_update_in_progress: "true"
-  reset_task: "true"
+  task_update_status: "true"
 review_loop_limit: 2
 hooks:
   on_completed: "true"

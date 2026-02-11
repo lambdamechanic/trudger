@@ -80,12 +80,8 @@ fn build_candidate_value(
         Value::String(tracking.commands.task_status.clone()),
     );
     commands.insert(
-        Value::String("task_update_in_progress".to_string()),
-        Value::String(tracking.commands.task_update_in_progress.clone()),
-    );
-    commands.insert(
-        Value::String("reset_task".to_string()),
-        Value::String(tracking.commands.reset_task.clone()),
+        Value::String("task_update_status".to_string()),
+        Value::String(tracking.commands.task_update_status.clone()),
     );
 
     let mut hooks = Mapping::new();
@@ -609,8 +605,7 @@ fn extract_unknown_key_values(existing: &Mapping) -> (Mapping, Vec<String>) {
         "next_task",
         "task_show",
         "task_status",
-        "task_update_in_progress",
-        "reset_task",
+        "task_update_status",
     ];
     const ALLOWED_HOOKS: &[&str] = &["on_completed", "on_requires_human", "on_doctor_setup"];
 
@@ -798,9 +793,8 @@ fn best_matching_tracking_template_id(
     let existing_next_task = get_string_value_at_path(existing, &["commands", "next_task"]);
     let existing_task_show = get_string_value_at_path(existing, &["commands", "task_show"]);
     let existing_task_status = get_string_value_at_path(existing, &["commands", "task_status"]);
-    let existing_task_update_in_progress =
-        get_string_value_at_path(existing, &["commands", "task_update_in_progress"]);
-    let existing_reset_task = get_string_value_at_path(existing, &["commands", "reset_task"]);
+    let existing_task_update_status =
+        get_string_value_at_path(existing, &["commands", "task_update_status"]);
     let existing_on_completed = get_string_value_at_path(existing, &["hooks", "on_completed"]);
     let existing_on_requires_human =
         get_string_value_at_path(existing, &["hooks", "on_requires_human"]);
@@ -824,12 +818,9 @@ fn best_matching_tracking_template_id(
         if existing_task_status.is_some_and(|value| value == template.commands.task_status) {
             score += 1;
         }
-        if existing_task_update_in_progress
-            .is_some_and(|value| value == template.commands.task_update_in_progress)
+        if existing_task_update_status
+            .is_some_and(|value| value == template.commands.task_update_status)
         {
-            score += 1;
-        }
-        if existing_reset_task.is_some_and(|value| value == template.commands.reset_task) {
             score += 1;
         }
         if existing_on_completed.is_some_and(|value| value == template.hooks.on_completed) {
@@ -869,8 +860,7 @@ fn merge_known_template_keys(
         &["commands", "next_task"],
         &["commands", "task_show"],
         &["commands", "task_status"],
-        &["commands", "task_update_in_progress"],
-        &["commands", "reset_task"],
+        &["commands", "task_update_status"],
         &["hooks", "on_completed"],
         &["hooks", "on_requires_human"],
         &["hooks", "on_doctor_setup"],
@@ -1326,8 +1316,7 @@ commands:
   next_task: "x"
   task_show: "x"
   task_status: "x"
-  task_update_in_progress: "x"
-  reset_task: "x"
+  task_update_status: "x"
 hooks:
   on_completed: "x"
   on_requires_human: "x"
@@ -1388,8 +1377,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 hooks:
   on_completed: "done"
   on_requires_human: "human"
@@ -1495,8 +1483,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
   extra_cmd: "foo"
 hooks:
   on_completed: "done"
@@ -1567,10 +1554,10 @@ hooks:
         );
         set_value_at_path(
             &mut existing_value,
-            &["commands", "reset_task"],
+            &["commands", "task_update_status"],
             unserializable_yaml_value(),
         )
-        .expect("set reset_task");
+        .expect("set task_update_status");
 
         let existing = ExistingConfig {
             mapping: Some(existing_value.as_mapping().expect("mapping").clone()),
@@ -1610,7 +1597,7 @@ hooks:
         let mut existing_value = candidate_value.clone();
         set_value_at_path(
             &mut existing_value,
-            &["commands", "reset_task"],
+            &["commands", "task_update_status"],
             Value::String("different".to_string()),
         )
         .expect("set existing value");
@@ -1627,8 +1614,8 @@ hooks:
                 .expect("merge");
 
         assert_eq!(prompts.len(), 1);
-        assert_eq!(prompts[0].key, "commands.reset_task");
-        assert_eq!(prompted_keys, vec!["commands.reset_task"]);
+        assert_eq!(prompts[0].key, "commands.task_update_status");
+        assert_eq!(prompted_keys, vec!["commands.task_update_status"]);
     }
 
     #[test]
@@ -1709,12 +1696,8 @@ hooks:
             Value::String(bd.commands.task_status.clone()),
         );
         commands.insert(
-            Value::String("task_update_in_progress".to_string()),
-            Value::String(bd.commands.task_update_in_progress.clone()),
-        );
-        commands.insert(
-            Value::String("reset_task".to_string()),
-            Value::String(bd.commands.reset_task.clone()),
+            Value::String("task_update_status".to_string()),
+            Value::String(bd.commands.task_update_status.clone()),
         );
         existing_tracking.insert(
             Value::String("commands".to_string()),
@@ -1772,12 +1755,8 @@ hooks:
             Value::String(tracking.commands.task_status.clone()),
         );
         commands.insert(
-            Value::String("task_update_in_progress".to_string()),
-            Value::String(tracking.commands.task_update_in_progress.clone()),
-        );
-        commands.insert(
-            Value::String("reset_task".to_string()),
-            Value::String(tracking.commands.reset_task.clone()),
+            Value::String("task_update_status".to_string()),
+            Value::String(tracking.commands.task_update_status.clone()),
         );
         existing.insert(
             Value::String("commands".to_string()),
@@ -1858,11 +1837,7 @@ hooks:
             Value::String(tracking.commands.task_status.clone()),
         );
         commands.insert(
-            Value::String("task_update_in_progress".to_string()),
-            Value::String(tracking.commands.task_update_in_progress.clone()),
-        );
-        commands.insert(
-            Value::String("reset_task".to_string()),
+            Value::String("task_update_status".to_string()),
             Value::String("keep-me".to_string()),
         );
         existing.insert(
@@ -1901,7 +1876,7 @@ hooks:
 
         let new_contents = fs::read_to_string(&config_path).expect("read new config");
         let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
-        assert_eq!(loaded.config.commands.reset_task, "keep-me");
+        assert_eq!(loaded.config.commands.task_update_status, "keep-me");
     }
 
     #[test]
@@ -1931,8 +1906,7 @@ hooks:
                     next_task: "next".to_string(),
                     task_show: "show".to_string(),
                     task_status: "status".to_string(),
-                    task_update_in_progress: "update".to_string(),
-                    reset_task: "reset".to_string(),
+                    task_update_status: "update".to_string(),
                 },
                 hooks: TrackingHooks {
                     on_completed: "done".to_string(),
@@ -2073,8 +2047,7 @@ commands:
   next_task: "x"
   task_show: "x"
   task_status: "x"
-  task_update_in_progress: "x"
-  reset_task: "x"
+  task_update_status: "x"
 hooks:
   on_completed: "x"
   on_requires_human: "x"
@@ -2100,8 +2073,7 @@ commands:
   next_task: "x"
   task_show: "x"
   task_status: "x"
-  task_update_in_progress: "x"
-  reset_task: "x"
+  task_update_status: "x"
 hooks:
   on_completed: "x"
   on_requires_human: "x"
@@ -2930,8 +2902,7 @@ commands:
   next_task: ""
   task_show: "x"
   task_status: "x"
-  task_update_in_progress: "x"
-  reset_task: "x"
+  task_update_status: "x"
 hooks:
   on_completed: "x"
   on_requires_human: "x"

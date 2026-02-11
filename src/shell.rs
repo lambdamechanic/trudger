@@ -36,6 +36,7 @@ pub(crate) struct CommandEnv {
     pub(crate) task_id: Option<String>,
     pub(crate) task_show: Option<String>,
     pub(crate) task_status: Option<String>,
+    pub(crate) target_status: Option<String>,
     pub(crate) prompt: Option<String>,
     pub(crate) review_prompt: Option<String>,
     pub(crate) completed: Option<String>,
@@ -67,6 +68,7 @@ impl CommandEnv {
             self.task_id.as_deref(),
             self.task_show.as_deref(),
             self.task_status.as_deref(),
+            self.target_status.as_deref(),
             self.prompt.as_deref(),
             self.review_prompt.as_deref(),
             self.completed.as_deref(),
@@ -91,6 +93,7 @@ impl CommandEnv {
                 self.task_id.as_deref(),
                 self.task_show.as_deref(),
                 self.task_status.as_deref(),
+                self.target_status.as_deref(),
                 self.prompt.as_deref(),
                 self.review_prompt.as_deref(),
                 self.completed.as_deref(),
@@ -155,6 +158,15 @@ impl CommandEnv {
             task_token,
             "TRUDGER_TASK_STATUS",
             self.task_status.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_TARGET_STATUS",
+            self.target_status.as_deref(),
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
         Self::apply_optional_with_max(
@@ -230,6 +242,7 @@ impl CommandEnv {
         task_id: Option<&str>,
         task_show: Option<&str>,
         task_status: Option<&str>,
+        target_status: Option<&str>,
         prompt: Option<&str>,
         review_prompt: Option<&str>,
         completed: Option<&str>,
@@ -252,6 +265,11 @@ impl CommandEnv {
         total += Self::env_entry_payload_bytes(
             "TRUDGER_TASK_STATUS",
             task_status,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_TARGET_STATUS",
+            target_status,
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
         total += Self::env_entry_payload_bytes("TRUDGER_PROMPT", prompt, prompt_max);
@@ -374,6 +392,7 @@ mod tests {
             task_id: None,
             task_show: None,
             task_status: Some(huge.clone()),
+            target_status: None,
             prompt: None,
             review_prompt: None,
             completed: Some(huge),

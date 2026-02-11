@@ -23,8 +23,7 @@ pub(crate) struct TrackingCommands {
     pub(crate) next_task: String,
     pub(crate) task_show: String,
     pub(crate) task_status: String,
-    pub(crate) task_update_in_progress: String,
-    pub(crate) reset_task: String,
+    pub(crate) task_update_status: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -229,8 +228,7 @@ commands:
   next_task: "x"
   task_show: "x"
   task_status: "x"
-  task_update_in_progress: "x"
-  reset_task: "x"
+  task_update_status: "x"
 hooks:
   on_completed: "x"
   on_requires_human: "x"
@@ -297,8 +295,7 @@ commands:
   next_task: "x"
   task_show: "x"
   task_status: "x"
-  task_update_in_progress: "x"
-  reset_task: "x"
+  task_update_status: "x"
 hooks:
   on_completed: "x"
   on_requires_human: "x"
@@ -345,8 +342,7 @@ hooks:
                     next_task: "x".to_string(),
                     task_show: "x".to_string(),
                     task_status: "x".to_string(),
-                    task_update_in_progress: "x".to_string(),
-                    reset_task: "x".to_string(),
+                    task_update_status: "x".to_string(),
                 },
                 hooks: TrackingHooks {
                     on_completed: "x".to_string(),
@@ -389,8 +385,7 @@ hooks:
                     next_task: "x".to_string(),
                     task_show: "x".to_string(),
                     task_status: "x".to_string(),
-                    task_update_in_progress: "x".to_string(),
-                    reset_task: "x".to_string(),
+                    task_update_status: "x".to_string(),
                 },
                 hooks: TrackingHooks {
                     on_completed: "x".to_string(),
@@ -438,8 +433,7 @@ hooks:
                 next_task: "x".to_string(),
                 task_show: "x".to_string(),
                 task_status: "x".to_string(),
-                task_update_in_progress: "x".to_string(),
-                reset_task: "x".to_string(),
+                task_update_status: "x".to_string(),
             },
             hooks: TrackingHooks {
                 on_completed: "x".to_string(),
@@ -479,8 +473,7 @@ hooks:
                     next_task: "x".to_string(),
                     task_show: "x".to_string(),
                     task_status: "x".to_string(),
-                    task_update_in_progress: "x".to_string(),
-                    reset_task: "x".to_string(),
+                    task_update_status: "x".to_string(),
                 },
                 hooks: TrackingHooks {
                     on_completed: "x".to_string(),
@@ -496,8 +489,7 @@ hooks:
                     next_task: "x".to_string(),
                     task_show: "x".to_string(),
                     task_status: "x".to_string(),
-                    task_update_in_progress: "x".to_string(),
-                    reset_task: "x".to_string(),
+                    task_update_status: "x".to_string(),
                 },
                 hooks: TrackingHooks {
                     on_completed: "x".to_string(),
@@ -537,8 +529,7 @@ hooks:
                     next_task: "x".to_string(),
                     task_show: "x".to_string(),
                     task_status: "x".to_string(),
-                    task_update_in_progress: "x".to_string(),
-                    reset_task: "x".to_string(),
+                    task_update_status: "x".to_string(),
                 },
                 hooks: TrackingHooks {
                     on_completed: "x".to_string(),
@@ -585,8 +576,7 @@ hooks:
                     next_task: "x".to_string(),
                     task_show: "x".to_string(),
                     task_status: "x".to_string(),
-                    task_update_in_progress: "x".to_string(),
-                    reset_task: "x".to_string(),
+                    task_update_status: "x".to_string(),
                 },
                 hooks: TrackingHooks {
                     on_completed: "x".to_string(),

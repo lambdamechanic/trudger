@@ -51,7 +51,7 @@ The system SHALL parse `~/.config/trudger.yml` using native Rust YAML parsing an
 - **THEN** the system loads and validates the configuration successfully
 
 ### Requirement: Configuration validation
-The system SHALL require `agent_command`, `agent_review_command`, `review_loop_limit`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `commands.reset_task`, `hooks.on_completed`, and `hooks.on_requires_human` to be present and non-empty.
+The system SHALL require `agent_command`, `agent_review_command`, `review_loop_limit`, `commands.task_show`, `commands.task_status`, `commands.task_update_status`, `hooks.on_completed`, and `hooks.on_requires_human` to be present and non-empty.
 
 `commands.next_task` SHALL be required only when no manual task ids are provided.
 

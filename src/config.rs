@@ -32,8 +32,7 @@ pub struct Commands {
     pub next_task: Option<String>,
     pub task_show: String,
     pub task_status: String,
-    pub task_update_in_progress: String,
-    pub reset_task: String,
+    pub task_update_status: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -111,8 +110,7 @@ fn unknown_config_keys(mapping: &Mapping) -> Vec<String> {
             "next_task",
             "task_show",
             "task_status",
-            "task_update_in_progress",
-            "reset_task",
+            "task_update_status",
         ],
     ));
     keys.extend(unknown_nested_keys(
@@ -149,10 +147,9 @@ fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
     require_non_empty_string(commands, "task_status", "commands.task_status")?;
     require_non_empty_string(
         commands,
-        "task_update_in_progress",
-        "commands.task_update_in_progress",
+        "task_update_status",
+        "commands.task_update_status",
     )?;
-    require_non_empty_string(commands, "reset_task", "commands.reset_task")?;
 
     let hooks = require_mapping(mapping, "hooks", "hooks")?;
     require_non_empty_string(hooks, "on_completed", "hooks.on_completed")?;
@@ -278,8 +275,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 log_path: [123]
 hooks:
@@ -300,8 +296,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 log_path: "./log"
 hooks:
@@ -318,8 +313,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 log_path: "./log"
 hooks:
@@ -352,8 +346,7 @@ review_loop_limit: 3
 commands:
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 "#;
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected missing hooks mapping");
@@ -369,8 +362,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 log_path: "./log"
 hooks:
@@ -391,8 +383,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
@@ -409,8 +400,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
@@ -431,8 +421,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 hooks:
   on_completed: "done"
   on_requires_human: "human"
@@ -451,8 +440,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: null
 log_path: "./log"
 hooks:
@@ -473,8 +461,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 0
 hooks:
   on_completed: "done"
@@ -522,7 +509,7 @@ hooks:
     }
 
     #[test]
-    fn missing_task_update_in_progress_errors() {
+    fn missing_task_update_status_errors() {
         let config = r#"
 agent_command: "agent"
 agent_review_command: "review"
@@ -530,15 +517,14 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  reset_task: "reset"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
   on_requires_human: "human"
 "#;
         let file = write_temp_config(config);
-        let err = load_config(file.path()).expect_err("expected missing task_update_in_progress");
-        assert!(err.contains("commands.task_update_in_progress"));
+        let err = load_config(file.path()).expect_err("expected missing task_update_status");
+        assert!(err.contains("commands.task_update_status"));
     }
 
     #[test]
@@ -558,8 +544,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 log_path: "./log"
 hooks:
@@ -581,8 +566,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
   extra_command_key: "mystery"
 review_loop_limit: 3
 hooks:
@@ -611,8 +595,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 log_path: "./log"
 hooks:
@@ -635,8 +618,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
@@ -654,8 +636,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
@@ -673,8 +654,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
@@ -696,8 +676,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 log_path: 123
 hooks:
@@ -719,8 +698,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
@@ -740,8 +718,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 log_path: ""
 hooks:
@@ -762,8 +739,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 log_path: null
 hooks:
@@ -794,8 +770,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: "not-a-number"
 hooks:
   on_completed: "done"
@@ -819,8 +794,7 @@ agent_review_command: "review"
 commands:
   next_task: "next"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
@@ -836,8 +810,7 @@ agent_review_command: "review"
 commands:
   next_task: "next"
   task_show: "show"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
@@ -854,15 +827,14 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
   on_requires_human: "human"
 "#;
         let file = write_temp_config(config);
-        let err = load_config(file.path()).expect_err("expected missing reset_task");
-        assert!(err.contains("commands.reset_task"));
+        let err = load_config(file.path()).expect_err("expected missing task_update_status");
+        assert!(err.contains("commands.task_update_status"));
     }
 
     #[test]
@@ -874,8 +846,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 hooks:
   on_requires_human: "human"
@@ -891,8 +862,7 @@ commands:
   next_task: "next"
   task_show: "show"
   task_status: "status"
-  task_update_in_progress: "update"
-  reset_task: "reset"
+  task_update_status: "update"
 review_loop_limit: 3
 hooks:
   on_completed: "done"

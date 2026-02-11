@@ -48,7 +48,7 @@ The wizard SHALL set `review_loop_limit` and `log_path` using embedded defaults 
 - **THEN** the output preserves the existing values for `review_loop_limit` and `log_path`
 
 ### Requirement: Wizard per-key replacement prompts
-When a config file exists at the target path and the selected templates would change one or more known Trudger config keys (`agent_command`, `agent_review_command`, `commands.next_task`, `commands.task_show`, `commands.task_status`, `commands.task_update_in_progress`, `commands.reset_task`, `hooks.on_completed`, `hooks.on_requires_human`, `hooks.on_doctor_setup`), the wizard SHALL show a per-key diff (current value and proposed value) for each differing key and prompt the user to keep the current value or replace it with the proposed value. The wizard SHALL default to keeping the current value for each prompt.
+When a config file exists at the target path and the selected templates would change one or more known Trudger config keys (`agent_command`, `agent_review_command`, `commands.next_task`, `commands.task_show`, `commands.task_status`, `commands.task_update_status`, `hooks.on_completed`, `hooks.on_requires_human`, `hooks.on_doctor_setup`), the wizard SHALL show a per-key diff (current value and proposed value) for each differing key and prompt the user to keep the current value or replace it with the proposed value. The wizard SHALL default to keeping the current value for each prompt.
 
 #### Scenario: Per-key diff and replacement
 - **GIVEN** an existing config file differs from the selected templates for one or more known keys

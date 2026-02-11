@@ -83,11 +83,8 @@ pub(crate) fn validate_config(config: &Config, manual_tasks: &[TaskId]) -> Resul
     if config.commands.task_status.trim().is_empty() {
         return Err("commands.task_status must not be empty.".to_string());
     }
-    if config.commands.task_update_in_progress.trim().is_empty() {
-        return Err("commands.task_update_in_progress must not be empty.".to_string());
-    }
-    if config.commands.reset_task.trim().is_empty() {
-        return Err("commands.reset_task must not be empty.".to_string());
+    if config.commands.task_update_status.trim().is_empty() {
+        return Err("commands.task_update_status must not be empty.".to_string());
     }
     if config.hooks.on_completed.trim().is_empty() {
         return Err("hooks.on_completed must not be empty.".to_string());
@@ -104,6 +101,7 @@ fn build_command_env(
     task_id: Option<&TaskId>,
     prompt: Option<String>,
     review_prompt: Option<String>,
+    target_status: Option<String>,
 ) -> CommandEnv {
     fn join_task_ids(tasks: &[TaskId]) -> String {
         let mut out = String::new();
@@ -142,6 +140,7 @@ fn build_command_env(
             .current_task_status
             .as_ref()
             .map(|value| value.as_str().to_string()),
+        target_status,
         prompt,
         review_prompt,
         completed,
@@ -156,7 +155,7 @@ fn run_config_command(
     log_label: &str,
     args: &[String],
 ) -> Result<CommandResult, String> {
-    let env = build_command_env(state, task_id, None, None);
+    let env = build_command_env(state, task_id, None, None, None);
     run_shell_command_capture(
         command,
         log_label,
@@ -172,9 +171,16 @@ fn run_config_command_status(
     command: &str,
     task_id: Option<&TaskId>,
     log_label: &str,
+    target_status: Option<&str>,
     args: &[String],
 ) -> Result<i32, String> {
-    let env = build_command_env(state, task_id, None, None);
+    let env = build_command_env(
+        state,
+        task_id,
+        None,
+        None,
+        target_status.map(|value| value.to_string()),
+    );
     run_shell_command_status(
         command,
         log_label,
@@ -193,7 +199,7 @@ fn run_agent_command(
     review_prompt: Option<String>,
     args: &[String],
 ) -> Result<i32, String> {
-    let env = build_command_env(state, None, prompt, review_prompt);
+    let env = build_command_env(state, None, prompt, review_prompt, None);
     run_shell_command_status(command, log_label, "none", args, &env, &state.logger)
 }
 
@@ -319,17 +325,17 @@ fn update_task_status(
     task_id: &TaskId,
     status: TaskStatus,
 ) -> Result<(), String> {
-    let args = vec!["--status".to_string(), status.as_str().to_string()];
     let exit = run_config_command_status(
         state,
-        &state.config.commands.task_update_in_progress,
+        &state.config.commands.task_update_status,
         Some(task_id),
         "task",
-        &args,
+        Some(status.as_str()),
+        &[],
     )?;
     if exit != 0 {
         return Err(format!(
-            "task_update_in_progress failed to set status {} (exit code {})",
+            "task_update_status failed to set status {} (exit code {})",
             status.as_str(),
             exit
         ));
@@ -342,17 +348,7 @@ fn update_in_progress(state: &RuntimeState, task_id: &TaskId) -> Result<(), Stri
 }
 
 fn reset_task(state: &RuntimeState, task_id: &TaskId) -> Result<(), String> {
-    let exit = run_config_command_status(
-        state,
-        &state.config.commands.reset_task,
-        Some(task_id),
-        "reset_task",
-        &[],
-    )?;
-    if exit != 0 {
-        return Err(format!("reset_task failed with exit code {}", exit));
-    }
-    Ok(())
+    update_task_status(state, task_id, TaskStatus::Open)
 }
 
 fn task_status_token(state: &RuntimeState, task_id: &TaskId) -> Result<Option<TaskStatus>, String> {
@@ -449,7 +445,7 @@ fn run_hook(
         return Ok(());
     }
 
-    let exit = run_config_command_status(state, hook_command, Some(task_id), hook_name, &[])?;
+    let exit = run_config_command_status(state, hook_command, Some(task_id), hook_name, None, &[])?;
     if exit != 0 {
         return Err(format!("hook {} failed with exit code {}", hook_name, exit));
     }
@@ -790,8 +786,7 @@ mod tests {
                     next_task: None,
                     task_show: "true".to_string(),
                     task_status: "true".to_string(),
-                    task_update_in_progress: "true".to_string(),
-                    reset_task: "true".to_string(),
+                    task_update_status: "true".to_string(),
                 },
                 hooks: crate::config::Hooks {
                     on_completed: "true".to_string(),
@@ -826,7 +821,7 @@ mod tests {
         let mut state = base_state(&temp);
         state.completed_tasks = vec![task("tr-1"), task("tr-2")];
 
-        let env = build_command_env(&state, None, None, None);
+        let env = build_command_env(&state, None, None, None, None);
         assert_eq!(env.completed.as_deref(), Some("tr-1,tr-2"));
     }
 
@@ -1212,7 +1207,7 @@ mod tests {
         let update_gate = temp.path().join("update-gate");
         let started_path = update_started.display().to_string();
         let gate_path = update_gate.display().to_string();
-        state.config.commands.task_update_in_progress = format!(
+        state.config.commands.task_update_status = format!(
             "touch '{started_path}'; while [ ! -f '{gate_path}' ]; do sleep 0.01; done; true"
         );
 

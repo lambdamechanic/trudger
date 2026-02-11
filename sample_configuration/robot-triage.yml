@@ -9,8 +9,7 @@ commands:
   next_task: 'task_id=""; while IFS= read -r candidate; do status=$(br show "$candidate" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"); if [[ "$status" != "blocked" ]]; then task_id="$candidate"; break; fi; done < <(bv --robot-triage | jq -r ".triage.blockers_to_clear[] | select(.actionable == true) | .id"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
   task_show: 'br show "$TRUDGER_TASK_ID"'
   task_status: 'br show "$TRUDGER_TASK_ID" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
-  task_update_in_progress: 'br update "$TRUDGER_TASK_ID" "$@"'
-  reset_task: 'br update "$TRUDGER_TASK_ID" --status open'
+  task_update_status: 'br update "$TRUDGER_TASK_ID" --status "$TRUDGER_TARGET_STATUS"'
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
