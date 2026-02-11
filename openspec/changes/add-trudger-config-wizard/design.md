@@ -61,7 +61,7 @@ Tracking templates (labels fixed per request):
   - `commands.task_update_in_progress`: `br update "$TRUDGER_TASK_ID" "$@"`
   - `commands.reset_task`: `br update "$TRUDGER_TASK_ID" --status open`
   - `hooks.on_completed`: `br label remove "$TRUDGER_TASK_ID" "trudgeable"`
-  - `hooks.on_requires_human`: `br label remove "$TRUDGER_TASK_ID" "trudgeable"; br label add "$TRUDGER_TASK_ID" "human-required"`
+  - `hooks.on_requires_human`: `br label remove "$TRUDGER_TASK_ID" "trudgeable"; br label add "$TRUDGER_TASK_ID" "human_required"`
   - `hooks.on_doctor_setup`: `rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"`
 - **bd-labels** (legacy label-based)
   - Same commands as above but using `bd` instead of `br`.

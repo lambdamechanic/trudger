@@ -17,7 +17,7 @@ Work the specified task to completion in the current repo. The task details from
 - Keep changes minimal and aligned to the task scope.
 - Run the relevant tests/quality gates.
 - Commit and push your changes.
-- Do not close the task or apply `requires-human` in this step; leave that for the review prompt.
+- Do not close the task or apply `human_required` in this step; leave that for the review prompt.
 
 **If blocked**
 - Leave any intermediate notes you believe will help review, but do not label the task.

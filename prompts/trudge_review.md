@@ -20,7 +20,7 @@ Review the specified task after the solve step and update the task state accordi
 - Remove the `trudgeable` label (or equivalent) via your task system.
 
 **If human input is required**
-- Add a `requires-human` label (or equivalent).
+- Add a `human_required` label (or equivalent).
 - Remove the `trudgeable` label (or equivalent).
 - Add a task comment with a clear, specific question or decision needed.
 - Update task notes with a concise summary of the blocker, what was attempted, and what is needed next.

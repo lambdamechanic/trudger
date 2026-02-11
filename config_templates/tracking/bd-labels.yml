@@ -9,5 +9,5 @@ commands:
   reset_task: 'bd update "$TRUDGER_TASK_ID" --status open'
 hooks:
   on_completed: 'bd label remove "$TRUDGER_TASK_ID" "trudgeable"'
-  on_requires_human: 'bd label remove "$TRUDGER_TASK_ID" "trudgeable"; bd label add "$TRUDGER_TASK_ID" "human-required"'
+  on_requires_human: 'bd label remove "$TRUDGER_TASK_ID" "trudgeable"; bd label add "$TRUDGER_TASK_ID" "human_required"'
   on_doctor_setup: 'rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'

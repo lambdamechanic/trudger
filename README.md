@@ -74,7 +74,7 @@ Sample configs:
 - `sample_configuration/trudgeable-with-hooks.yml`
   - Selects the next ready br task labeled `trudgeable`.
   - On completion, removes `trudgeable`.
-  - On requires-human, removes `trudgeable` and adds `human-required`.
+  - On requires-human, removes `trudgeable` and adds `human_required`.
 - `sample_configuration/robot-triage.yml`
   - Selects tasks via `bv --robot-triage`.
   - No label changes (hooks are no-ops).
@@ -102,7 +102,7 @@ log_path: "./.trudger.log"
 
 hooks:
   on_completed: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"'
-  on_requires_human: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"; br label add "$TRUDGER_TASK_ID" "human-required"'
+  on_requires_human: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"; br label add "$TRUDGER_TASK_ID" "human_required"'
   on_doctor_setup: 'rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'
 ```
 
