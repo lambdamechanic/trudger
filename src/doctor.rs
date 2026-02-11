@@ -1307,16 +1307,17 @@ mod tests {
         crate::unit_tests::reset_test_env();
 
         let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"open\"}\n");
-        let reset_marker = scratch.path().join("reset-marker");
-        let marker_path = reset_marker.display().to_string();
+        let call_count_path = scratch.path().join("update-call-count");
+        let call_count_path_str = call_count_path.display().to_string();
 
         let queue_path = scratch.path().join("status-queue.txt");
         fs::write(&queue_path, "open\nin_progress\n").expect("write queue");
 
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
-        config.commands.task_update_status =
-            format!("if [ -f '{marker_path}' ]; then exit 2; fi; touch '{marker_path}'; exit 0");
+        config.commands.task_update_status = format!(
+            "status=\"${{TRUDGER_TARGET_STATUS:-}}\"; count=0; if [ -f '{call_count_path_str}' ]; then count=$(cat '{call_count_path_str}'); fi; count=$((count+1)); printf '%s\\n' \"$count\" > '{call_count_path_str}'; if [ \"$status\" = \"open\" ] && [ \"$count\" -eq 3 ]; then exit 2; fi; exit 0"
+        );
         let scratch_path = scratch.path().display().to_string();
         let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
@@ -1518,15 +1519,35 @@ mod tests {
         crate::unit_tests::reset_test_env();
 
         let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"open\"}\n");
-        let update_marker = scratch.path().join("update-marker");
-        let marker_path = update_marker.display().to_string();
 
         let queue_path = scratch.path().join("status-queue.txt");
         fs::write(&queue_path, "open\nin_progress\nopen\n").expect("write queue");
         let mut config = base_config();
         config.commands.task_status = status_queue_command(&queue_path);
         config.commands.task_update_status =
-            format!("if [ -f '{marker_path}' ]; then exit 2; fi; touch '{marker_path}'; exit 0");
+            "if [ \"${TRUDGER_TARGET_STATUS:-}\" = \"closed\" ]; then exit 2; fi; exit 0"
+                .to_string();
+        let scratch_path = scratch.path().display().to_string();
+        let config_path = scratch.path().join("trudger.yml");
+        let logger = Logger::new(None);
+        let ctx = doctor_ctx(&config, &config_path, &scratch, &scratch_path, &logger);
+        let err = run_doctor_checks(&ctx).expect_err("expected task_update_status error");
+        assert!(err.contains("failed to set status closed"));
+    }
+
+    #[test]
+    fn run_doctor_checks_propagates_task_update_errors_when_setting_in_progress() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let scratch = scratch_with_issues("{\"id\":\"a-task\",\"status\":\"open\"}\n");
+        let queue_path = scratch.path().join("status-queue.txt");
+        fs::write(&queue_path, "open\n").expect("write queue");
+        let mut config = base_config();
+        config.commands.task_status = status_queue_command(&queue_path);
+        config.commands.task_update_status =
+            "if [ \"${TRUDGER_TARGET_STATUS:-}\" = \"in_progress\" ]; then exit 2; fi; exit 0"
+                .to_string();
         let scratch_path = scratch.path().display().to_string();
         let config_path = scratch.path().join("trudger.yml");
         let logger = Logger::new(None);
