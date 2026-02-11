@@ -29,7 +29,7 @@ The system SHALL load task command configuration from `~/.config/trudger.yml` an
 
 ## MODIFIED Requirements
 ### Requirement: Task selection
-The script SHALL select the next task by running the configured `commands.next_task` command and using the first whitespace-delimited token of its output as the task id. The task id SHALL be passed as the first argument to other configured commands and hooks.
+The script SHALL select the next task by running the configured `commands.next_task` command and using the first whitespace-delimited token of its output as the task id. The task id SHALL be provided to other configured commands and hooks via `TRUDGER_TASK_ID`.
 
 #### Scenario: Custom next-task command
 - **GIVEN** a configured `commands.next_task` command
@@ -47,34 +47,34 @@ The script SHALL select the next task by running the configured `commands.next_t
 - **THEN** the script exits non-zero with a clear error
 
 ### Requirement: Task show command
-The script SHALL obtain task state by executing `commands.task_show` with the task id as the first argument. The show command output is treated as free-form text and provided to Codex; Trudger MUST NOT parse or validate it.
+The script SHALL obtain task state by executing `commands.task_show` with `TRUDGER_TASK_ID` set in the environment and no positional task arguments. The show command output is treated as free-form text and provided to the agent; Trudger MUST NOT parse or validate it.
 
 #### Scenario: Show command output
 - **GIVEN** `commands.task_show` is configured
 - **WHEN** Trudger needs task state
-- **THEN** it executes the command as `<command> <task_id> <extra args>`
-- **AND** it passes the output to Codex without parsing
+- **THEN** it executes the command with `TRUDGER_TASK_ID` set and no positional task id
+- **AND** it provides the output to the agent without parsing
 
 ### Requirement: Task update command
-Before running the solve prompt, the script SHALL execute `commands.task_update_in_progress` with the task id as the first argument. The update command output is ignored.
+Before running the solve prompt, the script SHALL execute `commands.task_update_status` with `TRUDGER_TASK_ID` set in the environment and no positional task arguments. The update command output is ignored.
 
 #### Scenario: Update command execution
-- **GIVEN** `commands.task_update_in_progress` is configured
+- **GIVEN** `commands.task_update_status` is configured
 - **WHEN** Trudger begins work on a task
-- **THEN** it executes the command as `<command> <task_id> <extra args>`
+- **THEN** it executes the command with `TRUDGER_TASK_ID` set and no positional task id
 
 ### Requirement: Task closure on success
-When the review step results in the task being closed, the script SHALL invoke the configured completion hook by executing the hook command with the task id as the first argument and the remaining configured tokens as subsequent arguments. The script SHALL NOT perform label updates itself.
+When the review step results in the task being closed, the script SHALL invoke the configured completion hook with `TRUDGER_TASK_ID` set in the environment and no positional task arguments. The script SHALL NOT perform label updates itself.
 
 #### Scenario: Completion hook configured
 - **GIVEN** a configured completion hook command
 - **WHEN** the task is closed after review
-- **THEN** the hook is executed as `<command> <task_id> <extra args>`
+- **THEN** the hook is executed with `TRUDGER_TASK_ID` set and no positional task id
 
 ### Requirement: Requires-human escalation
-When the review step indicates human input is required, the script SHALL invoke the configured requires-human hook by executing the hook command with the task id as the first argument and the remaining configured tokens as subsequent arguments. The script SHALL NOT perform label updates itself. Human-input requirement is detected when the task remains open after review.
+When the review step indicates human input is required, the script SHALL invoke the configured requires-human hook with `TRUDGER_TASK_ID` set in the environment and no positional task arguments. The script SHALL NOT perform label updates itself. Human-input requirement is detected when the task remains open after review.
 
 #### Scenario: Requires-human hook configured
 - **GIVEN** a configured requires-human hook command
 - **WHEN** the requires-human condition is detected after review
-- **THEN** the hook is executed as `<command> <task_id> <extra args>`
+- **THEN** the hook is executed with `TRUDGER_TASK_ID` set and no positional task id

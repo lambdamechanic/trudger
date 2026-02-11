@@ -3,18 +3,69 @@ set -euo pipefail
 
 log_path="${CODEX_MOCK_LOG:-}"
 if [[ -n "${log_path}" ]]; then
-  printf 'codex %s\n' "$*" >> "${log_path}"
+  sanitize_log_value() {
+    local value="$1"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '%s' "$value"
+  }
+  log_env_flag() {
+    local name="$1"
+    if [[ -v $name ]]; then
+      printf 'envset %s=1\n' "$name"
+    else
+      printf 'envset %s=0\n' "$name"
+    fi
+  }
+  log_env_value() {
+    local name="$1"
+    local value="${!name-}"
+    printf 'env %s=%s\n' "$name" "$(sanitize_log_value "$value")"
+  }
+  {
+    printf 'codex %s\n' "$*"
+    log_env_flag "TRUDGER_PROMPT"
+    log_env_flag "TRUDGER_REVIEW_PROMPT"
+    log_env_flag "TRUDGER_TASK_ID"
+    log_env_flag "TRUDGER_TASK_SHOW"
+    log_env_flag "TRUDGER_TASK_STATUS"
+    log_env_flag "TRUDGER_CONFIG_PATH"
+    log_env_value "TRUDGER_PROMPT"
+    log_env_value "TRUDGER_REVIEW_PROMPT"
+    log_env_value "TRUDGER_TASK_ID"
+    log_env_value "TRUDGER_TASK_SHOW"
+    log_env_value "TRUDGER_TASK_STATUS"
+    log_env_value "TRUDGER_CONFIG_PATH"
+  } >> "${log_path}"
 fi
 
 fail_on="${CODEX_MOCK_FAIL_ON:-}"
+is_exec=0
+is_resume=0
+for ((i=1; i<=$#; i++)); do
+  arg="${!i}"
+  if [[ "$arg" == "exec" ]]; then
+    is_exec=1
+    next_index=$((i + 1))
+    if (( next_index <= $# )); then
+      next_arg="${!next_index}"
+      if [[ "$next_arg" == "resume" ]]; then
+        is_resume=1
+      fi
+    fi
+    break
+  fi
+done
+
 case "${fail_on}" in
   exec)
-    if [[ "${1:-}" == "exec" && "${2:-}" != "resume" ]]; then
+    if (( is_exec == 1 )) && (( is_resume == 0 )); then
       exit 1
     fi
     ;;
   resume)
-    if [[ "${1:-}" == "exec" && "${2:-}" == "resume" ]]; then
+    if (( is_resume == 1 )); then
       exit 1
     fi
     ;;

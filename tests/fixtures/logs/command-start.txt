@@ -1,0 +1,1 @@
+cmd start label=next-task task=tr-1 mode=bash_lc command=next-task\t--with-tab args=tr-1 'with space' 'tab\targ' '#start' '~home' 'foo$bar' 'foo"bar' 'foo\bar' 

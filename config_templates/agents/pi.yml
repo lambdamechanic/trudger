@@ -1,0 +1,5 @@
+id: pi
+label: Pi
+description: Use the pi CLI for solve and review.
+agent_command: 'pi --prompt "$TRUDGER_PROMPT"'
+agent_review_command: 'pi --prompt "$TRUDGER_REVIEW_PROMPT" "$@"'

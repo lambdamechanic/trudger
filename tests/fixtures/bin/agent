@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_path="${AGENT_MOCK_LOG:-}"
+if [[ -n "${log_path}" ]]; then
+  printf 'agent %s\n' "$*" >> "${log_path}"
+fi

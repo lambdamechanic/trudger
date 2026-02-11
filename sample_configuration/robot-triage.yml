@@ -1,14 +1,19 @@
 # Robot triage
-# - Selects tasks via `bv --robot-next` (exits 1 when none).
+# - Selects tasks via `bv --robot-triage`, then picks the first
+#   blocker-to-clear that is not status=blocked (exits 1 when none).
 # - No label changes (hooks are no-ops).
-codex_command: "codex --yolo exec"
+# - On interruption or failure, resets task status to open (task id via TRUDGER_TASK_ID).
+agent_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_PROMPT"'
+agent_review_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_REVIEW_PROMPT" "$@"'
 commands:
-  next_task: 'task_id=$(bv --robot-next | jq -r ".id // empty"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
-  task_show: "bd show"
-  task_update_in_progress: "bd update"
+  next_task: 'task_id=""; while IFS= read -r candidate; do status=$(br show "$candidate" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"); if [[ "$status" != "blocked" ]]; then task_id="$candidate"; break; fi; done < <(bv --robot-triage | jq -r ".triage.blockers_to_clear[] | select(.actionable == true) | .id"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
+  task_show: 'br show "$TRUDGER_TASK_ID"'
+  task_status: 'br show "$TRUDGER_TASK_ID" --json | jq -r "if type == \"array\" then .[0].status // \"\" else .status // \"\" end"'
+  task_update_status: 'br update "$TRUDGER_TASK_ID" --status "$TRUDGER_TARGET_STATUS"'
 review_loop_limit: 5
 log_path: "./.trudger.log"
 
 hooks:
   on_completed: "true"
   on_requires_human: "true"
+  on_doctor_setup: 'rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'

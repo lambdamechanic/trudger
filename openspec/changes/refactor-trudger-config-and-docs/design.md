@@ -8,7 +8,7 @@ Trudger currently parses YAML config with a minimal custom parser, and docs/spec
   - Reduce duplication in tests and fixture scripts.
 - Non-Goals:
   - Change task selection semantics beyond documented behavior.
-  - Modify Codex prompt content or hook semantics.
+  - Modify agent prompt content or hook semantics.
 
 ## Decisions
 - Decision: Use `yq` to parse `~/.config/trudger.yml` (any implementation acceptable).

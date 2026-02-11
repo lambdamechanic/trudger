@@ -10,16 +10,13 @@ if [[ "${1:-}" == "--force" ]]; then
 fi
 
 if [[ "$#" -ne 0 ]]; then
-  printf 'Usage: %s [--force]\n' "$0" >&2
+  printf 'Usage: %s [--force]\n\nInstalls prompt files under ~/.codex/prompts.\n' "$0" >&2
   exit 1
 fi
 
-bin_dir="${HOME}/.local/bin"
 prompt_dir="${HOME}/.codex/prompts"
 
-mkdir -p "$bin_dir" "$prompt_dir"
-
-install -m 0755 "${root_dir}/trudger" "${bin_dir}/trudger"
+mkdir -p "$prompt_dir"
 install_prompt() {
   local src="$1"
   local dst="$2"
@@ -48,4 +45,12 @@ install_prompt() {
 install_prompt "${root_dir}/prompts/trudge.md" "${prompt_dir}/trudge.md"
 install_prompt "${root_dir}/prompts/trudge_review.md" "${prompt_dir}/trudge_review.md"
 
-printf 'Installed trudger to %s and prompts to %s\n' "$bin_dir" "$prompt_dir"
+cat <<EOF
+Installed prompts to ${prompt_dir}
+
+Install the Rust binary with cargo:
+  cargo install --path "${root_dir}" --locked
+
+Ensure "\$HOME/.cargo/bin" is on your PATH, then run:
+  trudger --help
+EOF

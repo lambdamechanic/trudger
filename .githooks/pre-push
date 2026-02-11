@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf 'pre-push: missing required command: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+require_cmd shellcheck
+require_cmd cargo
+
+printf 'pre-push: running shellcheck...\n'
+shellcheck \
+  "${root_dir}/trudger" \
+  "${root_dir}/install.sh"
+
+printf 'pre-push: running cargo fmt...\n'
+cargo fmt --check
+
+printf 'pre-push: running cargo clippy...\n'
+cargo clippy --all-targets -- -D warnings
+
+if command -v cargo-nextest >/dev/null 2>&1; then
+  printf 'pre-push: running cargo nextest...\n'
+  cargo nextest run
+else
+  printf 'pre-push: cargo-nextest not found; running cargo test...\n'
+  cargo test
+fi
