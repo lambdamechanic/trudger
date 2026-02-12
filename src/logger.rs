@@ -4,10 +4,15 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::shell::{run_shell_command_status, CommandEnv};
+
 #[derive(Debug)]
 pub(crate) struct Logger {
     path: Option<PathBuf>,
     disabled: AtomicBool,
+    all_logs_notification_command: Option<String>,
+    notification_config_path: String,
+    notification_in_flight: AtomicBool,
 }
 
 impl Logger {
@@ -15,10 +20,31 @@ impl Logger {
         Self {
             path,
             disabled: AtomicBool::new(false),
+            all_logs_notification_command: None,
+            notification_config_path: String::new(),
+            notification_in_flight: AtomicBool::new(false),
         }
     }
 
+    pub(crate) fn configure_all_logs_notification(
+        &mut self,
+        hook_command: Option<&str>,
+        config_path: &Path,
+    ) {
+        self.all_logs_notification_command = hook_command
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string());
+        self.notification_config_path = config_path.display().to_string();
+    }
+
     pub(crate) fn log_transition(&self, message: &str) {
+        self.dispatch_all_logs_notification_if_needed();
+
+        self.write_transition(message);
+    }
+
+    fn write_transition(&self, message: &str) {
         let Some(path) = &self.path else {
             return;
         };
@@ -38,6 +64,64 @@ impl Logger {
         if let Err(err) = file.write_all(line.as_bytes()) {
             self.disable_with_warning(path, &err);
         }
+    }
+
+    fn dispatch_all_logs_notification_if_needed(&self) {
+        let Some(command) = self.all_logs_notification_command.as_deref() else {
+            return;
+        };
+
+        if self
+            .notification_in_flight
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        let env = CommandEnv {
+            cwd: None,
+            config_path: self.notification_config_path.clone(),
+            scratch_dir: None,
+            task_id: None,
+            task_show: None,
+            task_status: None,
+            target_status: None,
+            prompt: None,
+            review_prompt: None,
+            completed: None,
+            needs_human: None,
+            notify_event: Some("log".to_string()),
+        };
+
+        let result = run_shell_command_status(command, "on_notification", "none", &[], &env, self);
+        match result {
+            Ok(0) => {}
+            Ok(exit_code) => {
+                // Avoid recursive notification dispatch for notification-generated transitions.
+                self.write_transition(&format!(
+                    "notification_hook_failed event=log task=none exit_code={}",
+                    exit_code
+                ));
+                let mut stderr = std::io::stderr().lock();
+                let _ = writeln!(
+                    stderr,
+                    "Warning: notification hook failed with exit code {}.",
+                    exit_code
+                );
+            }
+            Err(err) => {
+                let escaped = sanitize_log_value(&err);
+                self.write_transition(&format!(
+                    "notification_hook_failed event=log task=none err={}",
+                    escaped
+                ));
+                let mut stderr = std::io::stderr().lock();
+                let _ = writeln!(stderr, "Warning: failed to run notification hook: {}.", err);
+            }
+        }
+
+        self.notification_in_flight.store(false, Ordering::SeqCst);
     }
 
     fn disable_with_warning(&self, path: &Path, err: &std::io::Error) {

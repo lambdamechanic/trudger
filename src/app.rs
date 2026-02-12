@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::cli::{parse_manual_tasks, Cli, CliCommand};
-use crate::config::load_config;
+use crate::config::{load_config, NotificationScope};
 use crate::doctor::run_doctor_mode;
 use crate::logger::Logger;
 use crate::run_loop::{
@@ -169,10 +169,20 @@ where
         reason: message,
     })?;
 
-    let logger = Logger::new(loaded.config.log_path.clone());
+    let mut logger = Logger::new(loaded.config.log_path.clone());
 
     if mode == AppMode::Doctor {
         return run_doctor_mode(&loaded.config, &config_path, &logger);
+    }
+
+    if matches!(
+        loaded.config.hooks.effective_notification_scope(),
+        Some(NotificationScope::AllLogs)
+    ) {
+        logger.configure_all_logs_notification(
+            loaded.config.hooks.on_notification.as_deref(),
+            &config_path,
+        );
     }
 
     if let Err(message) = validate_config(&loaded.config, &manual_tasks) {

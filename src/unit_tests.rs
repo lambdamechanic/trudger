@@ -3988,6 +3988,96 @@ log_path: ""
 }
 
 #[test]
+fn run_with_cli_dispatches_all_logs_notifications_when_log_path_is_empty() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    let hook_log = temp.path().join("hook.log");
+    env::set_var("HOOK_MOCK_LOG", &hook_log);
+    env::set_var("NEXT_TASK_EXIT_CODE", "1");
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+agent_command: "true"
+agent_review_command: "true"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_status: "true"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+  on_notification: "hook"
+  on_notification_scope: "all_logs"
+log_path: ""
+"#,
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+    fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected idle exit");
+    assert_eq!(err.code, 0);
+
+    let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+    assert!(
+        hook_contents.contains("env TRUDGER_NOTIFY_EVENT=log"),
+        "all_logs mode should dispatch log notifications even when log_path is disabled, got:\n{hook_contents}"
+    );
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
+fn all_logs_notification_failure_does_not_recurse() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let log_path = temp.path().join("trudger.log");
+    let config_path = temp.path().join("trudger.yml");
+    let mut logger = Logger::new(Some(log_path.clone()));
+    logger.configure_all_logs_notification(Some("exit 7"), &config_path);
+    logger.log_transition("first");
+
+    let contents = fs::read_to_string(&log_path).expect("read log");
+    assert_eq!(
+        contents
+            .matches("notification_hook_failed event=log task=none exit_code=7")
+            .count(),
+        1,
+        "notification failure transition should be emitted once without recursive redispatch, got:\n{contents}"
+    );
+}
+
+#[test]
 fn run_with_cli_emits_run_end_after_teardown_on_error_exit() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
