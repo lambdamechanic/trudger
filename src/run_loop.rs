@@ -716,6 +716,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 state
                     .logger
                     .log_transition(&format!("completed task={}", task_id));
+                dispatch_notification_hook(state, Some(&task_id));
                 if let Err(err) = run_hook(
                     state,
                     &state.config.hooks.on_completed,
@@ -732,6 +733,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 state
                     .logger
                     .log_transition(&format!("needs_human task={}", task_id));
+                dispatch_notification_hook(state, Some(&task_id));
                 if let Err(err) = run_hook(
                     state,
                     &state.config.hooks.on_requires_human,
@@ -771,6 +773,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             state
                 .logger
                 .log_transition(&format!("needs_human task={}", task_id));
+            dispatch_notification_hook(state, Some(&task_id));
             if let Err(err) = run_hook(
                 state,
                 &state.config.hooks.on_requires_human,
@@ -966,6 +969,56 @@ mod tests {
         assert!(
             log_contents.contains("notification_hook_failed task=tr-1 err=Failed to run command"),
             "expected fail-open spawn-error transition, got:\n{log_contents}"
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn run_loop_continues_when_notification_hook_fails() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("trudger.log");
+        let next_task_queue = temp.path().join("next-task-queue.txt");
+        let status_queue = temp.path().join("status-queue.txt");
+        std::fs::write(&next_task_queue, "tr-1\n\n").expect("write next-task queue");
+        std::fs::write(&status_queue, "ready\nclosed\n").expect("write status queue");
+
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("NEXT_TASK_OUTPUT_QUEUE", &next_task_queue);
+        std::env::set_var("TASK_STATUS_QUEUE", &status_queue);
+        std::env::set_var("TASK_SHOW_OUTPUT", "SHOW_PAYLOAD");
+
+        let mut state = base_state(&temp);
+        state.logger = Logger::new(Some(log_path.clone()));
+        state.config.commands.next_task = Some("next-task".to_string());
+        state.config.commands.task_show = "task-show \"$@\"".to_string();
+        state.config.commands.task_status = "task-status".to_string();
+        state.config.commands.task_update_status = "task-update \"$@\"".to_string();
+        state.config.hooks.on_completed = "true".to_string();
+        state.config.hooks.on_requires_human = "true".to_string();
+        state.config.hooks.on_notification = Some("exit 7".to_string());
+
+        let result = run_loop(&mut state).expect_err("expected graceful idle exit");
+        assert_eq!(result.code, 0);
+        assert_eq!(result.reason, "no_task");
+        assert_eq!(state.completed_tasks, vec![task("tr-1")]);
+
+        let log_contents = std::fs::read_to_string(&log_path).expect("read log");
+        assert!(
+            log_contents.contains("completed task=tr-1"),
+            "task should still complete, got:\n{log_contents}"
+        );
+        assert!(
+            log_contents.contains("notification_hook_failed task=tr-1 exit_code=7"),
+            "notification failure should be surfaced without aborting, got:\n{log_contents}"
         );
 
         crate::unit_tests::reset_test_env();
