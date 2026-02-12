@@ -1,8 +1,10 @@
 use chrono::Utc;
+use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use crate::shell::{run_shell_command_status, CommandEnv};
 
@@ -13,6 +15,7 @@ pub(crate) struct Logger {
     all_logs_notification_command: Option<String>,
     notification_config_path: String,
     notification_in_flight: AtomicBool,
+    notification_run_started_at: Option<Instant>,
 }
 
 impl Logger {
@@ -23,6 +26,7 @@ impl Logger {
             all_logs_notification_command: None,
             notification_config_path: String::new(),
             notification_in_flight: AtomicBool::new(false),
+            notification_run_started_at: None,
         }
     }
 
@@ -36,10 +40,11 @@ impl Logger {
             .filter(|value| !value.is_empty())
             .map(|value| value.to_string());
         self.notification_config_path = config_path.display().to_string();
+        self.notification_run_started_at = Some(Instant::now());
     }
 
     pub(crate) fn log_transition(&self, message: &str) {
-        self.dispatch_all_logs_notification_if_needed();
+        self.dispatch_all_logs_notification_if_needed(message);
 
         self.write_transition(message);
     }
@@ -66,7 +71,7 @@ impl Logger {
         }
     }
 
-    fn dispatch_all_logs_notification_if_needed(&self) {
+    fn dispatch_all_logs_notification_if_needed(&self, message: &str) {
         let Some(command) = self.all_logs_notification_command.as_deref() else {
             return;
         };
@@ -79,6 +84,14 @@ impl Logger {
             return;
         }
 
+        let duration_ms = self
+            .notification_run_started_at
+            .map(|started_at| started_at.elapsed().as_millis())
+            .unwrap_or(0);
+        let folder = env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
         let env = CommandEnv {
             cwd: None,
             config_path: self.notification_config_path.clone(),
@@ -92,6 +105,12 @@ impl Logger {
             completed: None,
             needs_human: None,
             notify_event: Some("log".to_string()),
+            notify_duration_ms: Some(duration_ms.to_string()),
+            notify_folder: Some(folder),
+            notify_exit_code: Some(String::new()),
+            notify_task_id: Some(String::new()),
+            notify_task_description: Some(String::new()),
+            notify_message: Some(redact_transition_message_for_notification(message)),
         };
 
         let result = run_shell_command_status(command, "on_notification", "none", &[], &env, self);
@@ -141,6 +160,32 @@ impl Logger {
             );
         }
     }
+}
+
+fn redact_transition_message_for_notification(message: &str) -> String {
+    let mut redacted = sanitize_log_value(message);
+    redacted = redact_field_between_markers(redacted, "command=", Some(" args="));
+    redact_field_between_markers(redacted, "args=", None)
+}
+
+fn redact_field_between_markers(input: String, key: &str, end_marker: Option<&str>) -> String {
+    let Some(key_offset) = input.find(key) else {
+        return input;
+    };
+    let value_start = key_offset + key.len();
+    let value_end = match end_marker {
+        Some(marker) => input[value_start..]
+            .find(marker)
+            .map(|offset| value_start + offset)
+            .unwrap_or(input.len()),
+        None => input.len(),
+    };
+
+    let mut out = String::with_capacity(input.len());
+    out.push_str(&input[..value_start]);
+    out.push_str("[REDACTED]");
+    out.push_str(&input[value_end..]);
+    out
 }
 
 pub(crate) fn sanitize_log_value(value: &str) -> String {

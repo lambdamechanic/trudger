@@ -412,6 +412,9 @@ fn run_loop_executes_commands_and_hooks_with_env() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let result = run_loop(&mut state).expect_err("should exit after queue drained");
@@ -556,6 +559,9 @@ fn manual_task_not_ready_fails_fast_without_invoking_next_task() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let result = run_loop(&mut state).expect_err("manual blocked task should fail fast");
@@ -655,6 +661,9 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let result = run_loop(&mut state).expect_err("interrupter should stop the loop");
@@ -762,6 +771,9 @@ fn review_loop_limit_retries_until_closed() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let result = run_loop(&mut state).expect_err("should exit after queue drained");
@@ -851,6 +863,9 @@ fn review_loop_limit_exhaustion_marks_blocked_and_requires_human() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let result = run_loop(&mut state).expect_err("should exit after queue drained");
@@ -939,6 +954,9 @@ fn next_task_exit_1_exits_zero_without_running_commands() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let result = run_loop(&mut state).expect_err("should exit when next-task returns exit 1");
@@ -1021,6 +1039,9 @@ fn hook_uses_env_task_id_in_shell() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let result = run_loop(&mut state).expect_err("should exit after queue drained");
@@ -1093,6 +1114,9 @@ fn skip_not_ready_respects_limit() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let result = run_loop(&mut state).expect_err("should fail-fast on unknown status");
@@ -1172,6 +1196,9 @@ fn missing_status_after_review_errors() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let result = run_loop(&mut state).expect_err("should error on missing status");
@@ -1237,6 +1264,9 @@ fn reset_task_runs_on_exit_with_active_task() {
         current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let result = Err(Quit {
@@ -1849,6 +1879,12 @@ fn run_shell_command_noops_when_command_is_empty() {
         completed: None,
         needs_human: None,
         notify_event: None,
+        notify_duration_ms: None,
+        notify_folder: None,
+        notify_exit_code: None,
+        notify_task_id: None,
+        notify_task_description: None,
+        notify_message: None,
     };
 
     let result = crate::shell::run_shell_command_capture("", "label", "none", &[], &env, &logger)
@@ -1897,6 +1933,12 @@ fn command_env_truncates_oversized_values_and_warns() {
         completed: None,
         needs_human: None,
         notify_event: None,
+        notify_duration_ms: None,
+        notify_folder: None,
+        notify_exit_code: None,
+        notify_task_id: None,
+        notify_task_description: None,
+        notify_message: None,
     };
 
     let stderr = capture_stderr(|| {
@@ -1953,6 +1995,12 @@ fn command_env_truncates_total_trudger_payload_and_warns() {
         completed: None,
         needs_human: None,
         notify_event: None,
+        notify_duration_ms: None,
+        notify_folder: None,
+        notify_exit_code: None,
+        notify_task_id: None,
+        notify_task_description: None,
+        notify_message: None,
     };
 
     let stderr = capture_stderr(|| {
@@ -2013,6 +2061,71 @@ fn command_env_truncates_total_trudger_payload_and_warns() {
 
 #[cfg(unix)]
 #[test]
+fn command_env_truncates_oversized_notify_payload_and_warns() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let max = 64 * 1024;
+    let ch = '\u{20AC}';
+    let per_char = ch.len_utf8();
+    let repeat = max / per_char + 1;
+    let large_notify: String = std::iter::repeat_n(ch, repeat).collect();
+    let expected_len = (max / per_char).to_string();
+
+    let temp = TempDir::new().expect("temp dir");
+    let log_path = temp.path().join("trudger.log");
+    let logger = Logger::new(Some(log_path.clone()));
+    let env = crate::shell::CommandEnv {
+        cwd: None,
+        config_path: "config".to_string(),
+        scratch_dir: None,
+        task_id: None,
+        task_show: None,
+        task_status: None,
+        target_status: None,
+        prompt: None,
+        review_prompt: None,
+        completed: None,
+        needs_human: None,
+        notify_event: Some("log".to_string()),
+        notify_duration_ms: Some("123".to_string()),
+        notify_folder: Some("/tmp".to_string()),
+        notify_exit_code: Some(String::new()),
+        notify_task_id: Some(String::new()),
+        notify_task_description: Some(String::new()),
+        notify_message: Some(large_notify),
+    };
+
+    let stderr = capture_stderr(|| {
+        let result = crate::shell::run_shell_command_capture(
+            "printf '%s' \"${#TRUDGER_NOTIFY_MESSAGE}\"",
+            "label",
+            "none",
+            &[],
+            &env,
+            &logger,
+        )
+        .expect("capture should succeed");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout, expected_len);
+    });
+
+    assert!(
+        stderr.contains("Warning: TRUDGER_NOTIFY_MESSAGE"),
+        "expected notify payload truncation warning, got: {stderr:?}"
+    );
+
+    let contents = fs::read_to_string(&log_path).expect("read log");
+    assert!(
+        contents.contains("env_truncate label=label task=none key=TRUDGER_NOTIFY_MESSAGE"),
+        "expected notify env_truncate transition log, got: {contents:?}"
+    );
+
+    reset_test_env();
+}
+
+#[cfg(unix)]
+#[test]
 fn run_shell_command_errors_when_bash_is_missing() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
@@ -2034,6 +2147,12 @@ fn run_shell_command_errors_when_bash_is_missing() {
         completed: None,
         needs_human: None,
         notify_event: None,
+        notify_duration_ms: None,
+        notify_folder: None,
+        notify_exit_code: None,
+        notify_task_id: None,
+        notify_task_description: None,
+        notify_message: None,
     };
 
     let err = crate::shell::run_shell_command_capture("true", "label", "none", &[], &env, &logger)
@@ -2167,6 +2286,9 @@ fn run_loop_errors_when_next_task_command_missing() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected idle");
@@ -2223,6 +2345,9 @@ fn run_loop_propagates_next_task_exit_code_other_than_1() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected next_task failure");
@@ -2281,6 +2406,9 @@ fn run_loop_errors_when_selected_task_has_empty_status() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected missing status");
@@ -2351,6 +2479,9 @@ fn run_loop_errors_when_update_in_progress_fails() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected update failure");
@@ -2397,6 +2528,9 @@ fn run_loop_errors_when_task_show_fails_during_solve() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected show failure");
@@ -2443,6 +2577,9 @@ fn run_loop_errors_when_agent_solve_fails() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected solve failure");
@@ -2504,6 +2641,9 @@ fn run_loop_errors_when_task_show_fails_during_review() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected review show failure");
@@ -2550,6 +2690,9 @@ fn run_loop_errors_when_agent_review_fails() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected review failure");
@@ -2608,6 +2751,9 @@ fn run_loop_errors_when_on_completed_hook_fails() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected hook failure");
@@ -2666,6 +2812,9 @@ fn run_loop_errors_when_on_requires_human_hook_fails_on_blocked_status() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected hook failure");
@@ -2726,6 +2875,9 @@ fn run_loop_errors_when_blocked_status_update_fails_after_exhausting_review_loop
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected blocked update failure");
@@ -2784,6 +2936,9 @@ fn run_loop_errors_when_on_requires_human_hook_fails_after_exhausting_review_loo
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     let err = run_loop(&mut state).expect_err("expected hook failure");
@@ -2829,6 +2984,9 @@ fn reset_task_on_exit_is_noop_for_ok_or_missing_task_id() {
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     reset_task_on_exit(&state, &Ok(()));
@@ -2879,6 +3037,9 @@ fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
         current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     reset_task_on_exit(
@@ -2938,6 +3099,9 @@ fn reset_task_on_exit_skips_reset_when_task_status_is_empty() {
         current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     reset_task_on_exit(
@@ -2995,6 +3159,9 @@ fn reset_task_on_exit_skips_reset_when_task_status_command_fails_to_spawn() {
         current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     reset_task_on_exit(
@@ -3064,6 +3231,9 @@ fn hook_failure_after_closed_does_not_reset_task_on_exit() {
         current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     reset_task_on_exit(
@@ -3134,6 +3304,9 @@ fn hook_failure_after_blocked_does_not_reset_task_on_exit() {
         current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     reset_task_on_exit(
@@ -3204,6 +3377,9 @@ fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
         current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     reset_task_on_exit(
@@ -3274,6 +3450,9 @@ fn sigint_while_in_progress_invokes_reset_task_on_exit() {
         current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     reset_task_on_exit(
@@ -3345,6 +3524,9 @@ fn status_check_failure_at_exit_does_not_invoke_reset_task() {
         current_task_id: Some(task("tr-1")),
         current_task_show: None,
         current_task_status: None,
+        run_started_at: std::time::Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     reset_task_on_exit(
@@ -4047,6 +4229,32 @@ log_path: ""
     assert!(
         hook_contents.contains("env TRUDGER_NOTIFY_EVENT=log"),
         "all_logs mode should dispatch log notifications even when log_path is disabled, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("envset TRUDGER_NOTIFY_DURATION_MS=1"),
+        "all_logs mode should set notify duration env var, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("envset TRUDGER_NOTIFY_FOLDER=1"),
+        "all_logs mode should set notify folder env var, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("env TRUDGER_NOTIFY_EXIT_CODE="),
+        "all_logs mode should set empty notify exit code, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("env TRUDGER_NOTIFY_TASK_ID="),
+        "all_logs mode should set empty notify task id outside task context, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("env TRUDGER_NOTIFY_TASK_DESCRIPTION="),
+        "all_logs mode should set empty notify task description outside task context, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("TRUDGER_NOTIFY_MESSAGE=cmd start")
+            && hook_contents.contains("command=[REDACTED]")
+            && hook_contents.contains("args=[REDACTED]"),
+        "all_logs mode should provide redacted notify message payload, got:\n{hook_contents}"
     );
 
     match old_home {

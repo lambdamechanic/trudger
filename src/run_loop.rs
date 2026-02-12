@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::config::{Config, NotificationScope};
 use crate::logger::{sanitize_log_value, Logger};
@@ -27,6 +28,9 @@ pub(crate) struct RuntimeState {
     pub(crate) current_task_id: Option<TaskId>,
     pub(crate) current_task_show: Option<String>,
     pub(crate) current_task_status: Option<TaskStatus>,
+    pub(crate) run_started_at: Instant,
+    pub(crate) current_task_started_at: Option<Instant>,
+    pub(crate) run_exit_code: i32,
 }
 
 #[derive(Debug)]
@@ -115,6 +119,16 @@ impl NotificationEvent {
     }
 }
 
+fn first_non_empty_trimmed_line(value: &str) -> Option<String> {
+    for line in value.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
 fn build_command_env(
     state: &RuntimeState,
     task_id: Option<&TaskId>,
@@ -166,6 +180,12 @@ fn build_command_env(
         completed,
         needs_human,
         notify_event: notify_event.map(|value| value.as_str().to_string()),
+        notify_duration_ms: None,
+        notify_folder: None,
+        notify_exit_code: None,
+        notify_task_id: None,
+        notify_task_description: None,
+        notify_message: None,
     }
 }
 
@@ -512,7 +532,44 @@ pub(crate) fn dispatch_notification_hook(
         return;
     }
 
-    let env = build_command_env(state, task_id, None, None, None, Some(event));
+    let mut env = build_command_env(state, task_id, None, None, None, Some(event));
+    let notify_duration_ms = match event {
+        NotificationEvent::RunStart | NotificationEvent::TaskStart => 0,
+        NotificationEvent::RunEnd => state.run_started_at.elapsed().as_millis(),
+        NotificationEvent::TaskEnd => state
+            .current_task_started_at
+            .map(|started_at| started_at.elapsed().as_millis())
+            .unwrap_or(0),
+    };
+    let notify_folder = env::current_dir()
+        .ok()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let notify_task_id = task_id
+        .or(state.current_task_id.as_ref())
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let notify_task_description = if notify_task_id.is_empty() {
+        String::new()
+    } else {
+        state
+            .current_task_show
+            .as_deref()
+            .and_then(first_non_empty_trimmed_line)
+            .unwrap_or_default()
+    };
+    let notify_exit_code = if matches!(event, NotificationEvent::RunEnd) {
+        state.run_exit_code.to_string()
+    } else {
+        String::new()
+    };
+
+    env.notify_duration_ms = Some(notify_duration_ms.to_string());
+    env.notify_folder = Some(notify_folder);
+    env.notify_exit_code = Some(notify_exit_code);
+    env.notify_task_id = Some(notify_task_id);
+    env.notify_task_description = Some(notify_task_description);
+
     match run_shell_command_status(
         hook_command,
         "on_notification",
@@ -553,6 +610,7 @@ pub(crate) fn finish_current_task_context(state: &mut RuntimeState) {
     state.current_task_id = None;
     state.current_task_show = None;
     state.current_task_status = None;
+    state.current_task_started_at = None;
 }
 
 fn run_agent_solve(state: &RuntimeState, args: &[String]) -> Result<(), String> {
@@ -654,6 +712,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         };
 
         state.current_task_id = Some(task_id.clone());
+        state.current_task_started_at = Some(Instant::now());
         state.current_task_show = None;
         state.current_task_status = None;
         dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskStart);
@@ -872,16 +931,25 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         state.current_task_id = None;
         state.current_task_show = None;
         state.current_task_status = None;
+        state.current_task_started_at = None;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
     use tempfile::TempDir;
 
     fn task(id: &str) -> TaskId {
         TaskId::try_from(id).expect("task id")
+    }
+
+    fn hook_env_value(contents: &str, key: &str) -> Option<String> {
+        let prefix = format!("env {}=", key);
+        contents
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix).map(|value| value.to_string()))
     }
 
     fn base_state(temp: &TempDir) -> RuntimeState {
@@ -918,6 +986,9 @@ mod tests {
             current_task_id: None,
             current_task_show: None,
             current_task_status: None,
+            run_started_at: Instant::now(),
+            current_task_started_at: None,
+            run_exit_code: 0,
         }
     }
 
@@ -992,6 +1063,127 @@ mod tests {
         assert!(
             hook_contents.contains("env TRUDGER_NOTIFY_EVENT=task_end"),
             "notification hook should receive task_end event, got:\n{hook_contents}"
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn dispatch_notification_hook_sets_payload_fields_for_task_event() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let hook_log = temp.path().join("hook.log");
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+        let mut state = base_state(&temp);
+        state.config.hooks.on_notification = Some("hook".to_string());
+        state.current_task_show = Some(" \n  Task summary line  \nsecond line".to_string());
+        state.current_task_started_at = Some(Instant::now() - Duration::from_millis(20));
+
+        dispatch_notification_hook(&state, Some(&task("tr-1")), NotificationEvent::TaskEnd);
+
+        let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
+        assert_eq!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_EVENT").as_deref(),
+            Some("task_end")
+        );
+        assert_eq!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_TASK_ID").as_deref(),
+            Some("tr-1")
+        );
+        assert_eq!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_TASK_DESCRIPTION").as_deref(),
+            Some("Task summary line")
+        );
+        assert!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_DURATION_MS")
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_some_and(|value| value > 0),
+            "expected task_end duration to be > 0, got:\n{hook_contents}"
+        );
+        assert_eq!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_EXIT_CODE").as_deref(),
+            Some("")
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn dispatch_notification_hook_run_start_and_run_end_payload_semantics() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let hook_log = temp.path().join("hook.log");
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+        let mut state = base_state(&temp);
+        state.config.hooks.on_notification = Some("hook".to_string());
+        state.config.hooks.on_notification_scope = Some(NotificationScope::RunBoundaries);
+        state.run_started_at = Instant::now() - Duration::from_millis(25);
+        state.run_exit_code = 17;
+
+        dispatch_notification_hook(&state, None, NotificationEvent::RunStart);
+        dispatch_notification_hook(&state, None, NotificationEvent::RunEnd);
+
+        let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
+        let entries: Vec<&str> = hook_contents
+            .split("hook args_count=0 args=\n")
+            .filter(|entry| !entry.trim().is_empty())
+            .collect();
+        assert_eq!(entries.len(), 2, "expected run_start and run_end entries");
+
+        let run_start = entries[0];
+        assert_eq!(
+            hook_env_value(run_start, "TRUDGER_NOTIFY_EVENT").as_deref(),
+            Some("run_start")
+        );
+        assert_eq!(
+            hook_env_value(run_start, "TRUDGER_NOTIFY_DURATION_MS").as_deref(),
+            Some("0")
+        );
+        assert_eq!(
+            hook_env_value(run_start, "TRUDGER_NOTIFY_EXIT_CODE").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            hook_env_value(run_start, "TRUDGER_NOTIFY_TASK_ID").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            hook_env_value(run_start, "TRUDGER_NOTIFY_TASK_DESCRIPTION").as_deref(),
+            Some("")
+        );
+
+        let run_end = entries[1];
+        assert_eq!(
+            hook_env_value(run_end, "TRUDGER_NOTIFY_EVENT").as_deref(),
+            Some("run_end")
+        );
+        assert!(
+            hook_env_value(run_end, "TRUDGER_NOTIFY_DURATION_MS")
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_some_and(|value| value > 0),
+            "expected run_end duration > 0, got:\n{run_end}"
+        );
+        assert_eq!(
+            hook_env_value(run_end, "TRUDGER_NOTIFY_EXIT_CODE").as_deref(),
+            Some("17")
         );
 
         crate::unit_tests::reset_test_env();

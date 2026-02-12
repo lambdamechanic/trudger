@@ -114,6 +114,12 @@ impl DoctorCtx<'_> {
             completed: None,
             needs_human: None,
             notify_event: None,
+            notify_duration_ms: None,
+            notify_folder: None,
+            notify_exit_code: None,
+            notify_task_id: None,
+            notify_task_description: None,
+            notify_message: None,
         }
     }
 
@@ -450,6 +456,12 @@ pub(crate) fn run_doctor_mode(
         completed: None,
         needs_human: None,
         notify_event: None,
+        notify_duration_ms: None,
+        notify_folder: None,
+        notify_exit_code: None,
+        notify_task_id: None,
+        notify_task_description: None,
+        notify_message: None,
     };
 
     let hook_exit = run_shell_command_status(&hook, "doctor-setup", "none", &[], &env, logger);

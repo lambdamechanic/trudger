@@ -42,6 +42,12 @@ pub(crate) struct CommandEnv {
     pub(crate) completed: Option<String>,
     pub(crate) needs_human: Option<String>,
     pub(crate) notify_event: Option<String>,
+    pub(crate) notify_duration_ms: Option<String>,
+    pub(crate) notify_folder: Option<String>,
+    pub(crate) notify_exit_code: Option<String>,
+    pub(crate) notify_task_id: Option<String>,
+    pub(crate) notify_task_description: Option<String>,
+    pub(crate) notify_message: Option<String>,
 }
 
 impl CommandEnv {
@@ -75,6 +81,12 @@ impl CommandEnv {
             self.completed.as_deref(),
             self.needs_human.as_deref(),
             self.notify_event.as_deref(),
+            self.notify_duration_ms.as_deref(),
+            self.notify_folder.as_deref(),
+            self.notify_exit_code.as_deref(),
+            self.notify_task_id.as_deref(),
+            self.notify_task_description.as_deref(),
+            self.notify_message.as_deref(),
         );
 
         if total > TRUDGER_ENV_TOTAL_MAX_BYTES {
@@ -101,6 +113,12 @@ impl CommandEnv {
                 self.completed.as_deref(),
                 self.needs_human.as_deref(),
                 self.notify_event.as_deref(),
+                self.notify_duration_ms.as_deref(),
+                self.notify_folder.as_deref(),
+                self.notify_exit_code.as_deref(),
+                self.notify_task_id.as_deref(),
+                self.notify_task_description.as_deref(),
+                self.notify_message.as_deref(),
             );
 
             if new_total < total {
@@ -217,6 +235,60 @@ impl CommandEnv {
             self.notify_event.as_deref(),
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_NOTIFY_DURATION_MS",
+            self.notify_duration_ms.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_NOTIFY_FOLDER",
+            self.notify_folder.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_NOTIFY_EXIT_CODE",
+            self.notify_exit_code.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_NOTIFY_TASK_ID",
+            self.notify_task_id.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_NOTIFY_TASK_DESCRIPTION",
+            self.notify_task_description.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_NOTIFY_MESSAGE",
+            self.notify_message.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
     }
 
     fn maybe_truncate_utf8(value: &str, max_bytes: usize) -> (Cow<'_, str>, usize, usize) {
@@ -260,6 +332,12 @@ impl CommandEnv {
         completed: Option<&str>,
         needs_human: Option<&str>,
         notify_event: Option<&str>,
+        notify_duration_ms: Option<&str>,
+        notify_folder: Option<&str>,
+        notify_exit_code: Option<&str>,
+        notify_task_id: Option<&str>,
+        notify_task_description: Option<&str>,
+        notify_message: Option<&str>,
     ) -> usize {
         let mut total = 0usize;
         total += Self::env_entry_payload_bytes(
@@ -304,6 +382,36 @@ impl CommandEnv {
         total += Self::env_entry_payload_bytes(
             "TRUDGER_NOTIFY_EVENT",
             notify_event,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_NOTIFY_DURATION_MS",
+            notify_duration_ms,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_NOTIFY_FOLDER",
+            notify_folder,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_NOTIFY_EXIT_CODE",
+            notify_exit_code,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_NOTIFY_TASK_ID",
+            notify_task_id,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_NOTIFY_TASK_DESCRIPTION",
+            notify_task_description,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_NOTIFY_MESSAGE",
+            notify_message,
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
         total
@@ -416,6 +524,12 @@ mod tests {
             completed: Some(huge),
             needs_human: None,
             notify_event: None,
+            notify_duration_ms: None,
+            notify_folder: None,
+            notify_exit_code: None,
+            notify_task_id: None,
+            notify_task_description: None,
+            notify_message: None,
         };
 
         let mut cmd = Command::new("true");

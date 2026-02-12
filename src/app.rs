@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::cli::{parse_manual_tasks, Cli, CliCommand};
 use crate::config::{load_config, NotificationScope};
@@ -230,6 +231,9 @@ where
         current_task_id: None,
         current_task_show: None,
         current_task_status: None,
+        run_started_at: Instant::now(),
+        current_task_started_at: None,
+        run_exit_code: 0,
     };
 
     if env::var("TRUDGER_TEST_FORCE_ERR").is_ok() {
@@ -241,6 +245,7 @@ where
     reset_task_on_exit(&state, &result);
     finish_current_task_context(&mut state);
     state.tmux.restore();
+    state.run_exit_code = result.as_ref().err().map(|quit| quit.code).unwrap_or(0);
     dispatch_notification_hook(&state, None, NotificationEvent::RunEnd);
     result
 }
