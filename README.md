@@ -134,18 +134,14 @@ Notification example:
 
 ```yaml
 hooks:
-  on_notification: 'printf "event=%s task=%s exit=%s\n" "$TRUDGER_NOTIFY_EVENT" "$TRUDGER_NOTIFY_TASK_ID" "$TRUDGER_NOTIFY_EXIT_CODE"'
+  on_notification: 'payload_path="$TRUDGER_NOTIFY_PAYLOAD_PATH"; printf "payload=%s\n" "$payload_path"'
   on_notification_scope: "task_boundaries" # or run_boundaries / all_logs
 ```
 
-Notification payload env vars:
-- `TRUDGER_NOTIFY_EVENT`: `run_start`, `run_end`, `task_start`, `task_end`, or `log`.
-- `TRUDGER_NOTIFY_DURATION_MS`: elapsed milliseconds for the event context (`0` for start events; `log` is measured from `run_start`).
-- `TRUDGER_NOTIFY_FOLDER`: run working directory.
-- `TRUDGER_NOTIFY_TASK_ID`: task id when in task context; empty for run-level events.
-- `TRUDGER_NOTIFY_TASK_DESCRIPTION`: first non-empty line from `commands.task_show`, when available.
-- `TRUDGER_NOTIFY_EXIT_CODE`: set only for `run_end`; unset for other events.
-- `TRUDGER_NOTIFY_MESSAGE`: set only for `all_logs` scope.
+Notification hook interface:
+- `hooks.on_notification` receives a JSON payload file path via `TRUDGER_NOTIFY_PAYLOAD_PATH`.
+- JSON payload fields: `event`, `duration_ms`, `folder`, `exit_code` (`run_end` only), `task_id`, `task_description`, `message` (`all_logs` only).
+- Existing `TRUDGER_NOTIFY_*` env vars remain populated for compatibility.
 
 ## Install
 

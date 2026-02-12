@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use crate::notification_payload::NotificationPayload;
 use crate::shell::{run_shell_command_status, CommandEnv};
 
 #[derive(Debug)]
@@ -96,7 +97,8 @@ impl Logger {
             .ok()
             .map(|path| path.display().to_string())
             .unwrap_or_default();
-        let env = CommandEnv {
+        let redacted_message = redact_transition_message_for_notification(message);
+        let mut env = CommandEnv {
             cwd: None,
             config_path: self.notification_config_path.clone(),
             scratch_dir: None,
@@ -114,8 +116,38 @@ impl Logger {
             notify_exit_code: None,
             notify_task_id: Some(String::new()),
             notify_task_description: Some(String::new()),
-            notify_message: Some(redact_transition_message_for_notification(message)),
+            notify_message: Some(redacted_message.clone()),
+            notify_payload_path: None,
         };
+
+        let payload = NotificationPayload {
+            event: "log".to_string(),
+            duration_ms,
+            folder: env.notify_folder.clone().unwrap_or_default(),
+            exit_code: None,
+            task_id: String::new(),
+            task_description: String::new(),
+            message: Some(redacted_message),
+        };
+        let payload_file = match payload.write_to_temp_file() {
+            Ok(file) => file,
+            Err(err) => {
+                let escaped = sanitize_log_value(&err);
+                self.write_transition(&format!(
+                    "notification_hook_failed event=log task=none err={}",
+                    escaped
+                ));
+                let mut stderr = std::io::stderr().lock();
+                let _ = writeln!(
+                    stderr,
+                    "Warning: failed to prepare notification payload: {}.",
+                    err
+                );
+                self.notification_in_flight.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        env.notify_payload_path = Some(payload_file.path().display().to_string());
 
         let result = run_shell_command_status(command, "on_notification", "none", &[], &env, self);
         match result {

@@ -26,6 +26,12 @@ if [[ -n "${log_path}" ]]; then
   {
     printf 'hook args_count=%s args=%s\n' "$#" "$*"
     printf 'cwd %s\n' "$(pwd -P)"
+    payload_path="${TRUDGER_NOTIFY_PAYLOAD_PATH:-${1-}}"
+    if [[ -n "$payload_path" && -f "$payload_path" ]]; then
+      payload_contents="$(<"$payload_path")"
+      printf 'notify_payload_path %s\n' "$(sanitize_log_value "$payload_path")"
+      printf 'notify_payload %s\n' "$(sanitize_log_value "$payload_contents")"
+    fi
     log_env_flag "TRUDGER_PROMPT"
     log_env_flag "TRUDGER_REVIEW_PROMPT"
     log_env_flag "TRUDGER_TASK_ID"
@@ -42,6 +48,7 @@ if [[ -n "${log_path}" ]]; then
     log_env_flag "TRUDGER_NOTIFY_TASK_ID"
     log_env_flag "TRUDGER_NOTIFY_TASK_DESCRIPTION"
     log_env_flag "TRUDGER_NOTIFY_MESSAGE"
+    log_env_flag "TRUDGER_NOTIFY_PAYLOAD_PATH"
     log_env_value "TRUDGER_TASK_ID"
     log_env_value "TRUDGER_TASK_SHOW"
     log_env_value "TRUDGER_TASK_STATUS"
@@ -56,5 +63,6 @@ if [[ -n "${log_path}" ]]; then
     log_env_value "TRUDGER_NOTIFY_TASK_ID"
     log_env_value "TRUDGER_NOTIFY_TASK_DESCRIPTION"
     log_env_value "TRUDGER_NOTIFY_MESSAGE"
+    log_env_value "TRUDGER_NOTIFY_PAYLOAD_PATH"
   } >> "${log_path}"
 fi

@@ -1885,6 +1885,7 @@ fn run_shell_command_noops_when_command_is_empty() {
         notify_task_id: None,
         notify_task_description: None,
         notify_message: None,
+        notify_payload_path: None,
     };
 
     let result = crate::shell::run_shell_command_capture("", "label", "none", &[], &env, &logger)
@@ -1939,6 +1940,7 @@ fn command_env_truncates_oversized_values_and_warns() {
         notify_task_id: None,
         notify_task_description: None,
         notify_message: None,
+        notify_payload_path: None,
     };
 
     let stderr = capture_stderr(|| {
@@ -2001,6 +2003,7 @@ fn command_env_truncates_total_trudger_payload_and_warns() {
         notify_task_id: None,
         notify_task_description: None,
         notify_message: None,
+        notify_payload_path: None,
     };
 
     let stderr = capture_stderr(|| {
@@ -2094,6 +2097,7 @@ fn command_env_truncates_oversized_notify_payload_and_warns() {
         notify_task_id: Some(String::new()),
         notify_task_description: Some(String::new()),
         notify_message: Some(large_notify),
+        notify_payload_path: None,
     };
 
     let stderr = capture_stderr(|| {
@@ -2153,6 +2157,7 @@ fn run_shell_command_errors_when_bash_is_missing() {
         notify_task_id: None,
         notify_task_description: None,
         notify_message: None,
+        notify_payload_path: None,
     };
 
     let err = crate::shell::run_shell_command_capture("true", "label", "none", &[], &env, &logger)
@@ -4148,6 +4153,10 @@ log_path: ""
 
     let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
     assert!(
+        hook_contents.contains("envset TRUDGER_NOTIFY_PAYLOAD_PATH=1"),
+        "notification hook should expose payload path env, got:\n{hook_contents}"
+    );
+    assert!(
         hook_contents.contains("env TRUDGER_NOTIFY_EVENT=run_start"),
         "run_start notification missing, got:\n{hook_contents}"
     );
@@ -4366,6 +4375,10 @@ log_path: ""
     assert_eq!(err.code, 0);
 
     let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+    assert!(
+        hook_contents.contains("envset TRUDGER_NOTIFY_PAYLOAD_PATH=1"),
+        "all_logs mode should expose payload path env, got:\n{hook_contents}"
+    );
     assert!(
         hook_contents.contains("env TRUDGER_NOTIFY_EVENT=log"),
         "all_logs mode should dispatch log notifications even when log_path is disabled, got:\n{hook_contents}"

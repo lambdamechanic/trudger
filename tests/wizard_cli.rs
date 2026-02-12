@@ -40,6 +40,7 @@ fn wizard_rejects_manual_task_flags() {
         .arg("wizard")
         .arg("-t")
         .arg("tr-1")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -58,6 +59,7 @@ fn wizard_rejects_positional_args() {
     let output = Command::new(env!("CARGO_BIN_EXE_trudger"))
         .arg("wizard")
         .arg("extra")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -75,6 +77,7 @@ fn wizard_rejects_positional_args() {
 fn cli_parse_error_prints_helpful_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_trudger"))
         .arg("--definitely-not-a-real-flag")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

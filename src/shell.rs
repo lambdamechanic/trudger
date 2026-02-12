@@ -48,6 +48,7 @@ pub(crate) struct CommandEnv {
     pub(crate) notify_task_id: Option<String>,
     pub(crate) notify_task_description: Option<String>,
     pub(crate) notify_message: Option<String>,
+    pub(crate) notify_payload_path: Option<String>,
 }
 
 impl CommandEnv {
@@ -87,6 +88,7 @@ impl CommandEnv {
             self.notify_task_id.as_deref(),
             self.notify_task_description.as_deref(),
             self.notify_message.as_deref(),
+            self.notify_payload_path.as_deref(),
         );
 
         if total > TRUDGER_ENV_TOTAL_MAX_BYTES {
@@ -119,6 +121,7 @@ impl CommandEnv {
                 self.notify_task_id.as_deref(),
                 self.notify_task_description.as_deref(),
                 self.notify_message.as_deref(),
+                self.notify_payload_path.as_deref(),
             );
 
             if new_total < total {
@@ -289,6 +292,15 @@ impl CommandEnv {
             self.notify_message.as_deref(),
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_NOTIFY_PAYLOAD_PATH",
+            self.notify_payload_path.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
     }
 
     fn maybe_truncate_utf8(value: &str, max_bytes: usize) -> (Cow<'_, str>, usize, usize) {
@@ -338,6 +350,7 @@ impl CommandEnv {
         notify_task_id: Option<&str>,
         notify_task_description: Option<&str>,
         notify_message: Option<&str>,
+        notify_payload_path: Option<&str>,
     ) -> usize {
         let mut total = 0usize;
         total += Self::env_entry_payload_bytes(
@@ -412,6 +425,11 @@ impl CommandEnv {
         total += Self::env_entry_payload_bytes(
             "TRUDGER_NOTIFY_MESSAGE",
             notify_message,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_NOTIFY_PAYLOAD_PATH",
+            notify_payload_path,
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
         total
@@ -530,6 +548,7 @@ mod tests {
             notify_task_id: None,
             notify_task_description: None,
             notify_message: None,
+            notify_payload_path: None,
         };
 
         let mut cmd = Command::new("true");

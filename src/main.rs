@@ -5,6 +5,7 @@ mod cli;
 mod config;
 mod doctor;
 mod logger;
+mod notification_payload;
 mod prompt_defaults;
 mod prompt_install;
 mod run_loop;

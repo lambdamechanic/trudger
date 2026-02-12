@@ -817,7 +817,8 @@ hooks:
   on_notification_scope: "bad_scope"
 "#;
         let file = write_temp_config(config);
-        let err = load_config(file.path()).expect_err("expected invalid on_notification_scope error");
+        let err =
+            load_config(file.path()).expect_err("expected invalid on_notification_scope error");
         assert!(err.contains("hooks.on_notification_scope"));
         assert!(err.contains("all_logs|task_boundaries|run_boundaries"));
     }

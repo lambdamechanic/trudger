@@ -26,8 +26,8 @@ cargo clippy --all-targets -- -D warnings
 
 if command -v cargo-nextest >/dev/null 2>&1; then
   printf 'pre-push: running cargo nextest...\n'
-  cargo nextest run
+  (cargo nextest run) </dev/null
 else
   printf 'pre-push: cargo-nextest not found; running cargo test...\n'
-  cargo test
+  (cargo test) </dev/null
 fi

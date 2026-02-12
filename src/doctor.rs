@@ -120,6 +120,7 @@ impl DoctorCtx<'_> {
             notify_task_id: None,
             notify_task_description: None,
             notify_message: None,
+            notify_payload_path: None,
         }
     }
 
@@ -462,6 +463,7 @@ pub(crate) fn run_doctor_mode(
         notify_task_id: None,
         notify_task_description: None,
         notify_message: None,
+        notify_payload_path: None,
     };
 
     let hook_exit = run_shell_command_status(&hook, "doctor-setup", "none", &[], &env, logger);

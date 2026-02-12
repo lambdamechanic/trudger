@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use crate::config::{Config, NotificationScope};
 use crate::logger::{sanitize_log_value, Logger};
+use crate::notification_payload::NotificationPayload;
 use crate::shell::{
     run_shell_command_capture, run_shell_command_status, CommandEnv, CommandResult,
 };
@@ -186,6 +187,7 @@ fn build_command_env(
         notify_task_id: None,
         notify_task_description: None,
         notify_message: None,
+        notify_payload_path: None,
     }
 }
 
@@ -559,18 +561,43 @@ pub(crate) fn dispatch_notification_hook(
             .unwrap_or_default()
     };
     let notify_exit_code =
-        matches!(event, NotificationEvent::RunEnd).then(|| state.run_exit_code.to_string());
+        matches!(event, NotificationEvent::RunEnd).then_some(state.run_exit_code);
 
     env.notify_duration_ms = Some(notify_duration_ms.to_string());
     env.notify_folder = Some(notify_folder);
-    env.notify_exit_code = notify_exit_code;
+    env.notify_exit_code = notify_exit_code.map(|value| value.to_string());
     env.notify_task_id = Some(notify_task_id);
     env.notify_task_description = Some(notify_task_description);
+
+    let task_token = task_id.map(|value| value.as_str()).unwrap_or("none");
+    let payload = NotificationPayload {
+        event: event.as_str().to_string(),
+        duration_ms: notify_duration_ms,
+        folder: env.notify_folder.clone().unwrap_or_default(),
+        exit_code: notify_exit_code,
+        task_id: env.notify_task_id.clone().unwrap_or_default(),
+        task_description: env.notify_task_description.clone().unwrap_or_default(),
+        message: None,
+    };
+    let payload_file = match payload.write_to_temp_file() {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("Warning: failed to prepare notification payload: {}.", err);
+            state.logger.log_transition(&format!(
+                "notification_hook_failed event={} task={} err={}",
+                event.as_str(),
+                task_token,
+                sanitize_log_value(&err)
+            ));
+            return;
+        }
+    };
+    env.notify_payload_path = Some(payload_file.path().display().to_string());
 
     match run_shell_command_status(
         hook_command,
         "on_notification",
-        task_id.map(|value| value.as_str()).unwrap_or("none"),
+        task_token,
         &[],
         &env,
         &state.logger,
@@ -844,7 +871,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                     .logger
                     .log_transition(&format!("completed task={}", task_id));
                 dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskEnd);
-                clear_current_task_context(state);
+                state.current_task_id = None;
                 if let Err(err) = run_hook(
                     state,
                     &state.config.hooks.on_completed,
@@ -862,7 +889,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                     .logger
                     .log_transition(&format!("needs_human task={}", task_id));
                 dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskEnd);
-                clear_current_task_context(state);
+                state.current_task_id = None;
                 if let Err(err) = run_hook(
                     state,
                     &state.config.hooks.on_requires_human,
@@ -903,7 +930,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 .logger
                 .log_transition(&format!("needs_human task={}", task_id));
             dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskEnd);
-            clear_current_task_context(state);
+            state.current_task_id = None;
             if let Err(err) = run_hook(
                 state,
                 &state.config.hooks.on_requires_human,
@@ -1058,7 +1085,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_notification_hook_runs_with_no_positional_args() {
+    fn dispatch_notification_hook_sets_payload_path_env() {
         let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
         crate::unit_tests::reset_test_env();
 
@@ -1072,11 +1099,19 @@ mod tests {
         let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
         assert!(
             hook_contents.contains("hook args_count=0 args="),
-            "notification hook should receive no positional args, got:\n{hook_contents}"
+            "notification hook should still run without positional args, got:\n{hook_contents}"
+        );
+        assert!(
+            hook_contents.contains("envset TRUDGER_NOTIFY_PAYLOAD_PATH=1"),
+            "notification hook should expose payload path via env, got:\n{hook_contents}"
+        );
+        assert!(
+            hook_contents.contains("notify_payload {\"event\":\"task_end\""),
+            "notification hook payload should include task_end event, got:\n{hook_contents}"
         );
         assert!(
             hook_contents.contains("env TRUDGER_NOTIFY_EVENT=task_end"),
-            "notification hook should receive task_end event, got:\n{hook_contents}"
+            "compat notify env fields should remain set for now, got:\n{hook_contents}"
         );
 
         crate::unit_tests::reset_test_env();
