@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use serde_json::Value;
+
 use crate::config::{Config, NotificationScope};
 use crate::logger::{sanitize_log_value, Logger};
 use crate::notification_payload::NotificationPayload;
@@ -123,11 +125,69 @@ impl NotificationEvent {
 fn first_non_empty_trimmed_line(value: &str) -> Option<String> {
     for line in value.lines() {
         let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
+        if trimmed.is_empty() {
+            continue;
         }
+
+        // Common "first line" output for pretty-printed JSON. Skip these so a JSON payload doesn't
+        // reduce the "description" to a single punctuation token.
+        if matches!(trimmed, "[" | "]" | "{" | "}" | "}," | "],") {
+            continue;
+        }
+
+        return Some(trimmed.to_string());
     }
     None
+}
+
+fn task_description_from_json(value: &Value) -> Option<String> {
+    match value {
+        Value::Array(entries) => entries.first().and_then(task_description_from_json),
+        Value::Object(map) => {
+            for key in ["title", "summary", "name"] {
+                if let Some(Value::String(value)) = map.get(key) {
+                    if !value.trim().is_empty() {
+                        return Some(value.trim().to_string());
+                    }
+                }
+            }
+
+            // Common Jira-style payloads nest the human summary under `fields.summary`.
+            if let Some(Value::Object(fields)) = map.get("fields") {
+                for key in ["summary", "title", "name"] {
+                    if let Some(Value::String(value)) = fields.get(key) {
+                        if !value.trim().is_empty() {
+                            return Some(value.trim().to_string());
+                        }
+                    }
+                }
+            }
+
+            if let Some(Value::String(value)) = map.get("description") {
+                return first_non_empty_trimmed_line(value);
+            }
+
+            None
+        }
+        _ => None,
+    }
+}
+
+fn extract_task_description_from_task_show(task_show: &str) -> Option<String> {
+    let trimmed = task_show.trim_start();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.starts_with('[') || trimmed.starts_with('{') {
+        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+            if let Some(description) = task_description_from_json(&value) {
+                return Some(description);
+            }
+        }
+    }
+
+    first_non_empty_trimmed_line(task_show)
 }
 
 fn build_command_env(
@@ -557,7 +617,7 @@ pub(crate) fn dispatch_notification_hook(
         state
             .current_task_show
             .as_deref()
-            .and_then(first_non_empty_trimmed_line)
+            .and_then(extract_task_description_from_task_show)
             .unwrap_or_default()
     };
     let notify_exit_code =
@@ -743,6 +803,21 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         state.current_task_started_at = Some(Instant::now());
         state.current_task_show = None;
         state.current_task_status = None;
+        if state
+            .config
+            .hooks
+            .on_notification
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+            && should_dispatch_notification(state, NotificationEvent::TaskStart)
+        {
+            // Best-effort: attempt to populate task_show so task_start notifications can include a
+            // useful `task_description` (for example a JSON `title` field) without making this an
+            // additional failure point.
+            let _ = run_task_show(state, &task_id, &[]);
+        }
         dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskStart);
         let resume_args = vec!["resume".to_string(), "--last".to_string()];
         let mut review_loops: u64 = 0;
@@ -1154,6 +1229,39 @@ mod tests {
         assert_eq!(
             hook_env_is_set(&hook_contents, "TRUDGER_NOTIFY_EXIT_CODE"),
             Some(false)
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn dispatch_notification_hook_extracts_title_from_json_task_show() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let hook_log = setup_notification_hook_fixture(&temp);
+
+        let mut state = base_state(&temp);
+        state.config.hooks.on_notification = Some("hook".to_string());
+        state.current_task_show = Some(
+            r#"
+[
+  {
+    "title": "My Title",
+    "description": "More details"
+  }
+]
+"#
+            .to_string(),
+        );
+
+        dispatch_notification_hook(&state, Some(&task("tr-1")), NotificationEvent::TaskEnd);
+
+        let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
+        assert_eq!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_TASK_DESCRIPTION").as_deref(),
+            Some("My Title")
         );
 
         crate::unit_tests::reset_test_env();

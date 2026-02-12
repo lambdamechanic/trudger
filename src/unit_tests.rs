@@ -4319,6 +4319,79 @@ log_path: ""
 }
 
 #[test]
+fn run_with_cli_task_start_notification_includes_task_description_from_task_show() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let order_log = temp.path().join("order.log");
+    let next_marker = temp.path().join("next.marker");
+    let next_marker_path = next_marker.display().to_string();
+    let status_marker = temp.path().join("status.marker");
+    let status_marker_path = status_marker.display().to_string();
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+agent_command: "true"
+agent_review_command: "true"
+commands:
+  next_task: "if [ -f '{next_marker_path}' ]; then exit 1; else touch '{next_marker_path}'; echo tr-1; fi"
+  task_show: "echo 'My Title'"
+  task_status: "if [ -f '{status_marker_path}' ]; then echo closed; else touch '{status_marker_path}'; echo ready; fi"
+  task_update_status: "true"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+  on_notification: "echo notify $TRUDGER_NOTIFY_EVENT desc=$TRUDGER_NOTIFY_TASK_DESCRIPTION >> '{}'"
+  on_notification_scope: "task_boundaries"
+log_path: ""
+"#,
+            order_log.display()
+        ),
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+    fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected idle exit");
+    assert_eq!(err.code, 0);
+
+    let order = fs::read_to_string(&order_log).expect("read order log");
+    assert!(
+        order.contains("notify task_start desc=My Title"),
+        "expected task_start notification to include description, got:
+{order}"
+    );
+    assert!(
+        order.contains("notify task_end desc=My Title"),
+        "expected task_end notification to include description, got:
+{order}"
+    );
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
 fn run_with_cli_dispatches_all_logs_notifications_when_log_path_is_empty() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
