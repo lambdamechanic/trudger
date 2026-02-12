@@ -4240,6 +4240,76 @@ log_path: ""
 }
 
 #[test]
+fn run_with_cli_emits_task_end_once_when_on_requires_human_hook_fails() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let order_log = temp.path().join("order.log");
+    let marker = temp.path().join("status.marker");
+    let marker_path = marker.display().to_string();
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+agent_command: "true"
+agent_review_command: "true"
+commands:
+  next_task: "printf 'tr-1\n'"
+  task_show: "printf 'show\n'"
+  task_status: "if [ -f '{marker_path}' ]; then printf 'blocked\n'; else touch '{marker_path}'; printf 'ready\n'; fi"
+  task_update_status: "true"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "exit 9"
+  on_notification: "printf 'notify %s\n' \"$TRUDGER_NOTIFY_EVENT\" >> '{}'"
+  on_notification_scope: "task_boundaries"
+log_path: ""
+"#,
+            order_log.display()
+        ),
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+    fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected on_requires_human failure");
+    assert_eq!(err.code, 1);
+
+    let order = fs::read_to_string(&order_log).expect("read order log");
+    assert_eq!(
+        order.matches("notify task_start").count(),
+        1,
+        "task_start should be emitted once, got:\n{order}"
+    );
+    assert_eq!(
+        order.matches("notify task_end").count(),
+        1,
+        "task_end should be emitted once when on_requires_human fails, got:\n{order}"
+    );
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
 fn run_with_cli_dispatches_all_logs_notifications_when_log_path_is_empty() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();

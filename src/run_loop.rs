@@ -939,6 +939,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
     use tempfile::TempDir;
 
@@ -1000,6 +1001,18 @@ mod tests {
         }
     }
 
+    fn setup_notification_hook_fixture(temp: &TempDir) -> PathBuf {
+        let hook_log = temp.path().join("hook.log");
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+        hook_log
+    }
+
     #[test]
     fn build_command_env_joins_completed_tasks_with_commas() {
         let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
@@ -1050,14 +1063,7 @@ mod tests {
         crate::unit_tests::reset_test_env();
 
         let temp = TempDir::new().expect("temp dir");
-        let hook_log = temp.path().join("hook.log");
-        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("bin");
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
-        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+        let hook_log = setup_notification_hook_fixture(&temp);
 
         let mut state = base_state(&temp);
         state.config.hooks.on_notification = Some("hook".to_string());
@@ -1082,14 +1088,7 @@ mod tests {
         crate::unit_tests::reset_test_env();
 
         let temp = TempDir::new().expect("temp dir");
-        let hook_log = temp.path().join("hook.log");
-        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("bin");
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
-        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+        let hook_log = setup_notification_hook_fixture(&temp);
 
         let mut state = base_state(&temp);
         state.config.hooks.on_notification = Some("hook".to_string());
@@ -1131,14 +1130,7 @@ mod tests {
         crate::unit_tests::reset_test_env();
 
         let temp = TempDir::new().expect("temp dir");
-        let hook_log = temp.path().join("hook.log");
-        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("bin");
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
-        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+        let hook_log = setup_notification_hook_fixture(&temp);
 
         let mut state = base_state(&temp);
         state.config.hooks.on_notification = Some("hook".to_string());
@@ -1165,14 +1157,7 @@ mod tests {
         crate::unit_tests::reset_test_env();
 
         let temp = TempDir::new().expect("temp dir");
-        let hook_log = temp.path().join("hook.log");
-        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("bin");
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
-        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+        let hook_log = setup_notification_hook_fixture(&temp);
 
         let mut state = base_state(&temp);
         state.config.hooks.on_notification = Some("hook".to_string());
@@ -1199,14 +1184,7 @@ mod tests {
         crate::unit_tests::reset_test_env();
 
         let temp = TempDir::new().expect("temp dir");
-        let hook_log = temp.path().join("hook.log");
-        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("bin");
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
-        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+        let hook_log = setup_notification_hook_fixture(&temp);
 
         let mut state = base_state(&temp);
         state.config.hooks.on_notification = Some("hook".to_string());
@@ -1275,14 +1253,7 @@ mod tests {
         crate::unit_tests::reset_test_env();
 
         let temp = TempDir::new().expect("temp dir");
-        let hook_log = temp.path().join("hook.log");
-        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("bin");
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
-        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+        let hook_log = setup_notification_hook_fixture(&temp);
 
         let mut state = base_state(&temp);
         state.config.hooks.on_notification = Some("hook".to_string());
@@ -1412,19 +1383,12 @@ mod tests {
         crate::unit_tests::reset_test_env();
 
         let temp = TempDir::new().expect("temp dir");
-        let hook_log = temp.path().join("hook.log");
+        let hook_log = setup_notification_hook_fixture(&temp);
         let next_task_queue = temp.path().join("next-task-queue.txt");
         let status_queue = temp.path().join("status-queue.txt");
         std::fs::write(&next_task_queue, "tr-1\n\n").expect("write next-task queue");
         std::fs::write(&status_queue, "ready\nclosed\n").expect("write status queue");
 
-        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("bin");
-        let old_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
-        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
         std::env::set_var("NEXT_TASK_OUTPUT_QUEUE", &next_task_queue);
         std::env::set_var("TASK_STATUS_QUEUE", &status_queue);
         std::env::set_var("TASK_SHOW_OUTPUT", "Task title\nmore details");
