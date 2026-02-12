@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::config::Config;
+use crate::config::{Config, NotificationScope};
 use crate::logger::{sanitize_log_value, Logger};
 use crate::shell::{
     run_shell_command_capture, run_shell_command_status, CommandEnv, CommandResult,
@@ -96,12 +96,32 @@ pub(crate) fn validate_config(config: &Config, manual_tasks: &[TaskId]) -> Resul
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum NotificationEvent {
+    RunStart,
+    RunEnd,
+    TaskStart,
+    TaskEnd,
+}
+
+impl NotificationEvent {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RunStart => "run_start",
+            Self::RunEnd => "run_end",
+            Self::TaskStart => "task_start",
+            Self::TaskEnd => "task_end",
+        }
+    }
+}
+
 fn build_command_env(
     state: &RuntimeState,
     task_id: Option<&TaskId>,
     prompt: Option<String>,
     review_prompt: Option<String>,
     target_status: Option<String>,
+    notify_event: Option<NotificationEvent>,
 ) -> CommandEnv {
     fn join_task_ids(tasks: &[TaskId]) -> String {
         let mut out = String::new();
@@ -145,6 +165,7 @@ fn build_command_env(
         review_prompt,
         completed,
         needs_human,
+        notify_event: notify_event.map(|value| value.as_str().to_string()),
     }
 }
 
@@ -155,7 +176,7 @@ fn run_config_command(
     log_label: &str,
     args: &[String],
 ) -> Result<CommandResult, String> {
-    let env = build_command_env(state, task_id, None, None, None);
+    let env = build_command_env(state, task_id, None, None, None, None);
     run_shell_command_capture(
         command,
         log_label,
@@ -180,6 +201,7 @@ fn run_config_command_status(
         None,
         None,
         target_status.map(|value| value.to_string()),
+        None,
     );
     run_shell_command_status(
         command,
@@ -199,7 +221,7 @@ fn run_agent_command(
     review_prompt: Option<String>,
     args: &[String],
 ) -> Result<i32, String> {
-    let env = build_command_env(state, None, prompt, review_prompt, None);
+    let env = build_command_env(state, None, prompt, review_prompt, None, None);
     run_shell_command_status(command, log_label, "none", args, &env, &state.logger)
 }
 
@@ -452,8 +474,29 @@ fn run_hook(
     Ok(())
 }
 
-#[allow(dead_code)]
-fn dispatch_notification_hook(state: &RuntimeState, task_id: Option<&TaskId>) {
+fn should_dispatch_notification(state: &RuntimeState, event: NotificationEvent) -> bool {
+    match state.config.hooks.effective_notification_scope() {
+        Some(NotificationScope::TaskBoundaries) => {
+            matches!(
+                event,
+                NotificationEvent::TaskStart | NotificationEvent::TaskEnd
+            )
+        }
+        Some(NotificationScope::RunBoundaries) => {
+            matches!(
+                event,
+                NotificationEvent::RunStart | NotificationEvent::RunEnd
+            )
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn dispatch_notification_hook(
+    state: &RuntimeState,
+    task_id: Option<&TaskId>,
+    event: NotificationEvent,
+) {
     let Some(hook_command) = state
         .config
         .hooks
@@ -465,7 +508,19 @@ fn dispatch_notification_hook(state: &RuntimeState, task_id: Option<&TaskId>) {
         return;
     };
 
-    match run_config_command_status(state, hook_command, task_id, "on_notification", None, &[]) {
+    if !should_dispatch_notification(state, event) {
+        return;
+    }
+
+    let env = build_command_env(state, task_id, None, None, None, Some(event));
+    match run_shell_command_status(
+        hook_command,
+        "on_notification",
+        task_id.map(|value| value.as_str()).unwrap_or("none"),
+        &[],
+        &env,
+        &state.logger,
+    ) {
         Ok(0) => {}
         Ok(exit_code) => {
             eprintln!(
@@ -473,7 +528,8 @@ fn dispatch_notification_hook(state: &RuntimeState, task_id: Option<&TaskId>) {
                 exit_code
             );
             state.logger.log_transition(&format!(
-                "notification_hook_failed task={} exit_code={}",
+                "notification_hook_failed event={} task={} exit_code={}",
+                event.as_str(),
                 task_id.map(|value| value.as_str()).unwrap_or("none"),
                 exit_code
             ));
@@ -481,12 +537,22 @@ fn dispatch_notification_hook(state: &RuntimeState, task_id: Option<&TaskId>) {
         Err(err) => {
             eprintln!("Warning: failed to run notification hook: {}.", err);
             state.logger.log_transition(&format!(
-                "notification_hook_failed task={} err={}",
+                "notification_hook_failed event={} task={} err={}",
+                event.as_str(),
                 task_id.map(|value| value.as_str()).unwrap_or("none"),
                 sanitize_log_value(&err)
             ));
         }
     }
+}
+
+pub(crate) fn finish_current_task_context(state: &mut RuntimeState) {
+    if let Some(task_id) = state.current_task_id.as_ref() {
+        dispatch_notification_hook(state, Some(task_id), NotificationEvent::TaskEnd);
+    }
+    state.current_task_id = None;
+    state.current_task_show = None;
+    state.current_task_status = None;
 }
 
 fn run_agent_solve(state: &RuntimeState, args: &[String]) -> Result<(), String> {
@@ -590,6 +656,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         state.current_task_id = Some(task_id.clone());
         state.current_task_show = None;
         state.current_task_status = None;
+        dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskStart);
         let resume_args = vec!["resume".to_string(), "--last".to_string()];
         let mut review_loops: u64 = 0;
 
@@ -716,7 +783,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 state
                     .logger
                     .log_transition(&format!("completed task={}", task_id));
-                dispatch_notification_hook(state, Some(&task_id));
+                dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskEnd);
                 if let Err(err) = run_hook(
                     state,
                     &state.config.hooks.on_completed,
@@ -733,7 +800,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 state
                     .logger
                     .log_transition(&format!("needs_human task={}", task_id));
-                dispatch_notification_hook(state, Some(&task_id));
+                dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskEnd);
                 if let Err(err) = run_hook(
                     state,
                     &state.config.hooks.on_requires_human,
@@ -773,7 +840,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             state
                 .logger
                 .log_transition(&format!("needs_human task={}", task_id));
-            dispatch_notification_hook(state, Some(&task_id));
+            dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskEnd);
             if let Err(err) = run_hook(
                 state,
                 &state.config.hooks.on_requires_human,
@@ -863,7 +930,7 @@ mod tests {
         let mut state = base_state(&temp);
         state.completed_tasks = vec![task("tr-1"), task("tr-2")];
 
-        let env = build_command_env(&state, None, None, None, None);
+        let env = build_command_env(&state, None, None, None, None, None);
         assert_eq!(env.completed.as_deref(), Some("tr-1,tr-2"));
     }
 
@@ -888,7 +955,7 @@ mod tests {
         std::env::set_var("HOOK_MOCK_LOG", &hook_log);
 
         let state = base_state(&temp);
-        dispatch_notification_hook(&state, Some(&task("tr-1")));
+        dispatch_notification_hook(&state, Some(&task("tr-1")), NotificationEvent::TaskEnd);
 
         assert!(
             !hook_log.exists(),
@@ -915,12 +982,52 @@ mod tests {
 
         let mut state = base_state(&temp);
         state.config.hooks.on_notification = Some("hook".to_string());
-        dispatch_notification_hook(&state, Some(&task("tr-1")));
+        dispatch_notification_hook(&state, Some(&task("tr-1")), NotificationEvent::TaskEnd);
 
         let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
         assert!(
             hook_contents.contains("hook args_count=0 args="),
             "notification hook should receive no positional args, got:\n{hook_contents}"
+        );
+        assert!(
+            hook_contents.contains("env TRUDGER_NOTIFY_EVENT=task_end"),
+            "notification hook should receive task_end event, got:\n{hook_contents}"
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn dispatch_notification_hook_respects_scope() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let hook_log = temp.path().join("hook.log");
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+        let mut state = base_state(&temp);
+        state.config.hooks.on_notification = Some("hook".to_string());
+
+        dispatch_notification_hook(&state, None, NotificationEvent::RunStart);
+        assert!(
+            !hook_log.exists(),
+            "run_start should not fire in default task_boundaries scope"
+        );
+
+        state.config.hooks.on_notification_scope = Some(NotificationScope::RunBoundaries);
+        dispatch_notification_hook(&state, None, NotificationEvent::RunStart);
+
+        let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
+        assert!(
+            hook_contents.contains("env TRUDGER_NOTIFY_EVENT=run_start"),
+            "run_start should fire for run_boundaries scope, got:\n{hook_contents}"
         );
 
         crate::unit_tests::reset_test_env();
@@ -938,11 +1045,11 @@ mod tests {
         state.logger = Logger::new(Some(log_path.clone()));
         state.config.hooks.on_notification = Some("exit 7".to_string());
 
-        dispatch_notification_hook(&state, Some(&task("tr-1")));
+        dispatch_notification_hook(&state, Some(&task("tr-1")), NotificationEvent::TaskEnd);
 
         let log_contents = std::fs::read_to_string(&log_path).expect("read log");
         assert!(
-            log_contents.contains("notification_hook_failed task=tr-1 exit_code=7"),
+            log_contents.contains("notification_hook_failed event=task_end task=tr-1 exit_code=7"),
             "expected fail-open transition, got:\n{log_contents}"
         );
 
@@ -963,11 +1070,13 @@ mod tests {
         state.logger = Logger::new(Some(log_path.clone()));
         state.config.hooks.on_notification = Some("hook".to_string());
 
-        dispatch_notification_hook(&state, Some(&task("tr-1")));
+        dispatch_notification_hook(&state, Some(&task("tr-1")), NotificationEvent::TaskEnd);
 
         let log_contents = std::fs::read_to_string(&log_path).expect("read log");
         assert!(
-            log_contents.contains("notification_hook_failed task=tr-1 err=Failed to run command"),
+            log_contents.contains(
+                "notification_hook_failed event=task_end task=tr-1 err=Failed to run command"
+            ),
             "expected fail-open spawn-error transition, got:\n{log_contents}"
         );
 
@@ -1017,7 +1126,8 @@ mod tests {
             "task should still complete, got:\n{log_contents}"
         );
         assert!(
-            log_contents.contains("notification_hook_failed task=tr-1 exit_code=7"),
+            log_contents
+                .contains("notification_hook_failed event=task_start task=tr-1 exit_code=7"),
             "notification failure should be surfaced without aborting, got:\n{log_contents}"
         );
 

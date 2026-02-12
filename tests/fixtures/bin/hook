@@ -35,6 +35,7 @@ if [[ -n "${log_path}" ]]; then
     log_env_flag "TRUDGER_DOCTOR_SCRATCH_DIR"
     log_env_flag "TRUDGER_COMPLETED"
     log_env_flag "TRUDGER_NEEDS_HUMAN"
+    log_env_flag "TRUDGER_NOTIFY_EVENT"
     log_env_value "TRUDGER_TASK_ID"
     log_env_value "TRUDGER_TASK_SHOW"
     log_env_value "TRUDGER_TASK_STATUS"
@@ -42,5 +43,6 @@ if [[ -n "${log_path}" ]]; then
     log_env_value "TRUDGER_DOCTOR_SCRATCH_DIR"
     log_env_value "TRUDGER_COMPLETED"
     log_env_value "TRUDGER_NEEDS_HUMAN"
+    log_env_value "TRUDGER_NOTIFY_EVENT"
   } >> "${log_path}"
 fi

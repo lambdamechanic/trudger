@@ -41,6 +41,7 @@ pub(crate) struct CommandEnv {
     pub(crate) review_prompt: Option<String>,
     pub(crate) completed: Option<String>,
     pub(crate) needs_human: Option<String>,
+    pub(crate) notify_event: Option<String>,
 }
 
 impl CommandEnv {
@@ -73,6 +74,7 @@ impl CommandEnv {
             self.review_prompt.as_deref(),
             self.completed.as_deref(),
             self.needs_human.as_deref(),
+            self.notify_event.as_deref(),
         );
 
         if total > TRUDGER_ENV_TOTAL_MAX_BYTES {
@@ -98,6 +100,7 @@ impl CommandEnv {
                 self.review_prompt.as_deref(),
                 self.completed.as_deref(),
                 self.needs_human.as_deref(),
+                self.notify_event.as_deref(),
             );
 
             if new_total < total {
@@ -205,6 +208,15 @@ impl CommandEnv {
             self.needs_human.as_deref(),
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_NOTIFY_EVENT",
+            self.notify_event.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
     }
 
     fn maybe_truncate_utf8(value: &str, max_bytes: usize) -> (Cow<'_, str>, usize, usize) {
@@ -247,6 +259,7 @@ impl CommandEnv {
         review_prompt: Option<&str>,
         completed: Option<&str>,
         needs_human: Option<&str>,
+        notify_event: Option<&str>,
     ) -> usize {
         let mut total = 0usize;
         total += Self::env_entry_payload_bytes(
@@ -286,6 +299,11 @@ impl CommandEnv {
         total += Self::env_entry_payload_bytes(
             "TRUDGER_NEEDS_HUMAN",
             needs_human,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_NOTIFY_EVENT",
+            notify_event,
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
         total
@@ -397,6 +415,7 @@ mod tests {
             review_prompt: None,
             completed: Some(huge),
             needs_human: None,
+            notify_event: None,
         };
 
         let mut cmd = Command::new("true");

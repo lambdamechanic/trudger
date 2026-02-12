@@ -11,7 +11,10 @@ use crate::cli::{parse_manual_tasks, Cli, CliCommand};
 use crate::config::load_config;
 use crate::doctor::run_doctor_mode;
 use crate::logger::Logger;
-use crate::run_loop::{quit, reset_task_on_exit, run_loop, validate_config, Quit, RuntimeState};
+use crate::run_loop::{
+    dispatch_notification_hook, finish_current_task_context, quit, reset_task_on_exit, run_loop,
+    validate_config, NotificationEvent, Quit, RuntimeState,
+};
 use crate::tmux::TmuxState;
 use crate::wizard::run_wizard_cli;
 
@@ -79,7 +82,10 @@ pub(crate) fn render_prompt(path: &Path) -> Result<String, String> {
     Ok(out)
 }
 
-pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
+fn run_with_cli_impl<F>(cli: Cli, wizard_runner: F) -> Result<(), Quit>
+where
+    F: FnOnce(&Path) -> Result<(), Quit>,
+{
     let mode = match cli.command {
         Some(CliCommand::Doctor) => AppMode::Doctor,
         Some(CliCommand::Wizard) => AppMode::Wizard,
@@ -143,7 +149,7 @@ pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
     let config_path = config_path.unwrap_or_else(|| default_config.clone());
 
     if mode == AppMode::Wizard {
-        return run_wizard_cli(&config_path);
+        return wizard_runner(&config_path);
     }
 
     if !config_path.is_file() {
@@ -220,10 +226,25 @@ pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
         return Err(quit(&state.logger, "error", 1));
     }
 
+    dispatch_notification_hook(&state, None, NotificationEvent::RunStart);
     let result = run_loop(&mut state);
     reset_task_on_exit(&state, &result);
+    finish_current_task_context(&mut state);
     state.tmux.restore();
+    dispatch_notification_hook(&state, None, NotificationEvent::RunEnd);
     result
+}
+
+pub(crate) fn run_with_cli(cli: Cli) -> Result<(), Quit> {
+    run_with_cli_impl(cli, run_wizard_cli)
+}
+
+#[cfg(test)]
+pub(crate) fn run_with_cli_for_test<F>(cli: Cli, wizard_runner: F) -> Result<(), Quit>
+where
+    F: FnOnce(&Path) -> Result<(), Quit>,
+{
+    run_with_cli_impl(cli, wizard_runner)
 }
 
 pub(crate) fn run_with_args(args: Vec<OsString>) -> Result<(), Quit> {

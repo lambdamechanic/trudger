@@ -1419,6 +1419,8 @@ log_path: "./.trudger.log"
 hooks:
   on_completed: "hook --done"
   on_requires_human: "hook --human"
+  on_notification: "hook --notify"
+  on_notification_scope: "run_boundaries"
   on_doctor_setup: 'hook --doctor-setup; rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'
 "#,
     )
@@ -1549,6 +1551,10 @@ hooks:
     assert!(
         hook_contents.contains("hook args_count=1 args=--human"),
         "doctor should execute hooks.on_requires_human, got:\n{hook_contents}"
+    );
+    assert!(
+        !hook_contents.contains("args=--notify"),
+        "doctor mode must not execute hooks.on_notification, got:\n{hook_contents}"
     );
     assert!(
         !Path::new(&scratch_dir).exists(),
@@ -1842,6 +1848,7 @@ fn run_shell_command_noops_when_command_is_empty() {
         review_prompt: None,
         completed: None,
         needs_human: None,
+        notify_event: None,
     };
 
     let result = crate::shell::run_shell_command_capture("", "label", "none", &[], &env, &logger)
@@ -1889,6 +1896,7 @@ fn command_env_truncates_oversized_values_and_warns() {
         review_prompt: None,
         completed: None,
         needs_human: None,
+        notify_event: None,
     };
 
     let stderr = capture_stderr(|| {
@@ -1944,6 +1952,7 @@ fn command_env_truncates_total_trudger_payload_and_warns() {
         review_prompt: None,
         completed: None,
         needs_human: None,
+        notify_event: None,
     };
 
     let stderr = capture_stderr(|| {
@@ -2024,6 +2033,7 @@ fn run_shell_command_errors_when_bash_is_missing() {
         review_prompt: None,
         completed: None,
         needs_human: None,
+        notify_event: None,
     };
 
     let err = crate::shell::run_shell_command_capture("true", "label", "none", &[], &env, &logger)
@@ -3433,6 +3443,8 @@ fn run_with_cli_invokes_wizard_runner_without_tty() {
     let old_home = env::var_os("HOME");
     let temp = TempDir::new().expect("temp dir");
     env::set_var("HOME", temp.path());
+    let hook_log = temp.path().join("hook.log");
+    env::set_var("HOOK_MOCK_LOG", &hook_log);
 
     let err = run_with_cli_for_test(
         Cli {
@@ -3453,6 +3465,10 @@ fn run_with_cli_invokes_wizard_runner_without_tty() {
     .expect_err("expected wizard TTY error");
     assert_eq!(err.code, 1);
     assert!(err.reason.contains("requires an interactive terminal"));
+    assert!(
+        !hook_log.exists(),
+        "wizard mode must not execute hooks.on_notification"
+    );
 
     match old_home {
         Some(value) => env::set_var("HOME", value),
@@ -3907,6 +3923,8 @@ fn run_with_cli_runs_run_loop_and_restores_tmux() {
         .join("bin");
     let old_path = env::var("PATH").unwrap_or_default();
     env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    let hook_log = temp.path().join("hook.log");
+    env::set_var("HOOK_MOCK_LOG", &hook_log);
 
     env::set_var("NEXT_TASK_EXIT_CODE", "1");
 
@@ -3925,6 +3943,8 @@ review_loop_limit: 2
 hooks:
   on_completed: "true"
   on_requires_human: "true"
+  on_notification: "hook"
+  on_notification_scope: "run_boundaries"
 log_path: ""
 "#,
     )
@@ -3943,6 +3963,101 @@ log_path: ""
     })
     .expect_err("expected idle exit");
     assert_eq!(err.code, 0);
+
+    let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+    assert!(
+        hook_contents.contains("env TRUDGER_NOTIFY_EVENT=run_start"),
+        "run_start notification missing, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("env TRUDGER_NOTIFY_EVENT=run_end"),
+        "run_end notification missing, got:\n{hook_contents}"
+    );
+    assert_eq!(
+        hook_contents
+            .matches("env TRUDGER_NOTIFY_EVENT=run_end")
+            .count(),
+        1,
+        "run_end should be emitted exactly once, got:\n{hook_contents}"
+    );
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
+fn run_with_cli_emits_run_end_after_teardown_on_error_exit() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let order_log = temp.path().join("order.log");
+    env::set_var("ORDER_LOG", &order_log);
+
+    let marker = temp.path().join("status.marker");
+    let marker_path = marker.display().to_string();
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+agent_command: "exit 2"
+agent_review_command: "true"
+commands:
+  next_task: "printf 'tr-1\n'"
+  task_show: "printf 'show\n'"
+  task_status: "if [ -f '{marker_path}' ]; then printf 'in_progress\n'; else touch '{marker_path}'; printf 'ready\n'; fi"
+  task_update_status: "printf 'update %s\n' \"$TRUDGER_TARGET_STATUS\" >> \"$ORDER_LOG\""
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+  on_notification: "printf 'notify %s\n' \"$TRUDGER_NOTIFY_EVENT\" >> \"$ORDER_LOG\""
+  on_notification_scope: "run_boundaries"
+log_path: ""
+"#
+        ),
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+    fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected solve failure");
+    assert_eq!(err.code, 1);
+
+    let order = fs::read_to_string(&order_log).expect("read order log");
+    assert!(
+        order.contains("notify run_start"),
+        "missing run_start, got:\n{order}"
+    );
+    assert!(
+        order.contains("update open"),
+        "expected reset-task teardown before run_end, got:\n{order}"
+    );
+    assert!(
+        order.ends_with("notify run_end\n"),
+        "run_end should be last teardown event, got:\n{order}"
+    );
+    assert_eq!(
+        order.matches("notify run_end").count(),
+        1,
+        "run_end should be emitted exactly once, got:\n{order}"
+    );
 
     match old_home {
         Some(value) => env::set_var("HOME", value),

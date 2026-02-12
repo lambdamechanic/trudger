@@ -113,6 +113,7 @@ impl DoctorCtx<'_> {
             review_prompt: None,
             completed: None,
             needs_human: None,
+            notify_event: None,
         }
     }
 
@@ -448,6 +449,7 @@ pub(crate) fn run_doctor_mode(
         review_prompt: None,
         completed: None,
         needs_human: None,
+        notify_event: None,
     };
 
     let hook_exit = run_shell_command_status(&hook, "doctor-setup", "none", &[], &env, logger);
