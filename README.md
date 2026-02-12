@@ -139,9 +139,15 @@ hooks:
 ```
 
 Notification hook interface:
-- `hooks.on_notification` receives a JSON payload file path via `TRUDGER_NOTIFY_PAYLOAD_PATH`.
-- JSON payload fields: `event`, `duration_ms`, `folder`, `exit_code` (`run_end` only), `task_id`, `task_description`, `message` (`all_logs` only).
-- Existing `TRUDGER_NOTIFY_*` env vars remain populated for compatibility.
+- `hooks.on_notification` receives no positional args; Trudger provides notification context via `TRUDGER_NOTIFY_*` environment variables.
+- `TRUDGER_NOTIFY_PAYLOAD_PATH` points to a temporary JSON file containing the notification payload (valid for the duration of the hook invocation).
+  - JSON payload fields: `event`, `duration_ms`, `folder`, `exit_code` (`run_end` only), `task_id`, `task_description`, `message` (`all_logs` only).
+- Payload fields are also mirrored into env vars for compatibility:
+  - `TRUDGER_NOTIFY_EVENT`, `TRUDGER_NOTIFY_DURATION_MS`, `TRUDGER_NOTIFY_FOLDER`, `TRUDGER_NOTIFY_EXIT_CODE` (`run_end` only),
+    `TRUDGER_NOTIFY_TASK_ID`, `TRUDGER_NOTIFY_TASK_DESCRIPTION`, `TRUDGER_NOTIFY_MESSAGE` (`all_logs` only), `TRUDGER_NOTIFY_PAYLOAD_PATH`.
+- `task_description` extraction:
+  - If `commands.task_show` output is JSON, Trudger prefers `title`, then `summary`, then `name` (also checks `fields.summary/title/name`), and falls back to the first non-empty line of `description`.
+  - Otherwise, Trudger uses the first non-empty trimmed line of `commands.task_show` output.
 
 ## Install
 
