@@ -240,6 +240,15 @@ where
         return Err(quit(&state.logger, "error", 1));
     }
 
+    if matches!(
+        state.config.hooks.effective_notification_scope(),
+        Some(NotificationScope::AllLogs)
+    ) {
+        state
+            .logger
+            .mark_all_logs_run_started_at(state.run_started_at);
+    }
+
     dispatch_notification_hook(&state, None, NotificationEvent::RunStart);
     let result = run_loop(&mut state);
     reset_task_on_exit(&state, &result);

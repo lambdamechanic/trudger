@@ -140,7 +140,7 @@ hooks:
 
 Notification payload env vars:
 - `TRUDGER_NOTIFY_EVENT`: `run_start`, `run_end`, `task_start`, `task_end`, or `log`.
-- `TRUDGER_NOTIFY_DURATION_MS`: elapsed milliseconds for the event context (`0` for start events).
+- `TRUDGER_NOTIFY_DURATION_MS`: elapsed milliseconds for the event context (`0` for start events; `log` is measured from `run_start`).
 - `TRUDGER_NOTIFY_FOLDER`: run working directory.
 - `TRUDGER_NOTIFY_TASK_ID`: task id when in task context; empty for run-level events.
 - `TRUDGER_NOTIFY_TASK_DESCRIPTION`: first non-empty line from `commands.task_show`, when available.

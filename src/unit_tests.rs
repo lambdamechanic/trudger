@@ -4404,6 +4404,51 @@ log_path: ""
 }
 
 #[test]
+fn all_logs_duration_baseline_starts_at_run_start() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let temp = TempDir::new().expect("temp dir");
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    let hook_log = temp.path().join("hook.log");
+    env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+    let config_path = temp.path().join("trudger.yml");
+    let mut logger = Logger::new(None);
+    logger.configure_all_logs_notification(Some("hook"), &config_path);
+
+    thread::sleep(Duration::from_millis(20));
+    logger.log_transition("before_run_start");
+    logger.mark_all_logs_run_started_at(Instant::now() - Duration::from_millis(30));
+    logger.log_transition("after_run_start");
+
+    let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+    let durations: Vec<u128> = hook_contents
+        .lines()
+        .filter_map(|line| line.strip_prefix("env TRUDGER_NOTIFY_DURATION_MS="))
+        .filter_map(|value| value.parse::<u128>().ok())
+        .collect();
+    assert_eq!(
+        durations.len(),
+        2,
+        "expected two hook runs, got:\n{hook_contents}"
+    );
+    assert_eq!(
+        durations[0], 0,
+        "all_logs duration before run_start should be zero, got:\n{hook_contents}"
+    );
+    assert!(
+        durations[1] >= 20,
+        "all_logs duration after run_start should use run_start baseline, got:\n{hook_contents}"
+    );
+}
+
+#[test]
 fn all_logs_notification_failure_does_not_recurse() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();

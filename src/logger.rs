@@ -40,7 +40,11 @@ impl Logger {
             .filter(|value| !value.is_empty())
             .map(|value| value.to_string());
         self.notification_config_path = config_path.display().to_string();
-        self.notification_run_started_at = Some(Instant::now());
+        self.notification_run_started_at = None;
+    }
+
+    pub(crate) fn mark_all_logs_run_started_at(&mut self, run_started_at: Instant) {
+        self.notification_run_started_at = Some(run_started_at);
     }
 
     pub(crate) fn log_transition(&self, message: &str) {
