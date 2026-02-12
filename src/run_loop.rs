@@ -1118,6 +1118,74 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_notification_hook_uses_empty_description_for_whitespace_task_show() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let hook_log = temp.path().join("hook.log");
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+        let mut state = base_state(&temp);
+        state.config.hooks.on_notification = Some("hook".to_string());
+        state.current_task_show = Some(" \n \t\n".to_string());
+
+        dispatch_notification_hook(&state, Some(&task("tr-1")), NotificationEvent::TaskEnd);
+
+        let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
+        assert_eq!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_TASK_ID").as_deref(),
+            Some("tr-1")
+        );
+        assert_eq!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_TASK_DESCRIPTION").as_deref(),
+            Some("")
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn dispatch_notification_hook_uses_empty_description_when_task_show_missing() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let hook_log = temp.path().join("hook.log");
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+        let mut state = base_state(&temp);
+        state.config.hooks.on_notification = Some("hook".to_string());
+        state.current_task_show = None;
+
+        dispatch_notification_hook(&state, Some(&task("tr-1")), NotificationEvent::TaskEnd);
+
+        let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
+        assert_eq!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_TASK_ID").as_deref(),
+            Some("tr-1")
+        );
+        assert_eq!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_TASK_DESCRIPTION").as_deref(),
+            Some("")
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
     fn dispatch_notification_hook_run_start_and_run_end_payload_semantics() {
         let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
         crate::unit_tests::reset_test_env();
