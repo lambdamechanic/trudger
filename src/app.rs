@@ -170,6 +170,11 @@ where
         reason: message,
     })?;
 
+    // Capture the absolute invocation working directory once for stable notification payloads.
+    let invocation_folder = env::current_dir()
+        .ok()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
     let mut logger = Logger::new(loaded.config.log_path.clone());
 
     if mode == AppMode::Doctor {
@@ -183,6 +188,7 @@ where
         logger.configure_all_logs_notification(
             loaded.config.hooks.on_notification.as_deref(),
             &config_path,
+            invocation_folder.clone(),
         );
     }
 
@@ -220,6 +226,7 @@ where
     let mut state = RuntimeState {
         config: loaded.config,
         config_path,
+        invocation_folder,
         prompt_trudge: prompt_trudge_content,
         prompt_review: prompt_review_content,
         logger,

@@ -1,5 +1,4 @@
 use chrono::Utc;
-use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -15,6 +14,7 @@ pub(crate) struct Logger {
     disabled: AtomicBool,
     all_logs_notification_command: Option<String>,
     notification_config_path: String,
+    notification_invocation_folder: String,
     notification_in_flight: AtomicBool,
     notification_run_started_at: Option<Instant>,
 }
@@ -26,6 +26,7 @@ impl Logger {
             disabled: AtomicBool::new(false),
             all_logs_notification_command: None,
             notification_config_path: String::new(),
+            notification_invocation_folder: String::new(),
             notification_in_flight: AtomicBool::new(false),
             notification_run_started_at: None,
         }
@@ -35,12 +36,14 @@ impl Logger {
         &mut self,
         hook_command: Option<&str>,
         config_path: &Path,
+        invocation_folder: String,
     ) {
         self.all_logs_notification_command = hook_command
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(|value| value.to_string());
         self.notification_config_path = config_path.display().to_string();
+        self.notification_invocation_folder = invocation_folder;
         self.notification_run_started_at = None;
     }
 
@@ -93,10 +96,7 @@ impl Logger {
             .notification_run_started_at
             .map(|started_at| started_at.elapsed().as_millis())
             .unwrap_or(0);
-        let folder = env::current_dir()
-            .ok()
-            .map(|path| path.display().to_string())
-            .unwrap_or_default();
+        let folder = self.notification_invocation_folder.clone();
         let redacted_message = redact_transition_message_for_notification(message);
         let mut env = CommandEnv {
             cwd: None,

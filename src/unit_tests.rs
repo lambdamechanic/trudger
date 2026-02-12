@@ -401,6 +401,10 @@ fn run_loop_executes_commands_and_hooks_with_env() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(Some(log_path.clone())),
@@ -548,6 +552,10 @@ fn manual_task_not_ready_fails_fast_without_invoking_next_task() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -650,6 +658,10 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(Some(log_path)),
@@ -760,6 +772,10 @@ fn review_loop_limit_retries_until_closed() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(Some(log_path)),
@@ -852,6 +868,10 @@ fn review_loop_limit_exhaustion_marks_blocked_and_requires_human() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(Some(log_path)),
@@ -943,6 +963,10 @@ fn next_task_exit_1_exits_zero_without_running_commands() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(Some(log_path)),
@@ -1028,6 +1052,10 @@ fn hook_uses_env_task_id_in_shell() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(Some(log_path)),
@@ -1103,6 +1131,10 @@ fn skip_not_ready_respects_limit() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(Some(log_path)),
@@ -1185,6 +1217,10 @@ fn missing_status_after_review_errors() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(Some(log_path)),
@@ -1253,6 +1289,10 @@ fn reset_task_runs_on_exit_with_active_task() {
     let state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2280,6 +2320,10 @@ fn run_loop_errors_when_next_task_command_missing() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2339,6 +2383,10 @@ fn run_loop_propagates_next_task_exit_code_other_than_1() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2400,6 +2448,10 @@ fn run_loop_errors_when_selected_task_has_empty_status() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2473,6 +2525,10 @@ fn run_loop_errors_when_update_in_progress_fails() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2522,6 +2578,10 @@ fn run_loop_errors_when_task_show_fails_during_solve() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2571,6 +2631,10 @@ fn run_loop_errors_when_agent_solve_fails() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2635,6 +2699,10 @@ fn run_loop_errors_when_task_show_fails_during_review() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2684,6 +2752,10 @@ fn run_loop_errors_when_agent_review_fails() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2745,6 +2817,10 @@ fn run_loop_errors_when_on_completed_hook_fails() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2806,6 +2882,10 @@ fn run_loop_errors_when_on_requires_human_hook_fails_on_blocked_status() {
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2869,6 +2949,10 @@ fn run_loop_errors_when_blocked_status_update_fails_after_exhausting_review_loop
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2930,6 +3014,10 @@ fn run_loop_errors_when_on_requires_human_hook_fails_after_exhausting_review_loo
     let mut state = RuntimeState {
         config,
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -2978,6 +3066,10 @@ fn reset_task_on_exit_is_noop_for_ok_or_missing_task_id() {
             log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger,
@@ -3031,6 +3123,10 @@ fn reset_task_on_exit_logs_failure_when_reset_task_fails() {
             log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -3093,6 +3189,10 @@ fn reset_task_on_exit_skips_reset_when_task_status_is_empty() {
             log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -3153,6 +3253,10 @@ fn reset_task_on_exit_skips_reset_when_task_status_command_fails_to_spawn() {
             log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -3225,6 +3329,10 @@ fn hook_failure_after_closed_does_not_reset_task_on_exit() {
             log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -3298,6 +3406,10 @@ fn hook_failure_after_blocked_does_not_reset_task_on_exit() {
             log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -3371,6 +3483,10 @@ fn solve_failure_while_in_progress_invokes_reset_task_on_exit() {
             log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -3444,6 +3560,10 @@ fn sigint_while_in_progress_invokes_reset_task_on_exit() {
             log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -3518,6 +3638,10 @@ fn status_check_failure_at_exit_does_not_invoke_reset_task() {
             log_path: None,
         },
         config_path: temp.path().join("trudger.yml"),
+        invocation_folder: std::env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         prompt_trudge: "Task context".to_string(),
         prompt_review: "Review context".to_string(),
         logger: Logger::new(None),
@@ -4506,7 +4630,14 @@ fn all_logs_duration_baseline_starts_at_run_start() {
 
     let config_path = temp.path().join("trudger.yml");
     let mut logger = Logger::new(None);
-    logger.configure_all_logs_notification(Some("hook"), &config_path);
+    logger.configure_all_logs_notification(
+        Some("hook"),
+        &config_path,
+        env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+    );
 
     thread::sleep(Duration::from_millis(20));
     logger.log_transition("before_run_start");
@@ -4543,7 +4674,14 @@ fn all_logs_notification_failure_does_not_recurse() {
     let log_path = temp.path().join("trudger.log");
     let config_path = temp.path().join("trudger.yml");
     let mut logger = Logger::new(Some(log_path.clone()));
-    logger.configure_all_logs_notification(Some("exit 7"), &config_path);
+    logger.configure_all_logs_notification(
+        Some("exit 7"),
+        &config_path,
+        env::current_dir()
+            .ok()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+    );
     logger.log_transition("first");
 
     let contents = fs::read_to_string(&log_path).expect("read log");
@@ -4554,6 +4692,50 @@ fn all_logs_notification_failure_does_not_recurse() {
         1,
         "notification failure transition should be emitted once without recursive redispatch, got:\n{contents}"
     );
+}
+
+#[test]
+fn all_logs_notification_uses_invocation_folder_not_current_dir() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    let original_cwd = env::current_dir().expect("cwd");
+    let temp = TempDir::new().expect("temp dir");
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    let hook_log = temp.path().join("hook.log");
+    env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+    let invocation = temp.path().join("invocation");
+    let other = temp.path().join("other");
+    fs::create_dir_all(&invocation).expect("create invocation dir");
+    fs::create_dir_all(&other).expect("create other dir");
+
+    env::set_current_dir(&invocation).expect("set invocation cwd");
+    let invocation_folder = env::current_dir()
+        .ok()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+
+    let config_path = temp.path().join("trudger.yml");
+    let mut logger = Logger::new(None);
+    logger.configure_all_logs_notification(Some("hook"), &config_path, invocation_folder.clone());
+
+    env::set_current_dir(&other).expect("chdir");
+    logger.log_transition("hello");
+
+    let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+    assert!(
+        hook_contents.contains(&format!("env TRUDGER_NOTIFY_FOLDER={invocation_folder}")),
+        "expected TRUDGER_NOTIFY_FOLDER to use invocation cwd, got:\n{hook_contents}"
+    );
+
+    env::set_current_dir(&original_cwd).expect("restore cwd");
 }
 
 #[test]

@@ -20,6 +20,7 @@ use crate::tmux::TmuxState;
 pub(crate) struct RuntimeState {
     pub(crate) config: Config,
     pub(crate) config_path: PathBuf,
+    pub(crate) invocation_folder: String,
     pub(crate) prompt_trudge: String,
     pub(crate) prompt_review: String,
     pub(crate) logger: Logger,
@@ -603,10 +604,6 @@ pub(crate) fn dispatch_notification_hook(
             .map(|started_at| started_at.elapsed().as_millis())
             .unwrap_or(0),
     };
-    let notify_folder = env::current_dir()
-        .ok()
-        .map(|path| path.display().to_string())
-        .unwrap_or_default();
     let notify_task_id = task_id
         .or(state.current_task_id.as_ref())
         .map(|value| value.to_string())
@@ -624,7 +621,7 @@ pub(crate) fn dispatch_notification_hook(
         matches!(event, NotificationEvent::RunEnd).then_some(state.run_exit_code);
 
     env.notify_duration_ms = Some(notify_duration_ms.to_string());
-    env.notify_folder = Some(notify_folder);
+    env.notify_folder = Some(state.invocation_folder.clone());
     env.notify_exit_code = notify_exit_code.map(|value| value.to_string());
     env.notify_task_id = Some(notify_task_id);
     env.notify_task_description = Some(notify_task_description);
@@ -1086,6 +1083,10 @@ mod tests {
                 log_path: None,
             },
             config_path: temp.path().join("trudger.yml"),
+            invocation_folder: std::env::current_dir()
+                .ok()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
             prompt_trudge: "prompt".to_string(),
             prompt_review: "review".to_string(),
             logger: Logger::new(None),
@@ -1231,6 +1232,38 @@ mod tests {
             Some(false)
         );
 
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn dispatch_notification_hook_uses_invocation_folder_not_current_dir() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let original_cwd = std::env::current_dir().expect("cwd");
+        let temp = TempDir::new().expect("temp dir");
+        let hook_log = setup_notification_hook_fixture(&temp);
+        let invocation = temp.path().join("invocation");
+        let other = temp.path().join("other");
+        std::fs::create_dir_all(&invocation).expect("create invocation dir");
+        std::fs::create_dir_all(&other).expect("create other dir");
+
+        let mut state = base_state(&temp);
+        state.config.hooks.on_notification = Some("hook".to_string());
+        state.invocation_folder = invocation.display().to_string();
+
+        std::env::set_current_dir(&other).expect("chdir");
+        dispatch_notification_hook(&state, Some(&task("tr-1")), NotificationEvent::TaskEnd);
+
+        let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
+        let expected = invocation.display().to_string();
+        assert_eq!(
+            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_FOLDER").as_deref(),
+            Some(expected.as_str()),
+            "expected TRUDGER_NOTIFY_FOLDER to use invocation cwd, got:\n{hook_contents}"
+        );
+
+        std::env::set_current_dir(&original_cwd).expect("restore cwd");
         crate::unit_tests::reset_test_env();
     }
 
