@@ -607,6 +607,10 @@ pub(crate) fn finish_current_task_context(state: &mut RuntimeState) {
     if let Some(task_id) = state.current_task_id.as_ref() {
         dispatch_notification_hook(state, Some(task_id), NotificationEvent::TaskEnd);
     }
+    clear_current_task_context(state);
+}
+
+fn clear_current_task_context(state: &mut RuntimeState) {
     state.current_task_id = None;
     state.current_task_show = None;
     state.current_task_status = None;
@@ -843,6 +847,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                     .logger
                     .log_transition(&format!("completed task={}", task_id));
                 dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskEnd);
+                clear_current_task_context(state);
                 if let Err(err) = run_hook(
                     state,
                     &state.config.hooks.on_completed,
@@ -860,6 +865,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                     .logger
                     .log_transition(&format!("needs_human task={}", task_id));
                 dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskEnd);
+                clear_current_task_context(state);
                 if let Err(err) = run_hook(
                     state,
                     &state.config.hooks.on_requires_human,
@@ -900,6 +906,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
                 .logger
                 .log_transition(&format!("needs_human task={}", task_id));
             dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskEnd);
+            clear_current_task_context(state);
             if let Err(err) = run_hook(
                 state,
                 &state.config.hooks.on_requires_human,
@@ -928,10 +935,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             completed_env, needs_human_env
         ));
 
-        state.current_task_id = None;
-        state.current_task_show = None;
-        state.current_task_status = None;
-        state.current_task_started_at = None;
+        clear_current_task_context(state);
     }
 }
 
