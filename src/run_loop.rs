@@ -11,7 +11,8 @@ use crate::config::{Config, NotificationScope};
 use crate::logger::{sanitize_log_value, Logger};
 use crate::notification_payload::NotificationPayload;
 use crate::shell::{
-    run_shell_command_capture, run_shell_command_status, CommandEnv, CommandResult,
+    run_shell_command_capture, run_shell_command_status, truncate_utf8_to_bytes, CommandEnv,
+    CommandResult, TRUDGER_ENV_VALUE_MAX_BYTES,
 };
 use crate::task_types::{Phase, TaskId, TaskStatus};
 use crate::tmux::TmuxState;
@@ -328,6 +329,15 @@ fn run_task_show(
         ));
     }
     state.current_task_show = Some(output.stdout);
+    if state.current_task_id.as_ref() == Some(task_id) {
+        let show = state.current_task_show.clone();
+        let description = show
+            .as_deref()
+            .and_then(extract_task_description_from_task_show)
+            .unwrap_or_default();
+        state.logger.set_all_logs_task_show(show);
+        state.logger.set_all_logs_task_description(description);
+    }
     Ok(())
 }
 
@@ -363,6 +373,14 @@ fn run_task_status(state: &mut RuntimeState, task_id: &TaskId) -> Result<(), Str
         }
     }
     state.current_task_status = parsed;
+    if state.current_task_id.as_ref() == Some(task_id) {
+        state.logger.set_all_logs_task_status(
+            state
+                .current_task_status
+                .as_ref()
+                .map(|value| value.as_str()),
+        );
+    }
     Ok(())
 }
 
@@ -627,13 +645,20 @@ pub(crate) fn dispatch_notification_hook(
     env.notify_task_description = Some(notify_task_description);
 
     let task_token = task_id.map(|value| value.as_str()).unwrap_or("none");
+    let payload_folder = env.notify_folder.clone().unwrap_or_default();
+    let payload_task_id = env.notify_task_id.clone().unwrap_or_default();
+    let payload_task_description = env.notify_task_description.clone().unwrap_or_default();
     let payload = NotificationPayload {
         event: event.as_str().to_string(),
         duration_ms: notify_duration_ms,
-        folder: env.notify_folder.clone().unwrap_or_default(),
+        folder: truncate_utf8_to_bytes(&payload_folder, TRUDGER_ENV_VALUE_MAX_BYTES).to_string(),
         exit_code: notify_exit_code,
-        task_id: env.notify_task_id.clone().unwrap_or_default(),
-        task_description: env.notify_task_description.clone().unwrap_or_default(),
+        task_id: truncate_utf8_to_bytes(&payload_task_id, TRUDGER_ENV_VALUE_MAX_BYTES).to_string(),
+        task_description: truncate_utf8_to_bytes(
+            &payload_task_description,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        )
+        .to_string(),
         message: None,
     };
     let payload_file = match payload.write_to_temp_file() {
@@ -696,6 +721,7 @@ fn clear_current_task_context(state: &mut RuntimeState) {
     state.current_task_show = None;
     state.current_task_status = None;
     state.current_task_started_at = None;
+    state.logger.set_all_logs_task_id(None);
 }
 
 fn run_agent_solve(state: &RuntimeState, args: &[String]) -> Result<(), String> {
@@ -797,6 +823,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
         };
 
         state.current_task_id = Some(task_id.clone());
+        state.logger.set_all_logs_task_id(Some(task_id.as_str()));
         state.current_task_started_at = Some(Instant::now());
         state.current_task_show = None;
         state.current_task_status = None;

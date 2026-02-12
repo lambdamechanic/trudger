@@ -42,10 +42,8 @@ pub struct Hooks {
     #[serde(default)]
     pub on_doctor_setup: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     pub on_notification: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     pub on_notification_scope: Option<NotificationScope>,
 }
 
@@ -58,7 +56,6 @@ pub enum NotificationScope {
 }
 
 impl Hooks {
-    #[allow(dead_code)]
     pub fn effective_notification_scope(&self) -> Option<NotificationScope> {
         let has_notification_hook = self
             .on_notification

@@ -6,7 +6,32 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use crate::notification_payload::NotificationPayload;
-use crate::shell::{run_shell_command_status, CommandEnv};
+use crate::shell::{
+    run_shell_command_status, truncate_utf8_to_bytes, CommandEnv, TRUDGER_ENV_VALUE_MAX_BYTES,
+};
+
+struct NotificationInFlightGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl<'a> NotificationInFlightGuard<'a> {
+    fn try_acquire(flag: &'a AtomicBool) -> Option<Self> {
+        if flag
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            Some(Self { flag })
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for NotificationInFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct Logger {
@@ -17,6 +42,12 @@ pub(crate) struct Logger {
     notification_invocation_folder: String,
     notification_in_flight: AtomicBool,
     notification_run_started_at: Option<Instant>,
+
+    // Best-effort task context for all_logs notifications.
+    notification_task_id: Option<String>,
+    notification_task_show: Option<String>,
+    notification_task_status: Option<String>,
+    notification_task_description: String,
 }
 
 impl Logger {
@@ -29,6 +60,10 @@ impl Logger {
             notification_invocation_folder: String::new(),
             notification_in_flight: AtomicBool::new(false),
             notification_run_started_at: None,
+            notification_task_id: None,
+            notification_task_show: None,
+            notification_task_status: None,
+            notification_task_description: String::new(),
         }
     }
 
@@ -49,6 +84,47 @@ impl Logger {
 
     pub(crate) fn mark_all_logs_run_started_at(&mut self, run_started_at: Instant) {
         self.notification_run_started_at = Some(run_started_at);
+    }
+
+    pub(crate) fn set_all_logs_task_id(&mut self, task_id: Option<&str>) {
+        match task_id {
+            Some(value) => {
+                if self.notification_task_id.as_deref() == Some(value) {
+                    return;
+                }
+                self.notification_task_id = Some(value.to_string());
+                self.notification_task_show = None;
+                self.notification_task_status = None;
+                self.notification_task_description.clear();
+            }
+            None => {
+                self.notification_task_id = None;
+                self.notification_task_show = None;
+                self.notification_task_status = None;
+                self.notification_task_description.clear();
+            }
+        }
+    }
+
+    pub(crate) fn set_all_logs_task_show(&mut self, task_show: Option<String>) {
+        if self.notification_task_id.is_none() {
+            return;
+        }
+        self.notification_task_show = task_show;
+    }
+
+    pub(crate) fn set_all_logs_task_status(&mut self, task_status: Option<&str>) {
+        if self.notification_task_id.is_none() {
+            return;
+        }
+        self.notification_task_status = task_status.map(|value| value.to_string());
+    }
+
+    pub(crate) fn set_all_logs_task_description(&mut self, task_description: String) {
+        if self.notification_task_id.is_none() {
+            return;
+        }
+        self.notification_task_description = task_description;
     }
 
     pub(crate) fn log_transition(&self, message: &str) {
@@ -84,13 +160,10 @@ impl Logger {
             return;
         };
 
-        if self
-            .notification_in_flight
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
+        let Some(_guard) = NotificationInFlightGuard::try_acquire(&self.notification_in_flight)
+        else {
             return;
-        }
+        };
 
         let duration_ms = self
             .notification_run_started_at
@@ -98,13 +171,23 @@ impl Logger {
             .unwrap_or(0);
         let folder = self.notification_invocation_folder.clone();
         let redacted_message = redact_transition_message_for_notification(message);
+
+        let task_id = self.notification_task_id.clone();
+        let task_show = self.notification_task_show.clone();
+        let task_status = self.notification_task_status.clone();
+        let notify_task_id = task_id.clone().unwrap_or_default();
+        let notify_task_description = task_id
+            .as_ref()
+            .map(|_| self.notification_task_description.clone())
+            .unwrap_or_default();
+
         let mut env = CommandEnv {
             cwd: None,
             config_path: self.notification_config_path.clone(),
             scratch_dir: None,
-            task_id: None,
-            task_show: None,
-            task_status: None,
+            task_id,
+            task_show,
+            task_status,
             target_status: None,
             prompt: None,
             review_prompt: None,
@@ -114,8 +197,8 @@ impl Logger {
             notify_duration_ms: Some(duration_ms.to_string()),
             notify_folder: Some(folder),
             notify_exit_code: None,
-            notify_task_id: Some(String::new()),
-            notify_task_description: Some(String::new()),
+            notify_task_id: Some(notify_task_id.clone()),
+            notify_task_description: Some(notify_task_description.clone()),
             notify_message: Some(redacted_message.clone()),
             notify_payload_path: None,
         };
@@ -123,11 +206,22 @@ impl Logger {
         let payload = NotificationPayload {
             event: "log".to_string(),
             duration_ms,
-            folder: env.notify_folder.clone().unwrap_or_default(),
+            folder: truncate_utf8_to_bytes(
+                env.notify_folder.as_deref().unwrap_or_default(),
+                TRUDGER_ENV_VALUE_MAX_BYTES,
+            )
+            .to_string(),
             exit_code: None,
-            task_id: String::new(),
-            task_description: String::new(),
-            message: Some(redacted_message),
+            task_id: truncate_utf8_to_bytes(&notify_task_id, TRUDGER_ENV_VALUE_MAX_BYTES)
+                .to_string(),
+            task_description: truncate_utf8_to_bytes(
+                &notify_task_description,
+                TRUDGER_ENV_VALUE_MAX_BYTES,
+            )
+            .to_string(),
+            message: Some(
+                truncate_utf8_to_bytes(&redacted_message, TRUDGER_ENV_VALUE_MAX_BYTES).to_string(),
+            ),
         };
         let payload_file = match payload.write_to_temp_file() {
             Ok(file) => file,
@@ -143,7 +237,6 @@ impl Logger {
                     "Warning: failed to prepare notification payload: {}.",
                     err
                 );
-                self.notification_in_flight.store(false, Ordering::SeqCst);
                 return;
             }
         };
@@ -175,8 +268,6 @@ impl Logger {
                 let _ = writeln!(stderr, "Warning: failed to run notification hook: {}.", err);
             }
         }
-
-        self.notification_in_flight.store(false, Ordering::SeqCst);
     }
 
     fn disable_with_warning(&self, path: &Path, err: &std::io::Error) {

@@ -4614,6 +4614,90 @@ log_path: ""
 }
 
 #[test]
+fn run_with_cli_all_logs_notifications_include_task_context_when_available() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("bin");
+    let old_path = env::var("PATH").unwrap_or_default();
+    env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+    let hook_log = temp.path().join("hook.log");
+    env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+    let next_marker = temp.path().join("next.marker");
+    let next_marker_path = next_marker.display().to_string();
+    let status_marker = temp.path().join("status.marker");
+    let status_marker_path = status_marker.display().to_string();
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+agent_command: "true"
+agent_review_command: "true"
+commands:
+  next_task: "if [ -f '{next_marker_path}' ]; then exit 1; else touch '{next_marker_path}'; echo tr-1; fi"
+  task_show: "echo 'My Title'"
+  task_status: "if [ -f '{status_marker_path}' ]; then echo closed; else touch '{status_marker_path}'; echo ready; fi"
+  task_update_status: "true"
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+  on_notification: "hook"
+  on_notification_scope: "all_logs"
+log_path: ""
+"#,
+            next_marker_path = next_marker_path,
+            status_marker_path = status_marker_path,
+        ),
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+    fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
+
+    let err = run_with_cli(Cli {
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected idle exit");
+    assert_eq!(err.code, 0);
+
+    let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
+    assert!(
+        hook_contents.contains("env TRUDGER_NOTIFY_TASK_ID=tr-1"),
+        "expected all_logs payload to include task id when available, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("env TRUDGER_NOTIFY_TASK_DESCRIPTION=My Title"),
+        "expected all_logs payload to include task description when available, got:\n{hook_contents}"
+    );
+    assert!(
+        hook_contents.contains("env TRUDGER_TASK_ID=tr-1"),
+        "expected all_logs notification hook to receive TRUDGER_TASK_ID when available, got:\n{hook_contents}"
+    );
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
 fn all_logs_duration_baseline_starts_at_run_start() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();

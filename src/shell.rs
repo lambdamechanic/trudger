@@ -10,10 +10,23 @@ use crate::logger::{sanitize_log_value, Logger};
 
 // Guardrail against `execve`/`spawn` failures (E2BIG) from oversized env values.
 // Keep this conservative; prompt/show payloads are expected to be small.
-const TRUDGER_ENV_VALUE_MAX_BYTES: usize = 64 * 1024;
+pub(crate) const TRUDGER_ENV_VALUE_MAX_BYTES: usize = 64 * 1024;
 // Total budget for all `TRUDGER_*` environment variables we set for a subprocess.
 // This intentionally ignores the inherited environment size; the goal is to cap our contribution.
 const TRUDGER_ENV_TOTAL_MAX_BYTES: usize = 128 * 1024;
+
+pub(crate) fn truncate_utf8_to_bytes(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+
+    let mut cut = max_bytes.min(value.len());
+    while cut > 0 && !value.is_char_boundary(cut) {
+        cut -= 1;
+    }
+
+    &value[..cut]
+}
 
 pub(crate) fn render_args(args: &[String]) -> String {
     if args.is_empty() {
