@@ -452,6 +452,43 @@ fn run_hook(
     Ok(())
 }
 
+#[allow(dead_code)]
+fn dispatch_notification_hook(state: &RuntimeState, task_id: Option<&TaskId>) {
+    let Some(hook_command) = state
+        .config
+        .hooks
+        .on_notification
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    match run_config_command_status(state, hook_command, task_id, "on_notification", None, &[]) {
+        Ok(0) => {}
+        Ok(exit_code) => {
+            eprintln!(
+                "Warning: notification hook failed with exit code {}.",
+                exit_code
+            );
+            state.logger.log_transition(&format!(
+                "notification_hook_failed task={} exit_code={}",
+                task_id.map(|value| value.as_str()).unwrap_or("none"),
+                exit_code
+            ));
+        }
+        Err(err) => {
+            eprintln!("Warning: failed to run notification hook: {}.", err);
+            state.logger.log_transition(&format!(
+                "notification_hook_failed task={} err={}",
+                task_id.map(|value| value.as_str()).unwrap_or("none"),
+                sanitize_log_value(&err)
+            ));
+        }
+    }
+}
+
 fn run_agent_solve(state: &RuntimeState, args: &[String]) -> Result<(), String> {
     let exit = run_agent_command(
         state,
@@ -836,6 +873,102 @@ mod tests {
         let state = base_state(&temp);
 
         run_hook(&state, "", &task("tr-1"), "hook").expect("hook should succeed");
+    }
+
+    #[test]
+    fn dispatch_notification_hook_is_noop_when_missing() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let hook_log = temp.path().join("hook.log");
+        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+        let state = base_state(&temp);
+        dispatch_notification_hook(&state, Some(&task("tr-1")));
+
+        assert!(
+            !hook_log.exists(),
+            "notification hook should not run when missing"
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn dispatch_notification_hook_runs_with_no_positional_args() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let hook_log = temp.path().join("hook.log");
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+
+        let mut state = base_state(&temp);
+        state.config.hooks.on_notification = Some("hook".to_string());
+        dispatch_notification_hook(&state, Some(&task("tr-1")));
+
+        let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
+        assert!(
+            hook_contents.contains("hook args_count=0 args="),
+            "notification hook should receive no positional args, got:\n{hook_contents}"
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn dispatch_notification_hook_nonzero_exit_is_fail_open() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("trudger.log");
+
+        let mut state = base_state(&temp);
+        state.logger = Logger::new(Some(log_path.clone()));
+        state.config.hooks.on_notification = Some("exit 7".to_string());
+
+        dispatch_notification_hook(&state, Some(&task("tr-1")));
+
+        let log_contents = std::fs::read_to_string(&log_path).expect("read log");
+        assert!(
+            log_contents.contains("notification_hook_failed task=tr-1 exit_code=7"),
+            "expected fail-open transition, got:\n{log_contents}"
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_notification_hook_spawn_error_is_fail_open() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("trudger.log");
+        std::env::set_var("PATH", temp.path());
+
+        let mut state = base_state(&temp);
+        state.logger = Logger::new(Some(log_path.clone()));
+        state.config.hooks.on_notification = Some("hook".to_string());
+
+        dispatch_notification_hook(&state, Some(&task("tr-1")));
+
+        let log_contents = std::fs::read_to_string(&log_path).expect("read log");
+        assert!(
+            log_contents.contains("notification_hook_failed task=tr-1 err=Failed to run command"),
+            "expected fail-open spawn-error transition, got:\n{log_contents}"
+        );
+
+        crate::unit_tests::reset_test_env();
     }
 
     #[test]
