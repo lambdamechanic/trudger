@@ -41,6 +41,38 @@ pub struct Hooks {
     pub on_requires_human: String,
     #[serde(default)]
     pub on_doctor_setup: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub on_notification: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub on_notification_scope: Option<NotificationScope>,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationScope {
+    AllLogs,
+    TaskBoundaries,
+    RunBoundaries,
+}
+
+impl Hooks {
+    #[allow(dead_code)]
+    pub fn effective_notification_scope(&self) -> Option<NotificationScope> {
+        let has_notification_hook = self
+            .on_notification
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        if !has_notification_hook {
+            return None;
+        }
+        Some(
+            self.on_notification_scope
+                .unwrap_or(NotificationScope::TaskBoundaries),
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -64,8 +96,12 @@ pub(crate) fn load_config_from_str(label: &str, content: &str) -> Result<LoadedC
         _ => return Err(format!("Config {} must be a YAML mapping", label)),
     };
 
-    let warnings = unknown_config_keys(&mapping);
+    let mut warnings = unknown_config_keys(&mapping);
     emit_unknown_key_warnings(&warnings);
+    if let Some(warning) = notification_scope_without_hook_warning(&mapping) {
+        eprintln!("Warning: {}", warning);
+        warnings.push(warning);
+    }
     validate_required_fields(&mapping)?;
 
     // `serde_yaml` doesn't reliably include the failing key path for custom
@@ -116,7 +152,13 @@ fn unknown_config_keys(mapping: &Mapping) -> Vec<String> {
     keys.extend(unknown_nested_keys(
         mapping,
         "hooks",
-        &["on_completed", "on_requires_human", "on_doctor_setup"],
+        &[
+            "on_completed",
+            "on_requires_human",
+            "on_doctor_setup",
+            "on_notification",
+            "on_notification_scope",
+        ],
     ));
     keys
 }
@@ -155,8 +197,32 @@ fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
     require_non_empty_string(hooks, "on_completed", "hooks.on_completed")?;
     require_non_empty_string(hooks, "on_requires_human", "hooks.on_requires_human")?;
     validate_optional_non_empty_string(hooks, "on_doctor_setup", "hooks.on_doctor_setup")?;
+    validate_optional_non_empty_string(hooks, "on_notification", "hooks.on_notification")?;
+    validate_optional_notification_scope(
+        hooks,
+        "on_notification_scope",
+        "hooks.on_notification_scope",
+    )?;
 
     Ok(())
+}
+
+fn notification_scope_without_hook_warning(mapping: &Mapping) -> Option<String> {
+    let hooks_key = Value::String("hooks".to_string());
+    let Some(Value::Mapping(hooks)) = mapping.get(&hooks_key) else {
+        return None;
+    };
+
+    let hook_key = Value::String("on_notification".to_string());
+    let scope_key = Value::String("on_notification_scope".to_string());
+    if hooks.contains_key(&scope_key) && !hooks.contains_key(&hook_key) {
+        return Some(
+            "hooks.on_notification_scope is ignored because hooks.on_notification is not configured."
+                .to_string(),
+        );
+    }
+
+    None
 }
 
 fn reject_deprecated_keys(mapping: &Mapping) -> Result<(), String> {
@@ -233,6 +299,33 @@ fn validate_optional_string(mapping: &Mapping, key_name: &str, label: &str) -> R
         Some(Value::Null) => Err(format!("{} must not be null", label)),
         Some(Value::String(_)) => Ok(()),
         Some(_) => Err(format!("{} must be a string", label)),
+    }
+}
+
+fn validate_optional_notification_scope(
+    mapping: &Mapping,
+    key_name: &str,
+    label: &str,
+) -> Result<(), String> {
+    let key = Value::String(key_name.to_string());
+    let allowed = ["all_logs", "task_boundaries", "run_boundaries"];
+    match mapping.get(&key) {
+        None => Ok(()),
+        Some(Value::Null) => Err(format!("{} must not be null", label)),
+        Some(Value::String(value)) => {
+            if allowed.contains(&value.as_str()) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{} must be one of all_logs|task_boundaries|run_boundaries",
+                    label
+                ))
+            }
+        }
+        Some(_) => Err(format!(
+            "{} must be one of all_logs|task_boundaries|run_boundaries",
+            label
+        )),
     }
 }
 
@@ -665,6 +758,116 @@ hooks:
         let err = load_config(file.path()).expect_err("expected non-string on_doctor_setup error");
         assert!(err.contains("hooks.on_doctor_setup"));
         assert!(err.contains("string"));
+    }
+
+    #[test]
+    fn optional_notification_value_errors() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_status: "update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+  on_notification: null
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected null on_notification error");
+        assert!(err.contains("hooks.on_notification"));
+
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_status: "update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+  on_notification: ""
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected empty on_notification error");
+        assert!(err.contains("hooks.on_notification"));
+    }
+
+    #[test]
+    fn invalid_notification_scope_errors() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_status: "update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+  on_notification: "notify"
+  on_notification_scope: "bad_scope"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected invalid on_notification_scope error");
+        assert!(err.contains("hooks.on_notification_scope"));
+        assert!(err.contains("all_logs|task_boundaries|run_boundaries"));
+    }
+
+    #[test]
+    fn notification_scope_defaults_and_scope_without_hook_warns() {
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_status: "update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+  on_notification: "notify"
+"#;
+        let file = write_temp_config(config);
+        let loaded = load_config(file.path()).expect("config should load");
+        assert_eq!(
+            loaded.config.hooks.effective_notification_scope(),
+            Some(NotificationScope::TaskBoundaries)
+        );
+
+        let config = r#"
+agent_command: "agent"
+agent_review_command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_status: "update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+  on_notification_scope: "run_boundaries"
+"#;
+        let file = write_temp_config(config);
+        let loaded = load_config(file.path()).expect("config should load");
+        let warning = loaded
+            .warnings
+            .iter()
+            .find(|warning| warning.contains("hooks.on_notification_scope"))
+            .expect("scope-without-hook warning");
+        assert!(warning.contains("ignored"));
+        assert_eq!(loaded.config.hooks.effective_notification_scope(), None);
     }
 
     #[test]

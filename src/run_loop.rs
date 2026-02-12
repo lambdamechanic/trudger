@@ -792,6 +792,8 @@ mod tests {
                     on_completed: "true".to_string(),
                     on_requires_human: "true".to_string(),
                     on_doctor_setup: None,
+                    on_notification: None,
+                    on_notification_scope: None,
                 },
                 review_loop_limit: crate::task_types::ReviewLoopLimit::new(1)
                     .expect("review_loop_limit"),
