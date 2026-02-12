@@ -17,3 +17,10 @@ hooks:
   on_completed: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"'
   on_requires_human: 'br label remove "$TRUDGER_TASK_ID" "trudgeable"; br label add "$TRUDGER_TASK_ID" "human_required"'
   on_doctor_setup: 'rm -rf "$TRUDGER_DOCTOR_SCRATCH_DIR/.beads"; cp -R ".beads" "$TRUDGER_DOCTOR_SCRATCH_DIR/"'
+  # Optional notification hook (receives TRUDGER_NOTIFY_* env vars, no positional args).
+  # on_notification: 'printf "event=%s task=%s msg=%s\n" "$TRUDGER_NOTIFY_EVENT" "$TRUDGER_NOTIFY_TASK_ID" "$TRUDGER_NOTIFY_MESSAGE"'
+  # Scope options:
+  # - task_boundaries (default when on_notification is set): task_start/task_end
+  # - run_boundaries: run_start/run_end
+  # - all_logs: one hook call per transition log message (includes TRUDGER_NOTIFY_MESSAGE)
+  # on_notification_scope: "task_boundaries"

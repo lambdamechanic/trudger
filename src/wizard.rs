@@ -607,7 +607,13 @@ fn extract_unknown_key_values(existing: &Mapping) -> (Mapping, Vec<String>) {
         "task_status",
         "task_update_status",
     ];
-    const ALLOWED_HOOKS: &[&str] = &["on_completed", "on_requires_human", "on_doctor_setup"];
+    const ALLOWED_HOOKS: &[&str] = &[
+        "on_completed",
+        "on_requires_human",
+        "on_doctor_setup",
+        "on_notification",
+        "on_notification_scope",
+    ];
 
     let mut out = Mapping::new();
     let mut unknown_paths: Vec<String> = Vec::new();
@@ -864,6 +870,8 @@ fn merge_known_template_keys(
         &["hooks", "on_completed"],
         &["hooks", "on_requires_human"],
         &["hooks", "on_doctor_setup"],
+        &["hooks", "on_notification"],
+        &["hooks", "on_notification_scope"],
     ];
 
     let mut prompts = Vec::new();
@@ -1489,6 +1497,8 @@ hooks:
   on_completed: "done"
   on_requires_human: "human"
   on_doctor_setup: "setup"
+  on_notification: "notify"
+  on_notification_scope: "run_boundaries"
   extra_hook: "bar"
 "#;
         fs::write(&config_path, original).expect("write existing config");
@@ -1507,6 +1517,13 @@ hooks:
             .warnings
             .iter()
             .any(|w| w.contains("Unknown/custom config keys were commented out")));
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|w| w.contains("hooks.on_notification")),
+            "notification keys should not be treated as unknown"
+        );
 
         let new_contents = fs::read_to_string(&config_path).expect("read new config");
         assert!(new_contents.contains(
@@ -1518,6 +1535,8 @@ hooks:
         assert!(new_contents.contains("extra_cmd") && new_contents.contains("#   extra_cmd:"));
         assert!(new_contents.contains("# hooks:"));
         assert!(new_contents.contains("extra_hook") && new_contents.contains("#   extra_hook:"));
+        assert!(!new_contents.contains("#   on_notification:"));
+        assert!(!new_contents.contains("#   on_notification_scope:"));
 
         // Ensure commented keys do not affect parsing.
         let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
@@ -1654,6 +1673,57 @@ hooks:
             .and_then(|value| value.as_str())
             .expect("merged hooks.on_doctor_setup");
         assert_eq!(merged, "existing");
+    }
+
+    #[test]
+    fn merge_keep_current_overrides_candidate_for_notification_keys() {
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let agent = find_agent_template(&templates.agents, "codex").expect("agent");
+        let tracking =
+            find_tracking_template(&templates.tracking, "br-next-task").expect("tracking");
+
+        let mut candidate_value = build_candidate_value(
+            agent,
+            tracking,
+            templates.defaults.review_loop_limit,
+            templates.defaults.log_path.clone(),
+        );
+        let mut existing_value = candidate_value.clone();
+        set_value_at_path(
+            &mut existing_value,
+            &["hooks", "on_notification"],
+            Value::String("notify-existing".to_string()),
+        )
+        .expect("set existing notification hook");
+        set_value_at_path(
+            &mut existing_value,
+            &["hooks", "on_notification_scope"],
+            Value::String("run_boundaries".to_string()),
+        )
+        .expect("set existing notification scope");
+        let existing_mapping = existing_value.as_mapping().expect("mapping").clone();
+
+        let mut prompts = Vec::new();
+        let mut decider = |prompt: &MergePrompt| {
+            prompts.push(prompt.key.clone());
+            Ok(MergeDecision::KeepCurrent)
+        };
+
+        let _ = merge_known_template_keys(&existing_mapping, &mut candidate_value, &mut decider)
+            .expect("merge");
+
+        assert_eq!(
+            get_value_at_path(&candidate_value, &["hooks", "on_notification"])
+                .and_then(|value| value.as_str()),
+            Some("notify-existing")
+        );
+        assert_eq!(
+            get_value_at_path(&candidate_value, &["hooks", "on_notification_scope"])
+                .and_then(|value| value.as_str()),
+            Some("run_boundaries")
+        );
+        assert!(prompts.contains(&"hooks.on_notification".to_string()));
+        assert!(prompts.contains(&"hooks.on_notification_scope".to_string()));
     }
 
     #[test]

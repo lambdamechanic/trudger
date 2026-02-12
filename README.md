@@ -121,10 +121,31 @@ Notes:
 - `commands.task_status` runs in `bash -lc`; the first whitespace-delimited token of stdout is used as the task status (for example `ready`, `open`, or `closed`) and is exposed via `TRUDGER_TASK_STATUS`.
 - `commands.task_update_status` runs in `bash -lc`; output is ignored.
 - `hooks.on_completed` and `hooks.on_requires_human` are required; label updates must happen in hooks if you want them.
+- Optional notifications:
+  - Configure `hooks.on_notification` to run an extra hook for notifications (no positional args; payload arrives via env vars).
+  - `hooks.on_notification_scope` controls event volume: `task_boundaries` (default), `run_boundaries`, or `all_logs`.
+  - In `all_logs` mode, `TRUDGER_NOTIFY_MESSAGE` includes a redacted transition message.
 - Commands and hooks receive task context via environment variables instead of positional arguments.
 - Status transitions use environment context instead of positional args: `commands.task_update_status` receives the desired status in `TRUDGER_TARGET_STATUS` (for example `in_progress`, `blocked`, `open`, `closed`).
 - Environment variables available to commands/hooks include `TRUDGER_TASK_ID` (set when a task is selected), `TRUDGER_TASK_SHOW` (set after `commands.task_show`), `TRUDGER_TASK_STATUS` (set after `commands.task_status`), `TRUDGER_TARGET_STATUS` (set only for `commands.task_update_status`), `TRUDGER_CONFIG_PATH` (always set), `TRUDGER_PROMPT` (solve prompt only; unset during review), and `TRUDGER_REVIEW_PROMPT` (review prompt only; unset during solve).
 - Oversized `TRUDGER_*` env values are truncated (at a UTF-8 boundary) to avoid `spawn` failures (E2BIG); Trudger prints a warning and logs an `env_truncate` transition when logging is enabled.
+
+Notification example:
+
+```yaml
+hooks:
+  on_notification: 'printf "event=%s task=%s exit=%s\n" "$TRUDGER_NOTIFY_EVENT" "$TRUDGER_NOTIFY_TASK_ID" "$TRUDGER_NOTIFY_EXIT_CODE"'
+  on_notification_scope: "task_boundaries" # or run_boundaries / all_logs
+```
+
+Notification payload env vars:
+- `TRUDGER_NOTIFY_EVENT`: `run_start`, `run_end`, `task_start`, `task_end`, or `log`.
+- `TRUDGER_NOTIFY_DURATION`: seconds elapsed for the event context (empty for start events).
+- `TRUDGER_NOTIFY_FOLDER`: run working directory.
+- `TRUDGER_NOTIFY_TASK_ID`: task id when in task context; empty for run-level events.
+- `TRUDGER_NOTIFY_TASK_DESCRIPTION`: first non-empty line from `commands.task_show`, when available.
+- `TRUDGER_NOTIFY_EXIT_CODE`: set only for `run_end`.
+- `TRUDGER_NOTIFY_MESSAGE`: set only for `all_logs` scope.
 
 ## Install
 
