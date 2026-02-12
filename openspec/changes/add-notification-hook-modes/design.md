@@ -58,7 +58,7 @@ Trudger currently supports outcome-specific hooks (`on_completed`, `on_requires_
   - Compatibility: redaction output format is not a stable compatibility contract and may evolve.
 
 - Decision: include run-end exit code in payload.
-  - Rule: `TRUDGER_NOTIFY_EXIT_CODE` is set for `run_end` events and empty for other event types.
+  - Rule: `TRUDGER_NOTIFY_EXIT_CODE` is set for `run_end` events and unset for other event types.
   - Rationale: downstream alerting often needs success/failure routing without parsing message text.
 
 - Decision: `run_end` is emitted at the absolute end of task-processing teardown.

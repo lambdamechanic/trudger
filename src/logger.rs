@@ -107,7 +107,7 @@ impl Logger {
             notify_event: Some("log".to_string()),
             notify_duration_ms: Some(duration_ms.to_string()),
             notify_folder: Some(folder),
-            notify_exit_code: Some(String::new()),
+            notify_exit_code: None,
             notify_task_id: Some(String::new()),
             notify_task_description: Some(String::new()),
             notify_message: Some(redact_transition_message_for_notification(message)),

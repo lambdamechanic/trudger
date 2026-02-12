@@ -4309,8 +4309,8 @@ log_path: ""
         "all_logs mode should set notify folder env var, got:\n{hook_contents}"
     );
     assert!(
-        hook_contents.contains("env TRUDGER_NOTIFY_EXIT_CODE="),
-        "all_logs mode should set empty notify exit code, got:\n{hook_contents}"
+        hook_contents.contains("envset TRUDGER_NOTIFY_EXIT_CODE=0"),
+        "all_logs mode should leave notify exit code unset outside run_end, got:\n{hook_contents}"
     );
     assert!(
         hook_contents.contains("env TRUDGER_NOTIFY_TASK_ID="),

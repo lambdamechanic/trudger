@@ -122,7 +122,7 @@ The payload SHALL include:
 - `TRUDGER_NOTIFY_EVENT` (one of `run_start`, `run_end`, `task_start`, `task_end`, `log`)
 - `TRUDGER_NOTIFY_DURATION_MS` (elapsed duration in milliseconds; see event-specific rules below)
 - `TRUDGER_NOTIFY_FOLDER` (absolute invocation working directory)
-- `TRUDGER_NOTIFY_EXIT_CODE` (run exit code for `run_end`; empty otherwise)
+- `TRUDGER_NOTIFY_EXIT_CODE` (run exit code for `run_end`; unset otherwise)
 - `TRUDGER_NOTIFY_TASK_ID` (task id when applicable; empty otherwise)
 - `TRUDGER_NOTIFY_TASK_DESCRIPTION` (human-readable task description when available; empty otherwise)
 
@@ -179,10 +179,10 @@ Notification hook invocations SHALL receive existing task/run `TRUDGER_*` contex
 - **WHEN** the notification hook executes
 - **THEN** `TRUDGER_NOTIFY_EXIT_CODE` is set to the run exit code
 
-#### Scenario: Non-run-end payload has empty exit code
+#### Scenario: Non-run-end payload leaves exit code unset
 - **GIVEN** a notification event other than `run_end` is emitted
 - **WHEN** the notification hook executes
-- **THEN** `TRUDGER_NOTIFY_EXIT_CODE` is empty
+- **THEN** `TRUDGER_NOTIFY_EXIT_CODE` is unset
 
 #### Scenario: Notification payload values are truncated when oversized
 - **GIVEN** a `TRUDGER_NOTIFY_*` payload value exceeds env-size limits

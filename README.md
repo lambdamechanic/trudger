@@ -144,7 +144,7 @@ Notification payload env vars:
 - `TRUDGER_NOTIFY_FOLDER`: run working directory.
 - `TRUDGER_NOTIFY_TASK_ID`: task id when in task context; empty for run-level events.
 - `TRUDGER_NOTIFY_TASK_DESCRIPTION`: first non-empty line from `commands.task_show`, when available.
-- `TRUDGER_NOTIFY_EXIT_CODE`: set only for `run_end`.
+- `TRUDGER_NOTIFY_EXIT_CODE`: set only for `run_end`; unset for other events.
 - `TRUDGER_NOTIFY_MESSAGE`: set only for `all_logs` scope.
 
 ## Install

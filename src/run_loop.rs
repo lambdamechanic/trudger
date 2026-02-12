@@ -558,15 +558,12 @@ pub(crate) fn dispatch_notification_hook(
             .and_then(first_non_empty_trimmed_line)
             .unwrap_or_default()
     };
-    let notify_exit_code = if matches!(event, NotificationEvent::RunEnd) {
-        state.run_exit_code.to_string()
-    } else {
-        String::new()
-    };
+    let notify_exit_code =
+        matches!(event, NotificationEvent::RunEnd).then(|| state.run_exit_code.to_string());
 
     env.notify_duration_ms = Some(notify_duration_ms.to_string());
     env.notify_folder = Some(notify_folder);
-    env.notify_exit_code = Some(notify_exit_code);
+    env.notify_exit_code = notify_exit_code;
     env.notify_task_id = Some(notify_task_id);
     env.notify_task_description = Some(notify_task_description);
 
@@ -956,6 +953,13 @@ mod tests {
             .find_map(|line| line.strip_prefix(&prefix).map(|value| value.to_string()))
     }
 
+    fn hook_env_is_set(contents: &str, key: &str) -> Option<bool> {
+        let prefix = format!("envset {}=", key);
+        contents
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix).map(|value| value == "1"))
+    }
+
     fn base_state(temp: &TempDir) -> RuntimeState {
         RuntimeState {
             config: Config {
@@ -1114,8 +1118,8 @@ mod tests {
             "expected task_end duration to be > 0, got:\n{hook_contents}"
         );
         assert_eq!(
-            hook_env_value(&hook_contents, "TRUDGER_NOTIFY_EXIT_CODE").as_deref(),
-            Some("")
+            hook_env_is_set(&hook_contents, "TRUDGER_NOTIFY_EXIT_CODE"),
+            Some(false)
         );
 
         crate::unit_tests::reset_test_env();
@@ -1230,8 +1234,8 @@ mod tests {
             Some("0")
         );
         assert_eq!(
-            hook_env_value(run_start, "TRUDGER_NOTIFY_EXIT_CODE").as_deref(),
-            Some("")
+            hook_env_is_set(run_start, "TRUDGER_NOTIFY_EXIT_CODE"),
+            Some(false)
         );
         assert_eq!(
             hook_env_value(run_start, "TRUDGER_NOTIFY_TASK_ID").as_deref(),
@@ -1256,6 +1260,10 @@ mod tests {
         assert_eq!(
             hook_env_value(run_end, "TRUDGER_NOTIFY_EXIT_CODE").as_deref(),
             Some("17")
+        );
+        assert_eq!(
+            hook_env_is_set(run_end, "TRUDGER_NOTIFY_EXIT_CODE"),
+            Some(true)
         );
 
         crate::unit_tests::reset_test_env();
@@ -1485,8 +1493,8 @@ mod tests {
             Some("0")
         );
         assert_eq!(
-            hook_env_value(task_start_entry, "TRUDGER_NOTIFY_EXIT_CODE").as_deref(),
-            Some("")
+            hook_env_is_set(task_start_entry, "TRUDGER_NOTIFY_EXIT_CODE"),
+            Some(false)
         );
 
         crate::unit_tests::reset_test_env();
