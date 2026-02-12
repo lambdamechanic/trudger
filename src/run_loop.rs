@@ -1395,6 +1395,100 @@ mod tests {
     }
 
     #[test]
+    fn run_loop_dispatches_task_boundary_notifications_once_each() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let hook_log = temp.path().join("hook.log");
+        let next_task_queue = temp.path().join("next-task-queue.txt");
+        let status_queue = temp.path().join("status-queue.txt");
+        std::fs::write(&next_task_queue, "tr-1\n\n").expect("write next-task queue");
+        std::fs::write(&status_queue, "ready\nclosed\n").expect("write status queue");
+
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("HOOK_MOCK_LOG", &hook_log);
+        std::env::set_var("NEXT_TASK_OUTPUT_QUEUE", &next_task_queue);
+        std::env::set_var("TASK_STATUS_QUEUE", &status_queue);
+        std::env::set_var("TASK_SHOW_OUTPUT", "Task title\nmore details");
+
+        let mut state = base_state(&temp);
+        state.config.commands.next_task = Some("next-task".to_string());
+        state.config.commands.task_show = "task-show \"$@\"".to_string();
+        state.config.commands.task_status = "task-status".to_string();
+        state.config.commands.task_update_status = "task-update \"$@\"".to_string();
+        state.config.hooks.on_completed = "true".to_string();
+        state.config.hooks.on_requires_human = "true".to_string();
+        state.config.hooks.on_notification = Some("hook".to_string());
+
+        let result = run_loop(&mut state).expect_err("expected graceful idle exit");
+        assert_eq!(result.code, 0);
+        assert_eq!(result.reason, "no_task");
+        assert_eq!(state.completed_tasks, vec![task("tr-1")]);
+
+        let hook_contents = std::fs::read_to_string(&hook_log).expect("read hook log");
+        assert_eq!(
+            hook_contents
+                .matches("env TRUDGER_NOTIFY_EVENT=task_start")
+                .count(),
+            1,
+            "expected exactly one task_start notification, got:\n{hook_contents}"
+        );
+        assert_eq!(
+            hook_contents
+                .matches("env TRUDGER_NOTIFY_EVENT=task_end")
+                .count(),
+            1,
+            "expected exactly one task_end notification, got:\n{hook_contents}"
+        );
+        assert_eq!(
+            hook_contents
+                .matches("env TRUDGER_NOTIFY_EVENT=run_start")
+                .count(),
+            0,
+            "task_boundaries scope should not emit run_start, got:\n{hook_contents}"
+        );
+        assert_eq!(
+            hook_contents
+                .matches("env TRUDGER_NOTIFY_EVENT=run_end")
+                .count(),
+            0,
+            "task_boundaries scope should not emit run_end, got:\n{hook_contents}"
+        );
+        assert_eq!(
+            hook_contents
+                .matches("env TRUDGER_NOTIFY_EVENT=log")
+                .count(),
+            0,
+            "task_boundaries scope should not emit log notifications, got:\n{hook_contents}"
+        );
+
+        let entries: Vec<&str> = hook_contents
+            .split("hook args_count=0 args=\n")
+            .filter(|entry| !entry.trim().is_empty())
+            .collect();
+        let task_start_entry = entries
+            .iter()
+            .find(|entry| entry.contains("env TRUDGER_NOTIFY_EVENT=task_start"))
+            .expect("task_start entry");
+        assert_eq!(
+            hook_env_value(task_start_entry, "TRUDGER_NOTIFY_DURATION_MS").as_deref(),
+            Some("0")
+        );
+        assert_eq!(
+            hook_env_value(task_start_entry, "TRUDGER_NOTIFY_EXIT_CODE").as_deref(),
+            Some("")
+        );
+
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
     fn task_status_errors_on_nonzero_exit() {
         let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
         crate::unit_tests::reset_test_env();
