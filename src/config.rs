@@ -78,6 +78,9 @@ pub struct LoadedConfig {
     pub config: Config,
     #[allow(dead_code)]
     pub warnings: Vec<String>,
+    pub active_profile: String,
+    pub solve_invocation_id: String,
+    pub review_invocation_id: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -148,23 +151,37 @@ pub(crate) fn load_config_from_str_with_profile(
     let config: ParsedConfig = serde_path_to_error::deserialize(deserializer)
         .map_err(|err| format!("Failed to parse config {}: {}", label, err))?;
 
-    let (agent_command, agent_review_command) = resolve_profile_commands(&config, profile)?;
+    let resolved_commands = resolve_profile_commands(&config, profile)?;
     let config = Config {
-        agent_command,
-        agent_review_command,
+        agent_command: resolved_commands.solve_command,
+        agent_review_command: resolved_commands.review_command,
         commands: config.commands,
         hooks: config.hooks,
         review_loop_limit: config.review_loop_limit,
         log_path: config.log_path,
     };
 
-    Ok(LoadedConfig { config, warnings })
+    Ok(LoadedConfig {
+        config,
+        warnings,
+        active_profile: resolved_commands.profile,
+        solve_invocation_id: resolved_commands.solve_invocation_id,
+        review_invocation_id: resolved_commands.review_invocation_id,
+    })
+}
+
+struct ResolvedAgentCommands {
+    profile: String,
+    solve_invocation_id: String,
+    review_invocation_id: String,
+    solve_command: String,
+    review_command: String,
 }
 
 fn resolve_profile_commands(
     config: &ParsedConfig,
     profile_override: Option<&str>,
-) -> Result<(String, String), String> {
+) -> Result<ResolvedAgentCommands, String> {
     let profile_name = profile_override.unwrap_or(config.default_profile.as_str());
     let profile = config.profiles.get(profile_name).ok_or_else(|| {
         if profile_override.is_some() {
@@ -201,7 +218,13 @@ fn resolve_profile_commands(
         .command
         .clone();
 
-    Ok((agent_command, agent_review_command))
+    Ok(ResolvedAgentCommands {
+        profile: profile_name.to_string(),
+        solve_invocation_id: profile.trudge.clone(),
+        review_invocation_id: profile.trudge_review.clone(),
+        solve_command: agent_command,
+        review_command: agent_review_command,
+    })
 }
 
 fn emit_unknown_key_warnings(keys: &[String]) {

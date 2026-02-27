@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use serde_json::Value;
@@ -36,6 +37,38 @@ pub(crate) struct RuntimeState {
     pub(crate) run_started_at: Instant,
     pub(crate) current_task_started_at: Option<Instant>,
     pub(crate) run_exit_code: i32,
+}
+
+#[derive(Debug, Default, Clone)]
+struct AgentInvocationContext {
+    profile: Option<String>,
+    solve_invocation_id: Option<String>,
+    review_invocation_id: Option<String>,
+}
+
+static AGENT_INVOCATION_CONTEXT: OnceLock<Mutex<AgentInvocationContext>> = OnceLock::new();
+
+fn agent_invocation_context() -> &'static Mutex<AgentInvocationContext> {
+    AGENT_INVOCATION_CONTEXT.get_or_init(|| Mutex::new(AgentInvocationContext::default()))
+}
+
+pub(crate) fn set_agent_invocation_context(
+    profile: String,
+    solve_invocation_id: String,
+    review_invocation_id: String,
+) {
+    let mut context = agent_invocation_context().lock().expect("invocation context mutex");
+    *context = AgentInvocationContext {
+        profile: Some(profile),
+        solve_invocation_id: Some(solve_invocation_id),
+        review_invocation_id: Some(review_invocation_id),
+    };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_agent_invocation_context() {
+    let mut context = agent_invocation_context().lock().expect("invocation context mutex");
+    *context = AgentInvocationContext::default();
 }
 
 #[derive(Debug)]
@@ -199,6 +232,8 @@ fn build_command_env(
     agent_phase: Option<String>,
     target_status: Option<String>,
     notify_event: Option<NotificationEvent>,
+    agent_profile: Option<String>,
+    agent_invocation_id: Option<String>,
 ) -> CommandEnv {
     fn join_task_ids(tasks: &[TaskId]) -> String {
         let mut out = String::new();
@@ -250,6 +285,8 @@ fn build_command_env(
         notify_task_description: None,
         notify_message: None,
         notify_payload_path: None,
+        agent_profile,
+        agent_invocation_id,
     }
 }
 
@@ -260,7 +297,16 @@ fn run_config_command(
     log_label: &str,
     args: &[String],
 ) -> Result<CommandResult, String> {
-    let env = build_command_env(state, task_id, None, None, None, None);
+    let env = build_command_env(
+        state,
+        task_id,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
     run_shell_command_capture(
         command,
         log_label,
@@ -286,6 +332,8 @@ fn run_config_command_status(
         None,
         target_status.map(|value| value.to_string()),
         None,
+        None,
+        None,
     );
     run_shell_command_status(
         command,
@@ -304,7 +352,29 @@ fn run_agent_command(
     agent_prompt: Option<String>,
     agent_phase: Option<String>,
 ) -> Result<i32, String> {
-    let env = build_command_env(state, None, agent_prompt, agent_phase, None, None);
+    let context = {
+        let guard = agent_invocation_context()
+            .lock()
+            .expect("invocation context mutex");
+        guard.clone()
+    };
+
+    let invocation_id = if agent_phase.as_deref() == Some("trudge_review") {
+        context.review_invocation_id
+    } else {
+        context.solve_invocation_id
+    };
+
+    let env = build_command_env(
+        state,
+        None,
+        agent_prompt,
+        agent_phase,
+        None,
+        None,
+        context.profile,
+        invocation_id,
+    );
     run_shell_command_status(command, log_label, "none", &[], &env, &state.logger)
 }
 
@@ -612,7 +682,16 @@ pub(crate) fn dispatch_notification_hook(
         return;
     }
 
-    let mut env = build_command_env(state, task_id, None, None, None, Some(event));
+    let mut env = build_command_env(
+        state,
+        task_id,
+        None,
+        None,
+        None,
+        Some(event),
+        None,
+        None,
+    );
     let notify_duration_ms = match event {
         NotificationEvent::RunStart | NotificationEvent::TaskStart => 0,
         NotificationEvent::RunEnd => state.run_started_at.elapsed().as_millis(),
@@ -1146,7 +1225,7 @@ mod tests {
         let mut state = base_state(&temp);
         state.completed_tasks = vec![task("tr-1"), task("tr-2")];
 
-        let env = build_command_env(&state, None, None, None, None, None);
+        let env = build_command_env(&state, None, None, None, None, None, None, None);
         assert_eq!(env.completed.as_deref(), Some("tr-1,tr-2"));
     }
 

@@ -44,6 +44,10 @@ pub(crate) fn reset_test_env() {
         "TRUDGER_SKIP_NOT_READY_LIMIT",
         "TRUDGER_AGENT_PROMPT",
         "TRUDGER_AGENT_PHASE",
+        "TRUDGER_PROFILE",
+        "TRUDGER_INVOCATION_ID",
+        "TRUDGER_PROMPT",
+        "TRUDGER_REVIEW_PROMPT",
         "TRUDGER_TASK_ID",
         "TRUDGER_TASK_SHOW",
         "TRUDGER_TASK_STATUS",
@@ -348,6 +352,11 @@ fn build_tmux_name_formats_task_lists_and_phase_suffixes() {
 fn run_loop_executes_commands_and_hooks_with_env() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
+    crate::run_loop::set_agent_invocation_context(
+        "codex-profile".to_string(),
+        "codex".to_string(),
+        "codex-review".to_string(),
+    );
     let temp = TempDir::new().expect("temp dir");
     let log_path = temp.path().join("trudger.log");
     let next_task_log = temp.path().join("next-task.log");
@@ -438,11 +447,47 @@ fn run_loop_executes_commands_and_hooks_with_env() {
         "codex should receive task show output"
     );
     assert!(
+        codex_contents.contains("envset TRUDGER_PROFILE=1"),
+        "codex should receive TRUDGER_PROFILE"
+    );
+    assert!(
+        codex_contents.contains("envset TRUDGER_INVOCATION_ID=1"),
+        "codex should receive TRUDGER_INVOCATION_ID"
+    );
+    assert!(
+        codex_contents.contains("env TRUDGER_PROFILE=codex-profile"),
+        "codex should receive profile env, got:\n{codex_contents}"
+    );
+    assert!(
+        codex_contents.contains("env TRUDGER_INVOCATION_ID=codex"),
+        "solve invocation env should be set to codex, got:\n{codex_contents}"
+    );
+    assert!(
+        codex_contents.contains("env TRUDGER_INVOCATION_ID=codex-review"),
+        "review invocation env should be set to codex-review, got:\n{codex_contents}"
+    );
+    assert!(
+        codex_contents.contains("envset TRUDGER_PROMPT=0"),
+        "legacy TRUDGER_PROMPT should not be emitted to agents"
+    );
+    assert!(
+        codex_contents.contains("envset TRUDGER_REVIEW_PROMPT=0"),
+        "legacy TRUDGER_REVIEW_PROMPT should not be emitted to agents"
+    );
+    assert!(
         !codex_contents.contains("resume --last"),
         "codex should not pass resume --last"
     );
 
     let next_task_contents = fs::read_to_string(&next_task_log).expect("read next task log");
+    assert!(
+        next_task_contents.contains("envset TRUDGER_PROFILE=0"),
+        "next-task should not receive TRUDGER_PROFILE"
+    );
+    assert!(
+        next_task_contents.contains("envset TRUDGER_INVOCATION_ID=0"),
+        "next-task should not receive TRUDGER_INVOCATION_ID"
+    );
     assert!(
         next_task_contents.contains("envset TRUDGER_AGENT_PROMPT=0"),
         "next-task should not get TRUDGER_AGENT_PROMPT"
@@ -496,6 +541,8 @@ fn run_loop_executes_commands_and_hooks_with_env() {
         !raw_tab,
         "log should not include raw tab characters, got:\n{log_contents}"
     );
+
+    crate::run_loop::reset_agent_invocation_context();
 }
 
 #[test]
@@ -591,6 +638,11 @@ fn manual_task_not_ready_fails_fast_without_invoking_next_task() {
 fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
+    crate::run_loop::set_agent_invocation_context(
+        "manual-profile".to_string(),
+        "manual-agent".to_string(),
+        "manual-review".to_string(),
+    );
 
     let temp = TempDir::new().expect("temp dir");
     let log_path = temp.path().join("trudger.log");
@@ -719,6 +771,34 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
         codex_contents.contains("env TRUDGER_AGENT_PHASE=trudge_review"),
         "agent review should expose trudge_review phase"
     );
+    assert!(
+        codex_contents.contains("envset TRUDGER_PROFILE=1"),
+        "codex should receive TRUDGER_PROFILE"
+    );
+    assert!(
+        codex_contents.contains("envset TRUDGER_INVOCATION_ID=1"),
+        "codex should receive TRUDGER_INVOCATION_ID"
+    );
+    assert!(
+        codex_contents.contains("env TRUDGER_PROFILE=manual-profile"),
+        "codex should receive profile env, got:\n{codex_contents}"
+    );
+    assert!(
+        codex_contents.contains("env TRUDGER_INVOCATION_ID=manual-agent"),
+        "solve invocation env should be set to manual-agent, got:\n{codex_contents}"
+    );
+    assert!(
+        codex_contents.contains("env TRUDGER_INVOCATION_ID=manual-review"),
+        "review invocation env should be set to manual-review, got:\n{codex_contents}"
+    );
+    assert!(
+        codex_contents.contains("envset TRUDGER_PROMPT=0"),
+        "legacy TRUDGER_PROMPT should not be emitted to agents"
+    );
+    assert!(
+        codex_contents.contains("envset TRUDGER_REVIEW_PROMPT=0"),
+        "legacy TRUDGER_REVIEW_PROMPT should not be emitted to agents"
+    );
 
     let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
     assert!(
@@ -729,6 +809,16 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
         hook_contents.contains("env TRUDGER_TASK_ID=tr-1"),
         "hook should see task id in env, got:\n{hook_contents}"
     );
+    assert!(
+        hook_contents.contains("envset TRUDGER_PROFILE=0"),
+        "hooks should not receive TRUDGER_PROFILE"
+    );
+    assert!(
+        hook_contents.contains("envset TRUDGER_INVOCATION_ID=0"),
+        "hooks should not receive TRUDGER_INVOCATION_ID"
+    );
+
+    crate::run_loop::reset_agent_invocation_context();
 }
 
 #[test]
@@ -1997,6 +2087,8 @@ fn run_shell_command_noops_when_command_is_empty() {
         notify_task_description: None,
         notify_message: None,
         notify_payload_path: None,
+        agent_profile: None,
+        agent_invocation_id: None,
     };
 
     let result = crate::shell::run_shell_command_capture("", "label", "none", &[], &env, &logger)
@@ -2052,6 +2144,8 @@ fn command_env_truncates_oversized_values_and_warns() {
         notify_task_description: None,
         notify_message: None,
         notify_payload_path: None,
+        agent_profile: None,
+        agent_invocation_id: None,
     };
 
     let stderr = capture_stderr(|| {
@@ -2115,6 +2209,8 @@ fn command_env_truncates_total_trudger_payload_and_warns() {
         notify_task_description: None,
         notify_message: None,
         notify_payload_path: None,
+        agent_profile: None,
+        agent_invocation_id: None,
     };
 
     let stderr = capture_stderr(|| {
@@ -2209,6 +2305,8 @@ fn command_env_truncates_oversized_notify_payload_and_warns() {
         notify_task_description: Some(String::new()),
         notify_message: Some(large_notify),
         notify_payload_path: None,
+        agent_profile: None,
+        agent_invocation_id: None,
     };
 
     let stderr = capture_stderr(|| {
@@ -2269,6 +2367,8 @@ fn run_shell_command_errors_when_bash_is_missing() {
         notify_task_description: None,
         notify_message: None,
         notify_payload_path: None,
+        agent_profile: None,
+        agent_invocation_id: None,
     };
 
     let err = crate::shell::run_shell_command_capture("true", "label", "none", &[], &env, &logger)

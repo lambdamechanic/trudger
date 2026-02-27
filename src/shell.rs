@@ -52,6 +52,8 @@ pub(crate) struct CommandEnv {
     pub(crate) target_status: Option<String>,
     pub(crate) agent_prompt: Option<String>,
     pub(crate) agent_phase: Option<String>,
+    pub(crate) agent_profile: Option<String>,
+    pub(crate) agent_invocation_id: Option<String>,
     pub(crate) completed: Option<String>,
     pub(crate) needs_human: Option<String>,
     pub(crate) notify_event: Option<String>,
@@ -94,6 +96,8 @@ impl CommandEnv {
             self.target_status.as_deref(),
             self.agent_prompt.as_deref(),
             self.agent_phase.as_deref(),
+            self.agent_profile.as_deref(),
+            self.agent_invocation_id.as_deref(),
             self.completed.as_deref(),
             self.needs_human.as_deref(),
             self.notify_event.as_deref(),
@@ -121,12 +125,14 @@ impl CommandEnv {
                 self.task_id.as_deref(),
                 self.task_show.as_deref(),
                 self.task_status.as_deref(),
-                self.target_status.as_deref(),
-                self.agent_prompt.as_deref(),
-                self.agent_phase.as_deref(),
-                self.completed.as_deref(),
-                self.needs_human.as_deref(),
-                self.notify_event.as_deref(),
+            self.target_status.as_deref(),
+            self.agent_prompt.as_deref(),
+            self.agent_phase.as_deref(),
+            self.agent_profile.as_deref(),
+            self.agent_invocation_id.as_deref(),
+            self.completed.as_deref(),
+            self.needs_human.as_deref(),
+            self.notify_event.as_deref(),
                 self.notify_duration_ms.as_deref(),
                 self.notify_folder.as_deref(),
                 self.notify_exit_code.as_deref(),
@@ -221,6 +227,24 @@ impl CommandEnv {
             task_token,
             "TRUDGER_AGENT_PHASE",
             self.agent_phase.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_PROFILE",
+            self.agent_profile.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        Self::apply_optional_with_max(
+            cmd,
+            logger,
+            log_label,
+            task_token,
+            "TRUDGER_INVOCATION_ID",
+            self.agent_invocation_id.as_deref(),
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
         Self::apply_optional_with_max(
@@ -352,6 +376,8 @@ impl CommandEnv {
         target_status: Option<&str>,
         agent_prompt: Option<&str>,
         agent_phase: Option<&str>,
+        agent_profile: Option<&str>,
+        agent_invocation_id: Option<&str>,
         completed: Option<&str>,
         needs_human: Option<&str>,
         notify_event: Option<&str>,
@@ -392,6 +418,16 @@ impl CommandEnv {
         total += Self::env_entry_payload_bytes(
             "TRUDGER_AGENT_PHASE",
             agent_phase,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_PROFILE",
+            agent_profile,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
+        );
+        total += Self::env_entry_payload_bytes(
+            "TRUDGER_INVOCATION_ID",
+            agent_invocation_id,
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
         total += Self::env_entry_payload_bytes(
@@ -551,6 +587,8 @@ mod tests {
             target_status: None,
             agent_prompt: None,
             agent_phase: None,
+            agent_profile: None,
+            agent_invocation_id: None,
             completed: Some(huge),
             needs_human: None,
             notify_event: None,

@@ -13,8 +13,9 @@ use crate::config::{load_config_with_profile, NotificationScope};
 use crate::doctor::run_doctor_mode;
 use crate::logger::Logger;
 use crate::run_loop::{
+    set_agent_invocation_context, NotificationEvent, Quit, RuntimeState,
     dispatch_notification_hook, finish_current_task_context, quit, reset_task_on_exit, run_loop,
-    validate_config, NotificationEvent, Quit, RuntimeState,
+    validate_config,
 };
 use crate::tmux::TmuxState;
 use crate::wizard::run_wizard_cli;
@@ -186,6 +187,12 @@ where
             code: 1,
             reason: message,
         })?;
+
+    set_agent_invocation_context(
+        loaded.active_profile.clone(),
+        loaded.solve_invocation_id.clone(),
+        loaded.review_invocation_id.clone(),
+    );
 
     // Capture the absolute invocation working directory once for stable notification payloads.
     let invocation_folder = env::current_dir()

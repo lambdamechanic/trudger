@@ -34,6 +34,8 @@ if [[ -n "${log_path}" ]]; then
     fi
     log_env_flag "TRUDGER_AGENT_PROMPT"
     log_env_flag "TRUDGER_AGENT_PHASE"
+    log_env_flag "TRUDGER_PROFILE"
+    log_env_flag "TRUDGER_INVOCATION_ID"
     log_env_flag "TRUDGER_TASK_ID"
     log_env_flag "TRUDGER_TASK_SHOW"
     log_env_flag "TRUDGER_TASK_STATUS"

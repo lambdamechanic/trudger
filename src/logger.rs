@@ -191,6 +191,8 @@ impl Logger {
             target_status: None,
             agent_prompt: None,
             agent_phase: None,
+            agent_profile: None,
+            agent_invocation_id: None,
             completed: None,
             needs_human: None,
             notify_event: Some("log".to_string()),
