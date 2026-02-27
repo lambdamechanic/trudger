@@ -1879,6 +1879,114 @@ mod tests {
         crate::unit_tests::reset_test_env();
     }
 
+    #[test]
+    fn run_agent_commands_use_shared_invocation_for_solve_and_review() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let codex_log = temp.path().join("codex.log");
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("CODEX_MOCK_LOG", &codex_log);
+
+        let mut state = base_state(&temp);
+        state.config.agent_command = "codex --yolo exec --default \"$@\"".to_string();
+        state.config.agent_review_command = "codex --yolo exec --review \"$@\"".to_string();
+        state.current_task_id = Some(task("tr-1"));
+
+        set_agent_invocation_context(
+            "shared-profile".to_string(),
+            "shared-id".to_string(),
+            "shared-id".to_string(),
+        );
+
+        run_agent_solve(&state).expect("agent solve should succeed");
+        run_agent_review(&state).expect("agent review should succeed");
+
+        let contents = std::fs::read_to_string(&codex_log).expect("read codex log");
+        let command_lines: Vec<&str> = contents
+            .lines()
+            .filter(|line| line.starts_with("codex "))
+            .collect();
+        assert_eq!(command_lines.len(), 2, "expected one solve and one review call");
+        assert_eq!(command_lines[0].trim(), "codex --yolo exec --default");
+        assert_eq!(command_lines[1].trim(), "codex --yolo exec --review");
+        assert!(
+            command_lines.iter().all(|line| !line.contains("tr-1")),
+            "expected no positional task args appended to agent invocations, got:\n{contents}"
+        );
+
+        let invocation_lines: Vec<&str> = contents
+            .lines()
+            .filter(|line| line.starts_with("env TRUDGER_INVOCATION_ID="))
+            .collect();
+        assert_eq!(invocation_lines.len(), 2, "expected both invocations to run");
+        assert!(
+            invocation_lines.iter().all(|line| *line == "env TRUDGER_INVOCATION_ID=shared-id"),
+            "expected shared invocation id on both invocations, got:\n{contents}"
+        );
+
+        reset_agent_invocation_context();
+        crate::unit_tests::reset_test_env();
+    }
+
+    #[test]
+    fn run_agent_commands_use_split_invocations_for_solve_and_review() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let codex_log = temp.path().join("codex.log");
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("CODEX_MOCK_LOG", &codex_log);
+
+        let mut state = base_state(&temp);
+        state.config.agent_command = "codex --yolo exec --default \"$@\"".to_string();
+        state.config.agent_review_command = "codex --yolo exec --review \"$@\"".to_string();
+        state.current_task_id = Some(task("tr-1"));
+
+        set_agent_invocation_context(
+            "split-profile".to_string(),
+            "solve-id".to_string(),
+            "review-id".to_string(),
+        );
+
+        run_agent_solve(&state).expect("agent solve should succeed");
+        run_agent_review(&state).expect("agent review should succeed");
+
+        let contents = std::fs::read_to_string(&codex_log).expect("read codex log");
+        let command_lines: Vec<&str> = contents
+            .lines()
+            .filter(|line| line.starts_with("codex "))
+            .collect();
+        assert_eq!(command_lines.len(), 2, "expected one solve and one review call");
+        assert_eq!(command_lines[0].trim(), "codex --yolo exec --default");
+        assert_eq!(command_lines[1].trim(), "codex --yolo exec --review");
+
+        let invocation_lines: Vec<&str> = contents
+            .lines()
+            .filter(|line| line.starts_with("env TRUDGER_INVOCATION_ID="))
+            .collect();
+        assert_eq!(invocation_lines.len(), 2, "expected both invocations to run");
+        assert_eq!(invocation_lines[0], "env TRUDGER_INVOCATION_ID=solve-id");
+        assert_eq!(invocation_lines[1], "env TRUDGER_INVOCATION_ID=review-id");
+
+        assert!(!command_lines[1].contains("tr-1"));
+
+        reset_agent_invocation_context();
+        crate::unit_tests::reset_test_env();
+    }
+
     #[cfg(unix)]
     #[test]
     fn next_task_spawn_errors_are_wrapped_in_quit() {
