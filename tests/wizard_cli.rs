@@ -55,6 +55,26 @@ fn wizard_rejects_manual_task_flags() {
 }
 
 #[test]
+fn wizard_rejects_profile_flag() {
+    let output = Command::new(env!("CARGO_BIN_EXE_trudger"))
+        .arg("wizard")
+        .arg("-p")
+        .arg("review")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run trudger wizard -p review");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("-p/--profile is not supported in wizard mode."),
+        "expected wizard profile error, got: {stderr:?}"
+    );
+}
+
+#[test]
 fn wizard_rejects_positional_args() {
     let output = Command::new(env!("CARGO_BIN_EXE_trudger"))
         .arg("wizard")

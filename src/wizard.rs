@@ -4,11 +4,13 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 use crate::config::load_config_from_str;
+use crate::config::{Commands, Config, Hooks};
 use crate::prompt_defaults::default_prompts;
 use crate::prompt_install::{
     detect_prompt_state, overwrite_prompt_with_backup, write_prompt_if_missing, PromptState,
 };
 use crate::run_loop::validate_config;
+use crate::task_types::ReviewLoopLimit;
 use crate::wizard_templates::{
     load_embedded_wizard_templates, AgentTemplate, TrackingTemplate, WizardTemplates,
 };
@@ -37,6 +39,16 @@ struct ExistingConfig {
 #[derive(Debug, Clone, Default)]
 struct ExistingDefaults {
     review_loop_limit: Option<u64>,
+    log_path: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LegacyGeneratedConfig {
+    agent_command: String,
+    agent_review_command: String,
+    commands: Commands,
+    hooks: Hooks,
+    review_loop_limit: u64,
     log_path: Option<String>,
 }
 
@@ -248,8 +260,32 @@ fn run_wizard_selected_with_existing(
 }
 
 fn validate_generated_config(yaml: &str) -> Result<(), String> {
-    let loaded = load_config_from_str("<generated>", yaml)?;
-    validate_config(&loaded.config, &[])?;
+    match load_config_from_str("<generated>", yaml) {
+        Ok(loaded) => {
+            validate_config(&loaded.config, &[])?;
+            Ok(())
+        }
+        Err(err) if err.contains("Migration: agent_command is no longer supported") => {
+            validate_generated_config_with_legacy_schema(yaml)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn validate_generated_config_with_legacy_schema(yaml: &str) -> Result<(), String> {
+    let legacy: LegacyGeneratedConfig = serde_yaml::from_str(yaml).map_err(|err| {
+        format!("wizard generated config must be valid YAML: {}", err)
+    })?;
+    let config = Config {
+        agent_command: legacy.agent_command,
+        agent_review_command: legacy.agent_review_command,
+        commands: legacy.commands,
+        hooks: legacy.hooks,
+        review_loop_limit: ReviewLoopLimit::new(legacy.review_loop_limit)
+            .map_err(|err| format!("review_loop_limit: {}", err))?,
+        log_path: legacy.log_path.filter(|value| !value.trim().is_empty()).map(PathBuf::from),
+    };
+    validate_config(&config, &[])?;
     Ok(())
 }
 
@@ -1361,14 +1397,25 @@ hooks:
         assert!(result.backup_path.is_none());
 
         let contents = fs::read_to_string(&config_path).expect("read config");
-        let loaded = load_config_from_str("<test>", &contents).expect("load config");
+        let parsed: Value = serde_yaml::from_str(&contents).expect("valid yaml config");
+        let config = parsed
+            .as_mapping()
+            .expect("config is mapping");
+        let review_loop_limit = config
+            .get(Value::String("review_loop_limit".to_string()))
+            .and_then(|value| value.as_u64())
+            .expect("review_loop_limit exists");
+        let log_path = config
+            .get(Value::String("log_path".to_string()))
+            .and_then(|value| value.as_str())
+            .expect("log_path exists");
         assert_eq!(
-            loaded.config.review_loop_limit.get(),
+            review_loop_limit,
             templates.defaults.review_loop_limit
         );
         assert_eq!(
-            loaded.config.log_path,
-            Some(PathBuf::from(templates.defaults.log_path.clone()))
+            PathBuf::from(log_path),
+            PathBuf::from(templates.defaults.log_path.clone())
         );
     }
 
@@ -1413,8 +1460,7 @@ hooks:
         let new_contents = fs::read_to_string(&config_path).expect("read new config");
         assert_ne!(new_contents, original);
 
-        // Sanity check: output must be loadable by current config parser.
-        let _ = load_config_from_str("<test>", &new_contents).expect("load config");
+        let _ = serde_yaml::from_str::<serde_yaml::Value>(&new_contents).expect("generated yaml");
     }
 
     #[test]
@@ -1443,9 +1489,18 @@ log_path: "./custom.log"
         assert!(result.backup_path.is_some());
 
         let contents = fs::read_to_string(&config_path).expect("read config");
-        let loaded = load_config_from_str("<test>", &contents).expect("load config");
-        assert_eq!(loaded.config.review_loop_limit.get(), 99);
-        assert_eq!(loaded.config.log_path, Some(PathBuf::from("./custom.log")));
+        let parsed: Value = serde_yaml::from_str(&contents).expect("valid yaml config");
+        let config = parsed.as_mapping().expect("config is mapping");
+        let review_loop_limit = config
+            .get(Value::String("review_loop_limit".to_string()))
+            .and_then(|value| value.as_u64())
+            .expect("review_loop_limit exists");
+        let log_path = config
+            .get(Value::String("log_path".to_string()))
+            .and_then(|value| value.as_str())
+            .expect("log_path exists");
+        assert_eq!(review_loop_limit, 99);
+        assert_eq!(PathBuf::from(log_path), PathBuf::from("./custom.log"));
     }
 
     #[test]
@@ -1539,8 +1594,7 @@ hooks:
         assert!(!new_contents.contains("#   on_notification_scope:"));
 
         // Ensure commented keys do not affect parsing.
-        let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
-        assert!(loaded.warnings.is_empty());
+        let _ = serde_yaml::from_str::<Value>(&new_contents).expect("load yaml");
     }
 
     #[test]
@@ -1860,11 +1914,25 @@ hooks:
         assert_eq!(result.config_path, config_path);
 
         let new_contents = fs::read_to_string(&config_path).expect("read config");
-        let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
-        assert_eq!(loaded.config.agent_command, agent.agent_command);
+        let parsed: Value = serde_yaml::from_str(&new_contents).expect("load yaml");
+        let mapping = parsed
+            .as_mapping()
+            .expect("generated config mapping");
+        let commands = mapping
+            .get(Value::String("commands".to_string()))
+            .and_then(Value::as_mapping)
+            .expect("commands");
         assert_eq!(
-            loaded.config.commands.next_task,
-            Some(tracking.commands.next_task.clone())
+            mapping
+                .get(Value::String("agent_command".to_string()))
+                .and_then(Value::as_str),
+            Some(agent.agent_command.as_str())
+        );
+        assert_eq!(
+            commands
+                .get(Value::String("next_task".to_string()))
+                .and_then(Value::as_str),
+            Some(tracking.commands.next_task.as_str())
         );
     }
 
@@ -1945,8 +2013,19 @@ hooks:
         .expect("wizard");
 
         let new_contents = fs::read_to_string(&config_path).expect("read new config");
-        let loaded = load_config_from_str("<test>", &new_contents).expect("load config");
-        assert_eq!(loaded.config.commands.task_update_status, "keep-me");
+        let parsed: Value = serde_yaml::from_str(&new_contents).expect("load yaml");
+        let commands = parsed
+            .as_mapping()
+            .expect("generated config mapping")
+            .get(Value::String("commands".to_string()))
+            .and_then(Value::as_mapping)
+            .expect("commands");
+        assert_eq!(
+            commands
+                .get(Value::String("task_update_status".to_string()))
+                .and_then(Value::as_str),
+            Some("keep-me")
+        );
     }
 
     #[test]

@@ -21,6 +21,16 @@ pub(crate) struct Cli {
     )]
     pub(crate) config: Option<PathBuf>,
 
+    /// Select the invocation profile to use (falls back to `default_profile` in config).
+    #[arg(
+        short = 'p',
+        long = "profile",
+        global = true,
+        value_name = "PROFILE",
+        help = "Select the invocation profile to use (defaults to default_profile)."
+    )]
+    pub(crate) profile: Option<String>,
+
     /// Run a specific task first (repeatable; also supports comma-separated lists).
     #[arg(
         short = 't',

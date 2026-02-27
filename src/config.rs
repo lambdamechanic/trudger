@@ -104,12 +104,27 @@ struct ParsedConfig {
 }
 
 pub fn load_config(path: &Path) -> Result<LoadedConfig, String> {
+    load_config_with_profile(path, None)
+}
+
+pub(crate) fn load_config_with_profile(
+    path: &Path,
+    profile: Option<&str>,
+) -> Result<LoadedConfig, String> {
     let content = fs::read_to_string(path)
         .map_err(|err| format!("Failed to read config {}: {}", path.display(), err))?;
-    load_config_from_str(&path.display().to_string(), &content)
+    load_config_from_str_with_profile(&path.display().to_string(), &content, profile)
 }
 
 pub(crate) fn load_config_from_str(label: &str, content: &str) -> Result<LoadedConfig, String> {
+    load_config_from_str_with_profile(label, content, None)
+}
+
+pub(crate) fn load_config_from_str_with_profile(
+    label: &str,
+    content: &str,
+    profile: Option<&str>,
+) -> Result<LoadedConfig, String> {
     let value: Value = serde_yaml::from_str(content)
         .map_err(|err| format!("Failed to parse config {}: {}", label, err))?;
     let mapping = match value {
@@ -132,7 +147,7 @@ pub(crate) fn load_config_from_str(label: &str, content: &str) -> Result<LoadedC
     let config: ParsedConfig = serde_path_to_error::deserialize(deserializer)
         .map_err(|err| format!("Failed to parse config {}: {}", label, err))?;
 
-    let (agent_command, agent_review_command) = resolve_profile_commands(&config)?;
+    let (agent_command, agent_review_command) = resolve_profile_commands(&config, profile)?;
     let config = Config {
         agent_command,
         agent_review_command,
@@ -145,15 +160,23 @@ pub(crate) fn load_config_from_str(label: &str, content: &str) -> Result<LoadedC
     Ok(LoadedConfig { config, warnings })
 }
 
-fn resolve_profile_commands(config: &ParsedConfig) -> Result<(String, String), String> {
+fn resolve_profile_commands(
+    config: &ParsedConfig,
+    profile_override: Option<&str>,
+) -> Result<(String, String), String> {
+    let profile_name = profile_override.unwrap_or(config.default_profile.as_str());
     let profile = config
         .profiles
-        .get(&config.default_profile)
+        .get(profile_name)
         .ok_or_else(|| {
-            format!(
-                "default_profile references missing profile: {}",
-                config.default_profile
-            )
+            if profile_override.is_some() {
+                format!("Unknown profile: {}", profile_name)
+            } else {
+                format!(
+                    "default_profile references missing profile: {}",
+                    config.default_profile
+                )
+            }
         })?;
 
     let agent_command = config
@@ -162,7 +185,7 @@ fn resolve_profile_commands(config: &ParsedConfig) -> Result<(String, String), S
         .ok_or_else(|| {
             format!(
                 "profiles.{}.trudge references missing invocation: {}",
-                config.default_profile, profile.trudge
+                profile_name, profile.trudge
             )
         })?
         .command
@@ -174,7 +197,7 @@ fn resolve_profile_commands(config: &ParsedConfig) -> Result<(String, String), S
         .ok_or_else(|| {
             format!(
                 "profiles.{}.trudge_review references missing invocation: {}",
-                config.default_profile, profile.trudge_review
+                profile_name, profile.trudge_review
             )
         })?
         .command
@@ -708,6 +731,107 @@ hooks:
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected missing default profile reference");
         assert!(err.contains("default_profile references missing profile"));
+    }
+
+    #[test]
+    fn load_config_uses_default_profile_when_no_override_is_provided() {
+        let config = r#"
+default_profile: fast
+profiles:
+  fast:
+    trudge: fast-agent
+    trudge_review: fast-review
+  review:
+    trudge: review-agent
+    trudge_review: review-review
+invocations:
+  fast-agent:
+    command: "agent-fast"
+  fast-review:
+    command: "review-fast"
+  review-agent:
+    command: "agent-review"
+  review-review:
+    command: "review-review"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_status: "task-update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let loaded = load_config(file.path()).expect("load config");
+        assert_eq!(loaded.config.agent_command, "agent-fast");
+        assert_eq!(loaded.config.agent_review_command, "review-fast");
+    }
+
+    #[test]
+    fn load_config_with_profile_override_selects_profile() {
+        let config = r#"
+default_profile: fast
+profiles:
+  fast:
+    trudge: fast-agent
+    trudge_review: fast-review
+  review:
+    trudge: review-agent
+    trudge_review: review-review
+invocations:
+  fast-agent:
+    command: "agent-fast"
+  fast-review:
+    command: "review-fast"
+  review-agent:
+    command: "agent-review"
+  review-review:
+    command: "review-review"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_status: "task-update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let loaded = load_config_with_profile(file.path(), Some("review")).expect("load profile");
+        assert_eq!(loaded.config.agent_command, "agent-review");
+        assert_eq!(loaded.config.agent_review_command, "review-review");
+    }
+
+    #[test]
+    fn load_config_with_unknown_profile_is_rejected() {
+        let config = r#"
+default_profile: fast
+profiles:
+  fast:
+    trudge: fast-agent
+    trudge_review: fast-review
+invocations:
+  fast-agent:
+    command: "agent-fast"
+  fast-review:
+    command: "review-fast"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_status: "task-update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config_with_profile(file.path(), Some("missing"))
+            .expect_err("load profile");
+        assert!(err.contains("Unknown profile: missing"));
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::cli::{parse_manual_tasks, Cli, CliCommand};
-use crate::config::{load_config, NotificationScope};
+use crate::config::{load_config_with_profile, NotificationScope};
 use crate::doctor::run_doctor_mode;
 use crate::logger::Logger;
 use crate::run_loop::{
@@ -138,6 +138,22 @@ where
             reason: message,
         });
     }
+    if mode == AppMode::Doctor && cli.profile.is_some() {
+        let message = "-p/--profile is not supported in doctor mode.".to_string();
+        eprintln!("{}", message);
+        return Err(Quit {
+            code: 1,
+            reason: message,
+        });
+    }
+    if mode == AppMode::Wizard && cli.profile.is_some() {
+        let message = "-p/--profile is not supported in wizard mode.".to_string();
+        eprintln!("{}", message);
+        return Err(Quit {
+            code: 1,
+            reason: message,
+        });
+    }
 
     let config_path = cli.config;
     let config_path_source_flag = config_path.is_some();
@@ -165,7 +181,7 @@ where
         });
     }
 
-    let loaded = load_config(&config_path).map_err(|message| Quit {
+    let loaded = load_config_with_profile(&config_path, cli.profile.as_deref()).map_err(|message| Quit {
         code: 1,
         reason: message,
     })?;

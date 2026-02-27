@@ -1391,8 +1391,35 @@ fn clap_parses_doctor_subcommand_and_positional_args() {
 }
 
 #[test]
+fn clap_parses_profile_flag() {
+    let cli = Cli::try_parse_from(["trudger", "-p", "review"]).expect("parse profile");
+    assert_eq!(cli.profile.as_deref(), Some("review"));
+    assert!(cli.profile.is_some());
+    assert!(cli.task.is_empty());
+}
+
+#[test]
+fn doctor_rejects_profile_flag_with_clear_error() {
+    let err = run_with_cli(Cli {
+        profile: Some("review".to_string()),
+        config: None,
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: Some(CliCommand::Doctor),
+    })
+    .expect_err("expected doctor profile-flag rejection");
+    assert_eq!(err.code, 1);
+    assert!(
+        err.reason.contains("-p/--profile"),
+        "expected -p/--profile error, got: {}",
+        err.reason
+    );
+}
+
+#[test]
 fn doctor_rejects_task_flag_with_clear_error() {
     let err = run_with_cli(Cli {
+        profile: None,
         config: None,
         task: vec!["tr-1".to_string()],
         positional: Vec::new(),
@@ -1410,6 +1437,7 @@ fn doctor_rejects_task_flag_with_clear_error() {
 #[test]
 fn positional_task_ids_are_rejected_with_migration_hint() {
     let err = run_with_cli(Cli {
+        profile: None,
         config: None,
         task: Vec::new(),
         positional: vec!["tr-1".to_string()],
@@ -1418,6 +1446,24 @@ fn positional_task_ids_are_rejected_with_migration_hint() {
     .expect_err("expected positional task id rejection");
     assert_eq!(err.code, 1);
     assert_eq!(err.reason, "positional_args_not_supported");
+}
+
+#[test]
+fn wizard_rejects_profile_flag_with_clear_error() {
+    let err = run_with_cli(Cli {
+        profile: Some("review".to_string()),
+        config: None,
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: Some(CliCommand::Wizard),
+    })
+    .expect_err("expected wizard profile-flag rejection");
+    assert_eq!(err.code, 1);
+    assert!(
+        err.reason.contains("-p/--profile"),
+        "expected -p/--profile error, got: {}",
+        err.reason
+    );
 }
 
 #[test]
@@ -1509,6 +1555,7 @@ hooks:
     env::set_var("HOME", &home);
 
     let cli = Cli {
+        profile: None,
         config: Some(config_path.clone()),
         task: Vec::new(),
         positional: Vec::new(),
@@ -1775,8 +1822,16 @@ fn main_with_args_returns_success_for_doctor_config() {
     env::set_var("HOME", temp.path());
 
     let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: agent
+    trudge_review: review
+invocations:
+  agent:
+    command: "agent"
+  review:
+    command: "review"
 commands:
   next_task: "exit 0"
   task_show: "printf 'SHOW'"
@@ -3692,6 +3747,7 @@ fn run_with_cli_bootstraps_when_default_config_missing() {
     env::set_var("HOME", temp.path());
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: None,
         task: Vec::new(),
         positional: Vec::new(),
@@ -3712,6 +3768,7 @@ fn run_with_cli_rejects_invalid_manual_task_values() {
     reset_test_env();
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: None,
         task: vec!["tr-1,,tr-2".to_string()],
         positional: Vec::new(),
@@ -3722,11 +3779,158 @@ fn run_with_cli_rejects_invalid_manual_task_values() {
 }
 
 #[test]
+fn run_with_cli_errors_for_unknown_profile() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "trivial"
+  codex-review:
+    command: "trivial-review"
+commands:
+  next_task: "next-task"
+  task_show: "task-show"
+  task_status: "task-status"
+  task_update_status: "true"
+review_loop_limit: 3
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+"#,
+    )
+    .expect("write config");
+
+    let err = run_with_cli(Cli {
+        profile: Some("missing".to_string()),
+        config: Some(config_path),
+        task: Vec::new(),
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected unknown profile error");
+    assert_eq!(err.code, 1);
+    assert_eq!(err.reason, "Unknown profile: missing");
+
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
+fn run_with_cli_manual_task_uses_selected_profile() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let command_log = temp.path().join("command.log");
+    let task_status_state = temp.path().join("task-status-state");
+    env::set_var("COMMAND_LOG", &command_log);
+    env::set_var("TASK_STATUS_STATE", &task_status_state);
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+default_profile: fast
+profiles:
+  fast:
+    trudge: fast-agent
+    trudge_review: fast-review
+  review:
+    trudge: review-agent
+    trudge_review: review-review
+invocations:
+  fast-agent:
+    command: "echo agent-default >> \"$COMMAND_LOG\""
+  fast-review:
+    command: "echo review-default >> \"$COMMAND_LOG\""
+  review-agent:
+    command: "echo agent-review >> \"$COMMAND_LOG\""
+  review-review:
+    command: "echo review-review >> \"$COMMAND_LOG\""
+commands:
+  task_show: "echo show >> \"$COMMAND_LOG\""
+  task_status: |
+    count="$(cat "${TASK_STATUS_STATE}" 2>/dev/null || echo 0)"
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$TASK_STATUS_STATE"
+    if [ "$count" -le 1 ]; then
+      printf 'ready\n'
+    else
+      printf 'closed\n'
+    fi
+  task_update_status: "echo update >> \"$COMMAND_LOG\""
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+log_path: ""
+"#,
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+    fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
+
+    let err = run_with_cli(Cli {
+        profile: Some("review".to_string()),
+        config: Some(config_path),
+        task: vec!["tr-1".to_string()],
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected manual task run termination");
+    assert_eq!(err.code, 0);
+
+    let log = fs::read_to_string(&command_log).expect("read command log");
+    assert!(log.contains("agent-review"), "expected review agent command to run");
+    assert!(log.contains("review-review"), "expected review review command to run");
+    assert!(
+        !log.contains("agent-default"),
+        "did not expect default profile agent command"
+    );
+    assert!(
+        !log.contains("review-default"),
+        "did not expect default profile review command"
+    );
+
+    env::remove_var("COMMAND_LOG");
+    env::remove_var("TASK_STATUS_STATE");
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
 fn run_with_cli_rejects_wizard_positional_args() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: None,
         task: Vec::new(),
         positional: vec!["extra".to_string()],
@@ -3743,6 +3947,7 @@ fn run_with_cli_rejects_wizard_task_flag() {
     reset_test_env();
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: None,
         task: vec!["tr-1".to_string()],
         positional: Vec::new(),
@@ -3767,6 +3972,7 @@ fn run_with_cli_invokes_wizard_runner_without_tty() {
 
     let err = run_with_cli_for_test(
         Cli {
+            profile: None,
             config: None,
             task: Vec::new(),
             positional: Vec::new(),
@@ -3804,6 +4010,7 @@ fn run_with_cli_errors_when_home_missing() {
     env::remove_var("HOME");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: None,
         task: Vec::new(),
         positional: Vec::new(),
@@ -3830,6 +4037,7 @@ fn run_with_cli_errors_when_explicit_config_is_missing() {
 
     let missing = temp.path().join("missing.yml");
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(missing.clone()),
         task: Vec::new(),
         positional: Vec::new(),
@@ -3859,6 +4067,7 @@ fn run_with_cli_errors_when_config_is_invalid_yaml() {
     fs::write(&config_path, "agent_command: [").expect("write config");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -3902,6 +4111,7 @@ hooks:
     .expect("write config");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -3930,8 +4140,16 @@ fn run_with_cli_errors_when_prompt_files_missing() {
     fs::write(
         &config_path,
         r#"
-agent_command: "agent"
-agent_review_command: "agent-review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: agent
+    trudge_review: agent-review
+invocations:
+  agent:
+    command: "agent"
+  agent-review:
+    command: "agent-review"
 commands:
   next_task: "next-task"
   task_show: "task-show"
@@ -3946,6 +4164,7 @@ hooks:
     .expect("write config");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path.clone()),
         task: Vec::new(),
         positional: Vec::new(),
@@ -3959,6 +4178,7 @@ hooks:
     fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -3990,8 +4210,16 @@ fn run_with_cli_errors_when_trudge_prompt_is_unreadable() {
     fs::write(
         &config_path,
         r#"
-agent_command: "agent"
-agent_review_command: "agent-review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: agent
+    trudge_review: agent-review
+invocations:
+  agent:
+    command: "agent"
+  agent-review:
+    command: "agent-review"
 commands:
   next_task: "next-task"
   task_show: "task-show"
@@ -4016,6 +4244,7 @@ hooks:
         .expect("chmod trudge.md");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4052,8 +4281,16 @@ fn run_with_cli_errors_when_review_prompt_is_unreadable() {
     fs::write(
         &config_path,
         r#"
-agent_command: "agent"
-agent_review_command: "agent-review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: agent
+    trudge_review: agent-review
+invocations:
+  agent:
+    command: "agent"
+  agent-review:
+    command: "agent-review"
 commands:
   next_task: "next-task"
   task_show: "task-show"
@@ -4078,6 +4315,7 @@ hooks:
         .expect("chmod trudge_review.md");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4120,8 +4358,16 @@ fn run_with_cli_can_force_error_and_ctrlc_handler_error_is_non_fatal() {
     fs::write(
         &config_path,
         r#"
-agent_command: "true"
-agent_review_command: "true"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "true"
+  codex-review:
+    command: "true"
 commands:
   next_task: "next-task"
   task_show: "task-show"
@@ -4142,6 +4388,7 @@ log_path: ""
     fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
 
     let cli = Cli {
+        profile: None,
         config: Some(config_path.clone()),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4152,6 +4399,7 @@ log_path: ""
     assert_eq!(err.code, 1);
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4184,8 +4432,16 @@ fn ctrlc_handler_runs_on_sigint() {
     fs::write(
         &config_path,
         r#"
-agent_command: "true"
-agent_review_command: "true"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "true"
+  codex-review:
+    command: "true"
 commands:
   next_task: "next-task"
   task_show: "task-show"
@@ -4206,6 +4462,7 @@ log_path: ""
     fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
 
     let _ = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4251,8 +4508,16 @@ fn run_with_cli_runs_run_loop_and_restores_tmux() {
     fs::write(
         &config_path,
         r#"
-agent_command: "true"
-agent_review_command: "true"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "true"
+  codex-review:
+    command: "true"
 commands:
   next_task: "next-task"
   task_show: "task-show"
@@ -4275,6 +4540,7 @@ log_path: ""
     fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4328,8 +4594,16 @@ fn run_with_cli_emits_task_end_once_when_on_completed_hook_fails() {
         &config_path,
         format!(
             r#"
-agent_command: "true"
-agent_review_command: "true"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex_agent
+    trudge_review: codex_agent_review
+invocations:
+  codex_agent:
+    command: "true"
+  codex_agent_review:
+    command: "true"
 commands:
   next_task: "printf 'tr-1\n'"
   task_show: "printf 'show\n'"
@@ -4354,6 +4628,7 @@ log_path: ""
     fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4398,8 +4673,16 @@ fn run_with_cli_emits_task_end_once_when_on_requires_human_hook_fails() {
         &config_path,
         format!(
             r#"
-agent_command: "true"
-agent_review_command: "true"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex_agent
+    trudge_review: codex_agent_review
+invocations:
+  codex_agent:
+    command: "true"
+  codex_agent_review:
+    command: "true"
 commands:
   next_task: "printf 'tr-1\n'"
   task_show: "printf 'show\n'"
@@ -4424,6 +4707,7 @@ log_path: ""
     fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4471,8 +4755,16 @@ fn run_with_cli_task_start_notification_includes_task_description_from_task_show
         &config_path,
         format!(
             r#"
-agent_command: "true"
-agent_review_command: "true"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex_agent
+    trudge_review: codex_agent_review
+invocations:
+  codex_agent:
+    command: "true"
+  codex_agent_review:
+    command: "true"
 commands:
   next_task: "if [ -f '{next_marker_path}' ]; then exit 1; else touch '{next_marker_path}'; echo tr-1; fi"
   task_show: "echo 'My Title'"
@@ -4497,6 +4789,7 @@ log_path: ""
     fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4547,8 +4840,16 @@ fn run_with_cli_dispatches_all_logs_notifications_when_log_path_is_empty() {
     fs::write(
         &config_path,
         r#"
-agent_command: "true"
-agent_review_command: "true"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex_agent
+    trudge_review: codex_agent_review
+invocations:
+  codex_agent:
+    command: "true"
+  codex_agent_review:
+    command: "true"
 commands:
   next_task: "next-task"
   task_show: "task-show"
@@ -4571,6 +4872,7 @@ log_path: ""
     fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4650,8 +4952,16 @@ fn run_with_cli_all_logs_notifications_include_task_context_when_available() {
         &config_path,
         format!(
             r#"
-agent_command: "true"
-agent_review_command: "true"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex_agent
+    trudge_review: codex_agent_review
+invocations:
+  codex_agent:
+    command: "true"
+  codex_agent_review:
+    command: "true"
 commands:
   next_task: "if [ -f '{next_marker_path}' ]; then exit 1; else touch '{next_marker_path}'; echo tr-1; fi"
   task_show: "echo 'My Title'"
@@ -4677,6 +4987,7 @@ log_path: ""
     fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
@@ -4850,8 +5161,16 @@ fn run_with_cli_emits_run_end_after_teardown_on_error_exit() {
         &config_path,
         format!(
             r#"
-agent_command: "exit 2"
-agent_review_command: "true"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex_agent
+    trudge_review: codex_agent_review
+invocations:
+  codex_agent:
+    command: "exit 2"
+  codex_agent_review:
+    command: "true"
 commands:
   next_task: "printf 'tr-1\n'"
   task_show: "printf 'show\n'"
@@ -4875,6 +5194,7 @@ log_path: ""
     fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
 
     let err = run_with_cli(Cli {
+        profile: None,
         config: Some(config_path),
         task: Vec::new(),
         positional: Vec::new(),
