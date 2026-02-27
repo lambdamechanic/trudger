@@ -1477,8 +1477,16 @@ fn doctor_does_not_require_prompts_and_cleans_scratch_dir() {
     fs::write(
         &config_path,
         r#"
-agent_command: "agent"
-agent_review_command: "agent-review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: agent
+    trudge_review: agent_review
+invocations:
+  agent:
+    command: "agent"
+  agent_review:
+    command: "agent-review"
 commands:
   next_task: "next-task"
   task_show: "task-show"

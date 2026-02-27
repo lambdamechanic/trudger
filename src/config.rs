@@ -1,5 +1,6 @@
 use serde::{Deserialize, Deserializer};
 use serde_yaml::{Mapping, Value};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -79,6 +80,29 @@ pub struct LoadedConfig {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+struct ParsedProfile {
+    trudge: String,
+    trudge_review: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ParsedInvocation {
+    command: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ParsedConfig {
+    default_profile: String,
+    profiles: HashMap<String, ParsedProfile>,
+    invocations: HashMap<String, ParsedInvocation>,
+    commands: Commands,
+    hooks: Hooks,
+    review_loop_limit: ReviewLoopLimit,
+    #[serde(default, deserialize_with = "deserialize_log_path")]
+    log_path: Option<PathBuf>,
+}
+
 pub fn load_config(path: &Path) -> Result<LoadedConfig, String> {
     let content = fs::read_to_string(path)
         .map_err(|err| format!("Failed to read config {}: {}", path.display(), err))?;
@@ -105,10 +129,58 @@ pub(crate) fn load_config_from_str(label: &str, content: &str) -> Result<LoadedC
     // deserialization errors (like `ReviewLoopLimit`). Track the path explicitly
     // so errors remain actionable.
     let deserializer = serde_yaml::Deserializer::from_str(content);
-    let config: Config = serde_path_to_error::deserialize(deserializer)
+    let config: ParsedConfig = serde_path_to_error::deserialize(deserializer)
         .map_err(|err| format!("Failed to parse config {}: {}", label, err))?;
 
+    let (agent_command, agent_review_command) = resolve_profile_commands(&config)?;
+    let config = Config {
+        agent_command,
+        agent_review_command,
+        commands: config.commands,
+        hooks: config.hooks,
+        review_loop_limit: config.review_loop_limit,
+        log_path: config.log_path,
+    };
+
     Ok(LoadedConfig { config, warnings })
+}
+
+fn resolve_profile_commands(config: &ParsedConfig) -> Result<(String, String), String> {
+    let profile = config
+        .profiles
+        .get(&config.default_profile)
+        .ok_or_else(|| {
+            format!(
+                "default_profile references missing profile: {}",
+                config.default_profile
+            )
+        })?;
+
+    let agent_command = config
+        .invocations
+        .get(&profile.trudge)
+        .ok_or_else(|| {
+            format!(
+                "profiles.{}.trudge references missing invocation: {}",
+                config.default_profile, profile.trudge
+            )
+        })?
+        .command
+        .clone();
+
+    let agent_review_command = config
+        .invocations
+        .get(&profile.trudge_review)
+        .ok_or_else(|| {
+            format!(
+                "profiles.{}.trudge_review references missing invocation: {}",
+                config.default_profile, profile.trudge_review
+            )
+        })?
+        .command
+        .clone();
+
+    Ok((agent_command, agent_review_command))
 }
 
 fn emit_unknown_key_warnings(keys: &[String]) {
@@ -119,8 +191,9 @@ fn emit_unknown_key_warnings(keys: &[String]) {
 
 fn unknown_top_level_keys(mapping: &Mapping) -> Vec<String> {
     let allowed = [
-        "agent_command",
-        "agent_review_command",
+        "default_profile",
+        "profiles",
+        "invocations",
         "commands",
         "hooks",
         "review_loop_limit",
@@ -157,7 +230,87 @@ fn unknown_config_keys(mapping: &Mapping) -> Vec<String> {
             "on_notification_scope",
         ],
     ));
+    keys.extend(unknown_nested_profile_or_invocation_keys(
+        mapping,
+        "profiles",
+        &["trudge", "trudge_review"],
+    ));
+    keys.extend(unknown_nested_profile_or_invocation_keys(
+        mapping,
+        "invocations",
+        &["command"],
+    ));
     keys
+}
+
+#[allow(dead_code)]
+fn unknown_nested_profile_or_invocation_keys_legacy(
+    mapping: &Mapping,
+    mapping_key: &str,
+    allowed: &[&str],
+) -> Vec<String> {
+    let key = Value::String(mapping_key.to_string());
+    let Some(Value::Mapping(nested_entries)) = mapping.get(&key) else {
+        return Vec::new();
+    };
+
+    nested_entries
+        .iter()
+        .filter_map(|(nested_key, nested_value)| {
+            let nested_key = nested_key.as_str()?;
+            let Value::Mapping(nested_mapping) = nested_value else {
+                return Some(vec![format!(
+                    "{}.{}
+			 must be a mapping",
+                    mapping_key, nested_key
+                )]);
+            };
+
+            Some(
+                nested_mapping
+                    .keys()
+                    .filter_map(|key| key.as_str().map(|value| value.to_string()))
+                    .filter(|key| !allowed.contains(&key.as_str()))
+                    .map(|key| format!("{}.{}.{}", mapping_key, nested_key, key))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect()
+}
+
+fn unknown_nested_profile_or_invocation_keys(
+    mapping: &Mapping,
+    mapping_key: &str,
+    allowed: &[&str],
+) -> Vec<String> {
+    let key = Value::String(mapping_key.to_string());
+    let Some(Value::Mapping(nested_entries)) = mapping.get(&key) else {
+        return Vec::new();
+    };
+
+    nested_entries
+        .iter()
+        .filter_map(|(nested_key, nested_value)| {
+            let nested_key = nested_key.as_str()?;
+            let Value::Mapping(nested_mapping) = nested_value else {
+                return Some(vec![format!(
+                    "{}.{} must be a mapping",
+                    mapping_key, nested_key
+                )]);
+            };
+
+            Some(
+                nested_mapping
+                    .keys()
+                    .filter_map(|key| key.as_str().map(|value| value.to_string()))
+                    .filter(|key| !allowed.contains(&key.as_str()))
+                    .map(|key| format!("{}.{}.{}", mapping_key, nested_key, key))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .flatten()
+        .collect()
 }
 
 fn unknown_nested_keys(mapping: &Mapping, mapping_key: &str, allowed: &[&str]) -> Vec<String> {
@@ -176,23 +329,88 @@ fn unknown_nested_keys(mapping: &Mapping, mapping_key: &str, allowed: &[&str]) -
 
 fn validate_required_fields(mapping: &Mapping) -> Result<(), String> {
     reject_deprecated_keys(mapping)?;
-    require_non_empty_string(mapping, "agent_command", "agent_command")?;
-    require_non_empty_string(mapping, "agent_review_command", "agent_review_command")?;
+    let default_profile = require_non_empty_string(mapping, "default_profile", "default_profile")?;
+    let profiles = require_mapping(mapping, "profiles", "profiles")?;
+    if profiles.is_empty() {
+        return Err("profiles must not be empty".to_string());
+    }
+    let invocations = require_mapping(mapping, "invocations", "invocations")?;
+    if invocations.is_empty() {
+        return Err("invocations must not be empty".to_string());
+    }
+
+    for (invocation_id, invocation) in invocations {
+        let invocation_id = invocation_id
+            .as_str()
+            .ok_or_else(|| "invocations keys must be strings".to_string())?;
+        let invocation = match invocation {
+            Value::Mapping(invocation) => invocation,
+            _ => return Err(format!("invocations.{} must be a mapping", invocation_id)),
+        };
+
+        let _ = require_non_empty_string(
+            invocation,
+            "command",
+            &format!("invocations.{}.command", invocation_id),
+        )?;
+    }
+
+    for (profile_id, profile) in profiles {
+        let profile_id = profile_id
+            .as_str()
+            .ok_or_else(|| "profiles keys must be strings".to_string())?;
+        let profile = match profile {
+            Value::Mapping(profile) => profile,
+            _ => return Err(format!("profiles.{} must be a mapping", profile_id)),
+        };
+
+        let trudge = require_non_empty_string(
+            profile,
+            "trudge",
+            &format!("profiles.{}.trudge", profile_id),
+        )?;
+        let trudge_review = require_non_empty_string(
+            profile,
+            "trudge_review",
+            &format!("profiles.{}.trudge_review", profile_id),
+        )?;
+
+        if !invocations.contains_key(Value::String(trudge.clone())) {
+            return Err(format!(
+                "profiles.{}.trudge references missing invocation: {}",
+                profile_id, trudge
+            ));
+        }
+        if !invocations.contains_key(Value::String(trudge_review.clone())) {
+            return Err(format!(
+                "profiles.{}.trudge_review references missing invocation: {}",
+                profile_id, trudge_review
+            ));
+        }
+    }
+
+    if !profiles.contains_key(Value::String(default_profile.clone())) {
+        return Err(format!(
+            "default_profile references missing profile: {}",
+            default_profile
+        ));
+    }
+
     require_non_null(mapping, "review_loop_limit", "review_loop_limit")?;
     validate_optional_string(mapping, "log_path", "log_path")?;
 
     let commands = require_mapping(mapping, "commands", "commands")?;
-    require_non_empty_string(commands, "task_show", "commands.task_show")?;
-    require_non_empty_string(commands, "task_status", "commands.task_status")?;
-    require_non_empty_string(
+    let _ = require_non_empty_string(commands, "task_show", "commands.task_show")?;
+    let _ = require_non_empty_string(commands, "task_status", "commands.task_status")?;
+    let _ = require_non_empty_string(
         commands,
         "task_update_status",
         "commands.task_update_status",
     )?;
 
     let hooks = require_mapping(mapping, "hooks", "hooks")?;
-    require_non_empty_string(hooks, "on_completed", "hooks.on_completed")?;
-    require_non_empty_string(hooks, "on_requires_human", "hooks.on_requires_human")?;
+    let _ = require_non_empty_string(hooks, "on_completed", "hooks.on_completed")?;
+    let _ = require_non_empty_string(hooks, "on_requires_human", "hooks.on_requires_human")?;
     validate_optional_non_empty_string(hooks, "on_doctor_setup", "hooks.on_doctor_setup")?;
     validate_optional_non_empty_string(hooks, "on_notification", "hooks.on_notification")?;
     validate_optional_notification_scope(
@@ -223,10 +441,17 @@ fn notification_scope_without_hook_warning(mapping: &Mapping) -> Option<String> 
 }
 
 fn reject_deprecated_keys(mapping: &Mapping) -> Result<(), String> {
-    let key = Value::String("codex_command".to_string());
-    if mapping.contains_key(&key) {
-        return Err("Migration: codex_command is no longer supported; use agent_command and agent_review_command.".to_string());
+    let legacy_keys = ["agent_command", "agent_review_command", "codex_command"];
+    for key in legacy_keys {
+        let key = Value::String(key.to_string());
+        if mapping.contains_key(&key) {
+            return Err(format!(
+                "Migration: {} is no longer supported; use default_profile, profiles, and invocations.",
+                key.as_str().unwrap()
+            ));
+        }
     }
+
     Ok(())
 }
 
@@ -253,7 +478,11 @@ fn require_non_null(mapping: &Mapping, key_name: &str, label: &str) -> Result<()
     }
 }
 
-fn require_non_empty_string(mapping: &Mapping, key_name: &str, label: &str) -> Result<(), String> {
+fn require_non_empty_string(
+    mapping: &Mapping,
+    key_name: &str,
+    label: &str,
+) -> Result<String, String> {
     let key = Value::String(key_name.to_string());
     match mapping.get(&key) {
         None => Err(format!("Missing required config value: {}", label)),
@@ -262,7 +491,7 @@ fn require_non_empty_string(mapping: &Mapping, key_name: &str, label: &str) -> R
             if value.trim().is_empty() {
                 Err(format!("{} must not be empty", label))
             } else {
-                Ok(())
+                Ok(value.clone())
             }
         }
         Some(_) => Err(format!("{} must be a string", label)),
@@ -359,8 +588,16 @@ mod tests {
         // Exercise the `String::deserialize(..)?` error path for the specific deserializer
         // instantiation used by `load_config_from_str` (via `serde_path_to_error`).
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -374,14 +611,31 @@ hooks:
 "#;
 
         let deserializer = serde_yaml::Deserializer::from_str(config);
-        let err = serde_path_to_error::deserialize::<_, Config>(deserializer)
+        let err = serde_path_to_error::deserialize::<_, ParsedConfig>(deserializer)
             .expect_err("expected log_path deserialization error");
         assert!(err.to_string().contains("log_path"));
     }
 
     #[test]
-    fn missing_agent_commands_error() {
+    fn missing_required_profile_schema_keys() {
         let config = r#"
+default_profile: codex
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_status: "update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing required profile");
+        assert!(err.contains("profiles"));
+
+        let config = r#"
+default_profile: codex
 commands:
   next_task: "next"
   task_show: "show"
@@ -394,10 +648,23 @@ hooks:
   on_requires_human: "human"
 "#;
         let file = write_temp_config(config);
-        let err = load_config(file.path()).expect_err("expected missing agent_command");
-        assert!(err.contains("agent_command"));
+        let err = load_config(file.path()).expect_err("expected missing profiles");
+        assert!(err.contains("profiles"));
+    }
 
+    #[test]
+    fn legacy_agent_keys_are_rejected_with_migration_error() {
         let config = r#"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 agent_command: "agent"
 commands:
   next_task: "next"
@@ -405,21 +672,85 @@ commands:
   task_status: "status"
   task_update_status: "update"
 review_loop_limit: 3
-log_path: "./log"
 hooks:
   on_completed: "done"
   on_requires_human: "human"
 "#;
         let file = write_temp_config(config);
-        let err = load_config(file.path()).expect_err("expected missing agent_review_command");
-        assert!(err.contains("agent_review_command"));
+        let err = load_config(file.path()).expect_err("expected legacy agent key rejection");
+        assert!(err.contains("agent_command"));
+        assert!(err.contains("Migration"));
+    }
+
+    #[test]
+    fn missing_default_profile_reference_is_rejected() {
+        let config = r#"
+default_profile: missing
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_status: "update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing default profile reference");
+        assert!(err.contains("default_profile references missing profile"));
+    }
+
+    #[test]
+    fn profile_missing_invocation_reference_is_rejected() {
+        let config = r#"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review-missing
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
+commands:
+  next_task: "next"
+  task_show: "show"
+  task_status: "status"
+  task_update_status: "update"
+review_loop_limit: 3
+hooks:
+  on_completed: "done"
+  on_requires_human: "human"
+"#;
+        let file = write_temp_config(config);
+        let err = load_config(file.path()).expect_err("expected missing invocation reference");
+        assert!(err.contains("profiles.codex.trudge_review references missing invocation"));
     }
 
     #[test]
     fn missing_required_mapping_errors() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 review_loop_limit: 3
 hooks:
   on_completed: "done"
@@ -430,8 +761,16 @@ hooks:
         assert!(err.contains("commands"));
 
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 review_loop_limit: 3
 commands:
   task_show: "show"
@@ -446,8 +785,16 @@ commands:
     #[test]
     fn null_required_value_errors() {
         let config = r#"
-agent_command: null
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: null
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -460,15 +807,23 @@ hooks:
   on_requires_human: "human"
 "#;
         let file = write_temp_config(config);
-        let err = load_config(file.path()).expect_err("expected null agent_command");
-        assert!(err.contains("agent_command"));
+        let err = load_config(file.path()).expect_err("expected null invocation command");
+        assert!(err.contains("invocations.codex.command"));
     }
 
     #[test]
     fn empty_and_wrong_type_required_value_errors() {
         let config = r#"
-agent_command: ""
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: ""
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -480,12 +835,20 @@ hooks:
   on_requires_human: "human"
 "#;
         let file = write_temp_config(config);
-        let err = load_config(file.path()).expect_err("expected empty agent_command");
-        assert!(err.contains("agent_command"));
+        let err = load_config(file.path()).expect_err("expected empty invocation command");
+        assert!(err.contains("invocations.codex.command"));
 
         let config = r#"
-agent_command: ["agent"]
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: ["agent"]
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -497,16 +860,24 @@ hooks:
   on_requires_human: "human"
 "#;
         let file = write_temp_config(config);
-        let err = load_config(file.path()).expect_err("expected agent_command type error");
-        assert!(err.contains("agent_command"));
+        let err = load_config(file.path()).expect_err("expected invocation command type error");
+        assert!(err.contains("invocations.codex.command"));
         assert!(err.contains("string"));
     }
 
     #[test]
     fn missing_review_loop_limit_errors() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -524,8 +895,16 @@ hooks:
     #[test]
     fn null_review_loop_limit_errors() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -545,8 +924,16 @@ hooks:
     #[test]
     fn zero_review_loop_limit_is_rejected_with_actionable_error() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -567,8 +954,16 @@ hooks:
     #[test]
     fn null_commands_mapping_errors() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands: null
 review_loop_limit: 3
 log_path: "./log"
@@ -584,8 +979,16 @@ hooks:
     #[test]
     fn commands_mapping_must_be_mapping() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands: "not-a-mapping"
 review_loop_limit: 3
 hooks:
@@ -601,8 +1004,16 @@ hooks:
     #[test]
     fn missing_task_update_status_errors() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -628,8 +1039,16 @@ hooks:
     #[test]
     fn unknown_keys_reported() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -650,8 +1069,18 @@ extra_key: true
     #[test]
     fn unknown_nested_keys_reported() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+    extra_profile_key: "mystery"
+invocations:
+  codex:
+    command: "agent"
+    extra_invocation_key: "mystery"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -670,7 +1099,9 @@ hooks:
             loaded.warnings,
             vec![
                 "commands.extra_command_key".to_string(),
-                "hooks.extra_hook_key".to_string()
+                "hooks.extra_hook_key".to_string(),
+                "profiles.codex.extra_profile_key".to_string(),
+                "invocations.codex.extra_invocation_key".to_string()
             ]
         );
     }
@@ -678,8 +1109,16 @@ hooks:
     #[test]
     fn codex_command_is_rejected() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 codex_command: "codex"
 commands:
   next_task: "next"
@@ -695,15 +1134,25 @@ hooks:
         let file = write_temp_config(config);
         let err = load_config(file.path()).expect_err("expected codex_command error");
         assert!(err.contains("codex_command"));
-        assert!(err.contains("agent_command"));
+        assert!(err.contains("default_profile"));
+        assert!(err.contains("profiles"));
+        assert!(err.contains("invocations"));
         assert!(err.contains("Migration"));
     }
 
     #[test]
     fn optional_doctor_setup_value_errors() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -720,8 +1169,16 @@ hooks:
         assert!(err.contains("hooks.on_doctor_setup"));
 
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -738,8 +1195,16 @@ hooks:
         assert!(err.contains("hooks.on_doctor_setup"));
 
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -760,8 +1225,16 @@ hooks:
     #[test]
     fn optional_notification_value_errors() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -778,8 +1251,16 @@ hooks:
         assert!(err.contains("hooks.on_notification"));
 
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -799,8 +1280,16 @@ hooks:
     #[test]
     fn invalid_notification_scope_errors() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -823,8 +1312,16 @@ hooks:
     #[test]
     fn notification_scope_defaults_and_scope_without_hook_warns() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -844,8 +1341,16 @@ hooks:
         );
 
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -871,8 +1376,16 @@ hooks:
     #[test]
     fn optional_log_path_value_errors() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -893,8 +1406,16 @@ hooks:
     #[test]
     fn missing_log_path_is_allowed() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -913,8 +1434,16 @@ hooks:
     #[test]
     fn empty_log_path_is_allowed() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -934,8 +1463,16 @@ hooks:
     #[test]
     fn null_log_path_errors() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -965,8 +1502,16 @@ hooks:
     #[test]
     fn deserialize_errors_include_path_and_details() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -990,8 +1535,16 @@ hooks:
     #[test]
     fn missing_command_field_errors_are_specific() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_status: "status"
@@ -1006,8 +1559,16 @@ hooks:
         assert!(err.contains("commands.task_show"));
 
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -1022,8 +1583,16 @@ hooks:
         assert!(err.contains("commands.task_status"));
 
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -1041,8 +1610,16 @@ hooks:
     #[test]
     fn missing_hook_field_errors_are_specific() {
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
@@ -1057,8 +1634,16 @@ hooks:
         assert!(err.contains("hooks.on_completed"));
 
         let config = r#"
-agent_command: "agent"
-agent_review_command: "review"
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+invocations:
+  codex:
+    command: "agent"
+  codex-review:
+    command: "review"
 commands:
   next_task: "next"
   task_show: "show"
