@@ -109,9 +109,9 @@ impl CommandEnv {
         if total > TRUDGER_ENV_TOTAL_MAX_BYTES {
             // Reduce the largest/least-critical payloads first. The goal is to avoid spawn failures
             // while keeping the rest of the contract intact (vars stay set, but may be empty).
-            let mut over = total - TRUDGER_ENV_TOTAL_MAX_BYTES;
-            over = Self::reduce_overage(&mut task_show_max, self.task_show.as_deref(), over);
-            over = Self::reduce_overage(&mut agent_prompt_max, self.agent_prompt.as_deref(), over);
+            let over = total - TRUDGER_ENV_TOTAL_MAX_BYTES;
+            let over = Self::reduce_overage(&mut task_show_max, self.task_show.as_deref(), over);
+            let _ = Self::reduce_overage(&mut agent_prompt_max, self.agent_prompt.as_deref(), over);
 
             let new_total = Self::estimate_trudger_payload_bytes(
                 task_show_max,
