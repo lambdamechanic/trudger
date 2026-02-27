@@ -2005,6 +2005,95 @@ mod tests {
         crate::unit_tests::reset_test_env();
     }
 
+    #[test]
+    fn run_agent_commands_emit_profile_invocation_contract_and_remove_legacy_env() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let temp = TempDir::new().expect("temp dir");
+        let codex_log = temp.path().join("codex.log");
+        let fixtures_bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("bin");
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{}", fixtures_bin.display(), old_path));
+        std::env::set_var("CODEX_MOCK_LOG", &codex_log);
+        std::env::set_var("TRUDGER_PROMPT", "legacy-prompt");
+        std::env::set_var("TRUDGER_REVIEW_PROMPT", "legacy-review-prompt");
+
+        let mut state = base_state(&temp);
+        state.config.agent_command = "codex".to_string();
+        state.config.agent_review_command = "codex".to_string();
+        state.current_task_id = Some(task("tr-1"));
+
+        set_agent_invocation_context(
+            "manual-profile".to_string(),
+            "solve-id".to_string(),
+            "review-id".to_string(),
+        );
+
+        state.prompt_trudge = "solve prompt".to_string();
+        state.prompt_review = "review prompt".to_string();
+
+        run_agent_solve(&state).expect("agent solve should succeed");
+        run_agent_review(&state).expect("agent review should succeed");
+
+        let contents = std::fs::read_to_string(&codex_log).expect("read codex log");
+        let invocation_lines: Vec<&str> = contents
+            .lines()
+            .filter(|line| line.starts_with("env TRUDGER_INVOCATION_ID="))
+            .collect();
+
+        assert_eq!(invocation_lines.len(), 2, "expected both invocations to run");
+        assert_eq!(invocation_lines[0], "env TRUDGER_INVOCATION_ID=solve-id");
+        assert_eq!(invocation_lines[1], "env TRUDGER_INVOCATION_ID=review-id");
+
+        assert!(
+            contents.contains("envset TRUDGER_AGENT_PROMPT=1"),
+            "agent invocations should set TRUDGER_AGENT_PROMPT"
+        );
+        assert!(
+            contents.contains("env TRUDGER_AGENT_PROMPT=solve prompt"),
+            "solve invocation should forward the solve prompt"
+        );
+        assert!(
+            contents.contains("env TRUDGER_AGENT_PROMPT=review prompt"),
+            "review invocation should forward the review prompt"
+        );
+        assert!(
+            contents.contains("envset TRUDGER_AGENT_PHASE=1"),
+            "agent invocations should set TRUDGER_AGENT_PHASE"
+        );
+        assert!(
+            contents.contains("env TRUDGER_AGENT_PHASE=trudge"),
+            "solve invocation should set TRUDGER_AGENT_PHASE=trudge"
+        );
+        assert!(
+            contents.contains("env TRUDGER_AGENT_PHASE=trudge_review"),
+            "review invocation should set TRUDGER_AGENT_PHASE=trudge_review"
+        );
+        assert!(
+            contents.contains("envset TRUDGER_PROFILE=1"),
+            "agent invocations should set TRUDGER_PROFILE"
+        );
+        assert!(
+            contents.contains("env TRUDGER_PROFILE=manual-profile"),
+            "solve/review invocations should inherit active profile"
+        );
+        assert!(
+            contents.contains("envset TRUDGER_PROMPT=0"),
+            "legacy TRUDGER_PROMPT should be removed from agent env"
+        );
+        assert!(
+            contents.contains("envset TRUDGER_REVIEW_PROMPT=0"),
+            "legacy TRUDGER_REVIEW_PROMPT should be removed from agent env"
+        );
+
+        reset_agent_invocation_context();
+        crate::unit_tests::reset_test_env();
+    }
+
     #[cfg(unix)]
     #[test]
     fn next_task_spawn_errors_are_wrapped_in_quit() {

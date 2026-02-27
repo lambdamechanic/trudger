@@ -552,9 +552,69 @@ impl CommandEnv {
 
 #[cfg(test)]
 mod tests {
-    use super::CommandEnv;
-    use super::Logger;
+    use super::{run_shell_command_capture, CommandEnv, Logger};
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::raw::c_int;
     use std::process::Command;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[cfg(unix)]
+    fn capture_stderr<F: FnOnce()>(f: F) -> String {
+        extern "C" {
+            fn pipe(fds: *mut c_int) -> c_int;
+            fn dup(fd: c_int) -> c_int;
+            fn dup2(oldfd: c_int, newfd: c_int) -> c_int;
+            fn close(fd: c_int) -> c_int;
+        }
+
+        unsafe {
+            let mut fds = [0 as c_int; 2];
+            if pipe(fds.as_mut_ptr()) != 0 {
+                panic!("pipe failed");
+            }
+
+            let read_fd = fds[0];
+            let write_fd = fds[1];
+            let stderr_fd = std::io::stderr().as_raw_fd();
+            let saved_stderr = dup(stderr_fd);
+
+            if saved_stderr < 0 {
+                let _ = close(read_fd);
+                let _ = close(write_fd);
+                panic!("dup stderr failed");
+            }
+
+            if dup2(write_fd, stderr_fd) < 0 {
+                let _ = close(saved_stderr);
+                let _ = close(read_fd);
+                let _ = close(write_fd);
+                panic!("dup2 stderr failed");
+            }
+
+            let _ = close(write_fd);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+
+            if dup2(saved_stderr, stderr_fd) < 0 {
+                let _ = close(saved_stderr);
+                let _ = close(read_fd);
+                panic!("restore stderr failed");
+            }
+            let _ = close(saved_stderr);
+
+            let mut output = Vec::new();
+            let mut reader = std::fs::File::from_raw_fd(read_fd);
+            reader.read_to_end(&mut output).expect("read stderr");
+            let output = String::from_utf8_lossy(&output).into_owned();
+
+            if let Err(payload) = result {
+                std::panic::resume_unwind(payload);
+            }
+
+            output
+        }
+    }
 
     #[test]
     fn reduce_overage_returns_over_when_value_is_none() {
@@ -604,6 +664,76 @@ mod tests {
         let mut cmd = Command::new("true");
         let logger = Logger::new(None);
         env.apply(&mut cmd, &logger, "test", "task");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_env_truncates_oversized_prompt_value_and_warns() {
+        let _guard = crate::unit_tests::ENV_MUTEX.lock().unwrap();
+        crate::unit_tests::reset_test_env();
+
+        let max = 64 * 1024;
+        let ch = '\u{20AC}';
+        let per_char = ch.len_utf8();
+        assert_eq!(per_char, 3, "expected 3-byte UTF-8 character");
+
+        let repeat = max / per_char + 1;
+        let large: String = std::iter::repeat_n(ch, repeat).collect();
+        let expected_len = (max / per_char).to_string();
+
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("trudger.log");
+        let logger = Logger::new(Some(log_path.clone()));
+        let env = CommandEnv {
+            cwd: None,
+            config_path: "config".to_string(),
+            scratch_dir: None,
+            task_id: None,
+            task_show: None,
+            task_status: None,
+            target_status: None,
+            agent_prompt: Some(large),
+            agent_phase: None,
+            completed: None,
+            needs_human: None,
+            notify_event: None,
+            notify_duration_ms: None,
+            notify_folder: None,
+            notify_exit_code: None,
+            notify_task_id: None,
+            notify_task_description: None,
+            notify_message: None,
+            notify_payload_path: None,
+            agent_profile: None,
+            agent_invocation_id: None,
+        };
+
+        let stderr = capture_stderr(|| {
+            let result = run_shell_command_capture(
+                "printf '%s' \"${#TRUDGER_AGENT_PROMPT}\"",
+                "label",
+                "task-id",
+                &[],
+                &env,
+                &logger,
+            )
+            .expect("capture should succeed");
+            assert_eq!(result.exit_code, 0);
+            assert_eq!(result.stdout, expected_len);
+        });
+
+        assert!(
+            stderr.contains("Warning: TRUDGER_AGENT_PROMPT"),
+            "expected truncation warning, got: {stderr:?}"
+        );
+
+        let contents = fs::read_to_string(&log_path).expect("read log file");
+        assert!(
+            contents.contains("env_truncate label=label task=task-id key=TRUDGER_AGENT_PROMPT"),
+            "expected env_truncate transition log, got: {contents:?}"
+        );
+
+        crate::unit_tests::reset_test_env();
     }
 }
 
