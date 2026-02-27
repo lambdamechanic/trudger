@@ -195,8 +195,8 @@ fn extract_task_description_from_task_show(task_show: &str) -> Option<String> {
 fn build_command_env(
     state: &RuntimeState,
     task_id: Option<&TaskId>,
-    prompt: Option<String>,
-    review_prompt: Option<String>,
+    agent_prompt: Option<String>,
+    agent_phase: Option<String>,
     target_status: Option<String>,
     notify_event: Option<NotificationEvent>,
 ) -> CommandEnv {
@@ -238,8 +238,8 @@ fn build_command_env(
             .as_ref()
             .map(|value| value.as_str().to_string()),
         target_status,
-        prompt,
-        review_prompt,
+        agent_prompt,
+        agent_phase,
         completed,
         needs_human,
         notify_event: notify_event.map(|value| value.as_str().to_string()),
@@ -301,12 +301,11 @@ fn run_agent_command(
     state: &RuntimeState,
     command: &str,
     log_label: &str,
-    prompt: Option<String>,
-    review_prompt: Option<String>,
-    args: &[String],
+    agent_prompt: Option<String>,
+    agent_phase: Option<String>,
 ) -> Result<i32, String> {
-    let env = build_command_env(state, None, prompt, review_prompt, None, None);
-    run_shell_command_status(command, log_label, "none", args, &env, &state.logger)
+    let env = build_command_env(state, None, agent_prompt, agent_phase, None, None);
+    run_shell_command_status(command, log_label, "none", &[], &env, &state.logger)
 }
 
 fn run_task_show(
@@ -724,14 +723,13 @@ fn clear_current_task_context(state: &mut RuntimeState) {
     state.logger.set_all_logs_task_id(None);
 }
 
-fn run_agent_solve(state: &RuntimeState, args: &[String]) -> Result<(), String> {
+fn run_agent_solve(state: &RuntimeState) -> Result<(), String> {
     let exit = run_agent_command(
         state,
         &state.config.agent_command,
         "agent_solve",
         Some(state.prompt_trudge.clone()),
-        None,
-        args,
+        Some("trudge".to_string()),
     )?;
     if exit != 0 {
         return Err(format!("agent_solve failed with exit code {}", exit));
@@ -740,14 +738,12 @@ fn run_agent_solve(state: &RuntimeState, args: &[String]) -> Result<(), String> 
 }
 
 fn run_agent_review(state: &RuntimeState) -> Result<(), String> {
-    let args = vec!["resume".to_string(), "--last".to_string()];
     let exit = run_agent_command(
         state,
         &state.config.agent_review_command,
         "agent_review",
-        None,
         Some(state.prompt_review.clone()),
-        &args,
+        Some("trudge_review".to_string()),
     )?;
     if exit != 0 {
         return Err(format!("agent_review failed with exit code {}", exit));
@@ -843,7 +839,6 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             let _ = run_task_show(state, &task_id, &[]);
         }
         dispatch_notification_hook(state, Some(&task_id), NotificationEvent::TaskStart);
-        let resume_args = vec!["resume".to_string(), "--last".to_string()];
         let mut review_loops: u64 = 0;
 
         loop {
@@ -884,8 +879,7 @@ pub(crate) fn run_loop(state: &mut RuntimeState) -> Result<(), Quit> {
             }
 
             check_interrupted(state)?;
-            let solve_args: &[String] = if review_loops == 0 { &[] } else { &resume_args };
-            if let Err(_err) = run_agent_solve(state, solve_args) {
+            if let Err(_err) = run_agent_solve(state) {
                 state.tmux.update_name(
                     Phase::Error,
                     &task_id,
@@ -1797,7 +1791,7 @@ mod tests {
         let state = base_state(&temp);
 
         std::env::set_var("PATH", temp.path());
-        let err = run_agent_solve(&state, &[]).expect_err("spawn error");
+        let err = run_agent_solve(&state).expect_err("spawn error");
         assert!(err.contains("Failed to run command"));
 
         crate::unit_tests::reset_test_env();

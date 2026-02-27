@@ -42,8 +42,8 @@ pub(crate) fn reset_test_env() {
         "TRUDGER_CONFIG_PATH",
         "TRUDGER_DOCTOR_SCRATCH_DIR",
         "TRUDGER_SKIP_NOT_READY_LIMIT",
-        "TRUDGER_PROMPT",
-        "TRUDGER_REVIEW_PROMPT",
+        "TRUDGER_AGENT_PROMPT",
+        "TRUDGER_AGENT_PHASE",
         "TRUDGER_TASK_ID",
         "TRUDGER_TASK_SHOW",
         "TRUDGER_TASK_STATUS",
@@ -426,26 +426,26 @@ fn run_loop_executes_commands_and_hooks_with_env() {
 
     let codex_contents = fs::read_to_string(&codex_log).expect("read codex log");
     assert!(
-        codex_contents.contains("envset TRUDGER_PROMPT=1"),
-        "codex should see TRUDGER_PROMPT set"
+        codex_contents.contains("envset TRUDGER_AGENT_PROMPT=1"),
+        "codex should see TRUDGER_AGENT_PROMPT set"
     );
     assert!(
-        codex_contents.contains("envset TRUDGER_REVIEW_PROMPT=1"),
-        "codex should see TRUDGER_REVIEW_PROMPT set"
+        codex_contents.contains("envset TRUDGER_AGENT_PHASE=1"),
+        "codex should see TRUDGER_AGENT_PHASE set"
     );
     assert!(
         codex_contents.contains("env TRUDGER_TASK_SHOW=SHOW_PAYLOAD"),
         "codex should receive task show output"
     );
     assert!(
-        codex_contents.contains("resume --last"),
-        "codex review should include resume --last"
+        !codex_contents.contains("resume --last"),
+        "codex should not pass resume --last"
     );
 
     let next_task_contents = fs::read_to_string(&next_task_log).expect("read next task log");
     assert!(
-        next_task_contents.contains("envset TRUDGER_PROMPT=0"),
-        "next-task should not get TRUDGER_PROMPT"
+        next_task_contents.contains("envset TRUDGER_AGENT_PROMPT=0"),
+        "next-task should not get TRUDGER_AGENT_PROMPT"
     );
     assert!(
         next_task_contents.contains("envset TRUDGER_TASK_ID=0"),
@@ -704,12 +704,20 @@ fn manual_task_runs_solve_review_and_hooks_without_invoking_next_task() {
 
     let codex_contents = fs::read_to_string(&codex_log).expect("read codex log");
     assert!(
-        codex_contents.contains("envset TRUDGER_PROMPT=1"),
-        "agent solve should receive TRUDGER_PROMPT"
+        codex_contents.contains("envset TRUDGER_AGENT_PROMPT=1"),
+        "agent solve should receive TRUDGER_AGENT_PROMPT"
     );
     assert!(
-        codex_contents.contains("envset TRUDGER_REVIEW_PROMPT=1"),
-        "agent review should receive TRUDGER_REVIEW_PROMPT"
+        codex_contents.contains("envset TRUDGER_AGENT_PHASE=1"),
+        "agent review should receive TRUDGER_AGENT_PHASE"
+    );
+    assert!(
+        codex_contents.contains("env TRUDGER_AGENT_PHASE=trudge"),
+        "agent solve should expose trudge phase"
+    );
+    assert!(
+        codex_contents.contains("env TRUDGER_AGENT_PHASE=trudge_review"),
+        "agent review should expose trudge_review phase"
     );
 
     let hook_contents = fs::read_to_string(&hook_log).expect("read hook log");
@@ -1493,8 +1501,8 @@ fn doctor_does_not_require_prompts_and_cleans_scratch_dir() {
     env::set_var("TRUDGER_TASK_ID", "PARENT_TASK");
     env::set_var("TRUDGER_TASK_SHOW", "PARENT_SHOW");
     env::set_var("TRUDGER_TASK_STATUS", "PARENT_STATUS");
-    env::set_var("TRUDGER_PROMPT", "PARENT_PROMPT");
-    env::set_var("TRUDGER_REVIEW_PROMPT", "PARENT_REVIEW_PROMPT");
+    env::set_var("TRUDGER_AGENT_PROMPT", "PARENT_AGENT_PROMPT");
+    env::set_var("TRUDGER_AGENT_PHASE", "trudge_review");
 
     let fixtures_bin = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -1590,12 +1598,12 @@ hooks:
         "setup hook should not receive TRUDGER_TASK_STATUS"
     );
     assert!(
-        hook_contents.contains("envset TRUDGER_PROMPT=0"),
-        "setup hook should not receive TRUDGER_PROMPT"
+        hook_contents.contains("envset TRUDGER_AGENT_PROMPT=0"),
+        "setup hook should not receive TRUDGER_AGENT_PROMPT"
     );
     assert!(
-        hook_contents.contains("envset TRUDGER_REVIEW_PROMPT=0"),
-        "setup hook should not receive TRUDGER_REVIEW_PROMPT"
+        hook_contents.contains("envset TRUDGER_AGENT_PHASE=0"),
+        "setup hook should not receive TRUDGER_AGENT_PHASE"
     );
 
     let scratch_dir = hook_contents
@@ -1630,8 +1638,8 @@ hooks:
         "task-show should receive TRUDGER_TASK_ID=tr-open, got:\n{task_show_contents}"
     );
     assert!(
-        task_show_contents.contains("envset TRUDGER_PROMPT=0"),
-        "task-show should not receive TRUDGER_PROMPT, got:\n{task_show_contents}"
+        task_show_contents.contains("envset TRUDGER_AGENT_PROMPT=0"),
+        "task-show should not receive TRUDGER_AGENT_PROMPT, got:\n{task_show_contents}"
     );
 
     let task_status_contents = fs::read_to_string(&task_status_log).expect("read task-status log");
@@ -1977,8 +1985,8 @@ fn run_shell_command_noops_when_command_is_empty() {
         task_show: None,
         task_status: None,
         target_status: None,
-        prompt: None,
-        review_prompt: None,
+        agent_prompt: None,
+        agent_phase: None,
         completed: None,
         needs_human: None,
         notify_event: None,
@@ -2032,8 +2040,8 @@ fn command_env_truncates_oversized_values_and_warns() {
         task_show: None,
         task_status: None,
         target_status: None,
-        prompt: Some(large),
-        review_prompt: None,
+        agent_prompt: Some(large),
+        agent_phase: None,
         completed: None,
         needs_human: None,
         notify_event: None,
@@ -2048,7 +2056,7 @@ fn command_env_truncates_oversized_values_and_warns() {
 
     let stderr = capture_stderr(|| {
         let result = crate::shell::run_shell_command_capture(
-            "printf '%s' \"${#TRUDGER_PROMPT}\"",
+            "printf '%s' \"${#TRUDGER_AGENT_PROMPT}\"",
             "label",
             "none",
             &[],
@@ -2061,13 +2069,13 @@ fn command_env_truncates_oversized_values_and_warns() {
     });
 
     assert!(
-        stderr.contains("Warning: TRUDGER_PROMPT"),
+        stderr.contains("Warning: TRUDGER_AGENT_PROMPT"),
         "expected truncation warning, got: {stderr:?}"
     );
 
     let contents = fs::read_to_string(&log_path).expect("read log");
     assert!(
-        contents.contains("env_truncate label=label task=none key=TRUDGER_PROMPT"),
+        contents.contains("env_truncate label=label task=none key=TRUDGER_AGENT_PROMPT"),
         "expected env_truncate transition log, got: {contents:?}"
     );
 
@@ -2095,8 +2103,8 @@ fn command_env_truncates_total_trudger_payload_and_warns() {
         task_show: Some(large_task_show),
         task_status: None,
         target_status: None,
-        prompt: Some(large_prompt),
-        review_prompt: None,
+        agent_prompt: Some(large_prompt),
+        agent_phase: None,
         completed: None,
         needs_human: None,
         notify_event: None,
@@ -2111,7 +2119,7 @@ fn command_env_truncates_total_trudger_payload_and_warns() {
 
     let stderr = capture_stderr(|| {
         let result = crate::shell::run_shell_command_capture(
-            "printf '%s,%s' \"${#TRUDGER_TASK_SHOW}\" \"${#TRUDGER_PROMPT}\"",
+            "printf '%s,%s' \"${#TRUDGER_TASK_SHOW}\" \"${#TRUDGER_AGENT_PROMPT}\"",
             "label",
             "none",
             &[],
@@ -2139,7 +2147,7 @@ fn command_env_truncates_total_trudger_payload_and_warns() {
         );
         assert_eq!(
             prompt_len, max,
-            "expected TRUDGER_PROMPT to remain unmodified when TRUDGER_TASK_SHOW can be truncated"
+            "expected TRUDGER_AGENT_PROMPT to remain unmodified when TRUDGER_TASK_SHOW can be truncated"
         );
     });
 
@@ -2189,8 +2197,8 @@ fn command_env_truncates_oversized_notify_payload_and_warns() {
         task_show: None,
         task_status: None,
         target_status: None,
-        prompt: None,
-        review_prompt: None,
+        agent_prompt: None,
+        agent_phase: None,
         completed: None,
         needs_human: None,
         notify_event: Some("log".to_string()),
@@ -2249,8 +2257,8 @@ fn run_shell_command_errors_when_bash_is_missing() {
         task_show: None,
         task_status: None,
         target_status: None,
-        prompt: None,
-        review_prompt: None,
+        agent_prompt: None,
+        agent_phase: None,
         completed: None,
         needs_human: None,
         notify_event: None,

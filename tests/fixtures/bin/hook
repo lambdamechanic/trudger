@@ -32,8 +32,8 @@ if [[ -n "${log_path}" ]]; then
       printf 'notify_payload_path %s\n' "$(sanitize_log_value "$payload_path")"
       printf 'notify_payload %s\n' "$(sanitize_log_value "$payload_contents")"
     fi
-    log_env_flag "TRUDGER_PROMPT"
-    log_env_flag "TRUDGER_REVIEW_PROMPT"
+    log_env_flag "TRUDGER_AGENT_PROMPT"
+    log_env_flag "TRUDGER_AGENT_PHASE"
     log_env_flag "TRUDGER_TASK_ID"
     log_env_flag "TRUDGER_TASK_SHOW"
     log_env_flag "TRUDGER_TASK_STATUS"

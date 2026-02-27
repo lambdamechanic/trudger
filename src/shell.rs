@@ -50,8 +50,8 @@ pub(crate) struct CommandEnv {
     pub(crate) task_show: Option<String>,
     pub(crate) task_status: Option<String>,
     pub(crate) target_status: Option<String>,
-    pub(crate) prompt: Option<String>,
-    pub(crate) review_prompt: Option<String>,
+    pub(crate) agent_prompt: Option<String>,
+    pub(crate) agent_phase: Option<String>,
     pub(crate) completed: Option<String>,
     pub(crate) needs_human: Option<String>,
     pub(crate) notify_event: Option<String>,
@@ -76,22 +76,24 @@ impl CommandEnv {
             cmd.current_dir(cwd);
         }
 
+        // Remove legacy prompt keys to prevent inherited values from leaking into children.
+        cmd.env_remove("TRUDGER_PROMPT");
+        cmd.env_remove("TRUDGER_REVIEW_PROMPT");
+
         let mut task_show_max = TRUDGER_ENV_VALUE_MAX_BYTES;
-        let mut prompt_max = TRUDGER_ENV_VALUE_MAX_BYTES;
-        let mut review_prompt_max = TRUDGER_ENV_VALUE_MAX_BYTES;
+        let mut agent_prompt_max = TRUDGER_ENV_VALUE_MAX_BYTES;
 
         let total = Self::estimate_trudger_payload_bytes(
             task_show_max,
-            prompt_max,
-            review_prompt_max,
+            agent_prompt_max,
             &self.config_path,
             self.scratch_dir.as_deref(),
             self.task_id.as_deref(),
             self.task_show.as_deref(),
             self.task_status.as_deref(),
             self.target_status.as_deref(),
-            self.prompt.as_deref(),
-            self.review_prompt.as_deref(),
+            self.agent_prompt.as_deref(),
+            self.agent_phase.as_deref(),
             self.completed.as_deref(),
             self.needs_human.as_deref(),
             self.notify_event.as_deref(),
@@ -109,22 +111,19 @@ impl CommandEnv {
             // while keeping the rest of the contract intact (vars stay set, but may be empty).
             let mut over = total - TRUDGER_ENV_TOTAL_MAX_BYTES;
             over = Self::reduce_overage(&mut task_show_max, self.task_show.as_deref(), over);
-            over = Self::reduce_overage(&mut prompt_max, self.prompt.as_deref(), over);
-            let _ =
-                Self::reduce_overage(&mut review_prompt_max, self.review_prompt.as_deref(), over);
+            over = Self::reduce_overage(&mut agent_prompt_max, self.agent_prompt.as_deref(), over);
 
             let new_total = Self::estimate_trudger_payload_bytes(
                 task_show_max,
-                prompt_max,
-                review_prompt_max,
+                agent_prompt_max,
                 &self.config_path,
                 self.scratch_dir.as_deref(),
                 self.task_id.as_deref(),
                 self.task_show.as_deref(),
                 self.task_status.as_deref(),
                 self.target_status.as_deref(),
-                self.prompt.as_deref(),
-                self.review_prompt.as_deref(),
+                self.agent_prompt.as_deref(),
+                self.agent_phase.as_deref(),
                 self.completed.as_deref(),
                 self.needs_human.as_deref(),
                 self.notify_event.as_deref(),
@@ -211,18 +210,18 @@ impl CommandEnv {
             logger,
             log_label,
             task_token,
-            "TRUDGER_PROMPT",
-            self.prompt.as_deref(),
-            prompt_max,
+            "TRUDGER_AGENT_PROMPT",
+            self.agent_prompt.as_deref(),
+            agent_prompt_max,
         );
         Self::apply_optional_with_max(
             cmd,
             logger,
             log_label,
             task_token,
-            "TRUDGER_REVIEW_PROMPT",
-            self.review_prompt.as_deref(),
-            review_prompt_max,
+            "TRUDGER_AGENT_PHASE",
+            self.agent_phase.as_deref(),
+            TRUDGER_ENV_VALUE_MAX_BYTES,
         );
         Self::apply_optional_with_max(
             cmd,
@@ -344,16 +343,15 @@ impl CommandEnv {
     #[allow(clippy::too_many_arguments)]
     fn estimate_trudger_payload_bytes(
         task_show_max: usize,
-        prompt_max: usize,
-        review_prompt_max: usize,
+        agent_prompt_max: usize,
         config_path: &str,
         scratch_dir: Option<&str>,
         task_id: Option<&str>,
         task_show: Option<&str>,
         task_status: Option<&str>,
         target_status: Option<&str>,
-        prompt: Option<&str>,
-        review_prompt: Option<&str>,
+        agent_prompt: Option<&str>,
+        agent_phase: Option<&str>,
         completed: Option<&str>,
         needs_human: Option<&str>,
         notify_event: Option<&str>,
@@ -389,11 +387,12 @@ impl CommandEnv {
             target_status,
             TRUDGER_ENV_VALUE_MAX_BYTES,
         );
-        total += Self::env_entry_payload_bytes("TRUDGER_PROMPT", prompt, prompt_max);
+        total +=
+            Self::env_entry_payload_bytes("TRUDGER_AGENT_PROMPT", agent_prompt, agent_prompt_max);
         total += Self::env_entry_payload_bytes(
-            "TRUDGER_REVIEW_PROMPT",
-            review_prompt,
-            review_prompt_max,
+            "TRUDGER_AGENT_PHASE",
+            agent_phase,
+            TRUDGER_ENV_VALUE_MAX_BYTES,
         );
         total += Self::env_entry_payload_bytes(
             "TRUDGER_COMPLETED",
@@ -550,8 +549,8 @@ mod tests {
             task_show: None,
             task_status: Some(huge.clone()),
             target_status: None,
-            prompt: None,
-            review_prompt: None,
+            agent_prompt: None,
+            agent_phase: None,
             completed: Some(huge),
             needs_human: None,
             notify_event: None,
