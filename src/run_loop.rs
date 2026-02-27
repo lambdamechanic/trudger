@@ -2045,7 +2045,11 @@ mod tests {
             .filter(|line| line.starts_with("env TRUDGER_INVOCATION_ID="))
             .collect();
 
-        assert_eq!(invocation_lines.len(), 2, "expected both invocations to run");
+        assert_eq!(
+            invocation_lines.len(),
+            2,
+            "expected both invocations to run"
+        );
         assert_eq!(invocation_lines[0], "env TRUDGER_INVOCATION_ID=solve-id");
         assert_eq!(invocation_lines[1], "env TRUDGER_INVOCATION_ID=review-id");
 

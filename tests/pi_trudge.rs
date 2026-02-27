@@ -7,8 +7,8 @@ use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn pi_trudge_binary_is_packaged_with_trudger() {
-    let trudger = option_env!("CARGO_BIN_EXE_trudger").expect("CARGO_BIN_EXE_trudger");
-    let pi_trudge = option_env!("CARGO_BIN_EXE_pi_trudge").expect("CARGO_BIN_EXE_pi_trudge");
+    let trudger = env!("CARGO_BIN_EXE_trudger");
+    let pi_trudge = env!("CARGO_BIN_EXE_pi_trudge");
 
     assert!(Path::new(trudger).exists());
     assert!(Path::new(pi_trudge).exists());
@@ -17,7 +17,7 @@ fn pi_trudge_binary_is_packaged_with_trudger() {
 #[cfg(unix)]
 #[test]
 fn pi_trudge_uses_path_resolved_pi_command_without_resume_flags() {
-    let pi_trudge = option_env!("CARGO_BIN_EXE_pi_trudge").expect("CARGO_BIN_EXE_pi_trudge");
+    let pi_trudge = env!("CARGO_BIN_EXE_pi_trudge");
     let temp = tempfile::tempdir().expect("temp dir");
 
     let pi_script = temp.path().join("pi");

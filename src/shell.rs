@@ -553,11 +553,11 @@ impl CommandEnv {
 #[cfg(test)]
 mod tests {
     use super::{run_shell_command_capture, CommandEnv, Logger};
+    use std::fs;
     use std::io::Read;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::raw::c_int;
     use std::process::Command;
-    use std::fs;
     use tempfile::TempDir;
 
     #[cfg(unix)]
