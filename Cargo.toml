@@ -3,6 +3,14 @@ name = "trudger"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "trudger"
+path = "src/main.rs"
+
+[[bin]]
+name = "pi_trudge"
+path = "src/bin/pi_trudge.rs"
+
 [dependencies]
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }

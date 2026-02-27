@@ -21,6 +21,7 @@ It is slower and more serial, but if you have a large number of smaller projects
 - `jq` on your PATH
 - Any task system CLIs referenced by your configured commands (for example `bd`, `br`, `bv`)
 - Whatever agent runner your config uses (for example `codex`, `claude`, `pi`, or a custom script).
+- For the predefined `z.ai` profile invocation, `pi` must be available on `PATH` so `pi_trudge` can execute it directly.
 - Prompt files for task-processing mode only (built-in Codex template).
   - `trudger wizard` will offer to install missing prompts to `~/.codex/prompts/` (default Yes). If prompts exist but differ from the built-in defaults, it offers per-file overwrite (default No) and creates a timestamped `.bak-...` backup before overwriting. If prompt installation/update fails after you accept it, the wizard aborts without writing config.
   - For repo checkouts, `./install.sh` remains an alternative: it installs `prompts/trudge.md` and `prompts/trudge_review.md` to `~/.codex/prompts/`.
@@ -151,11 +152,19 @@ Notification hook interface:
 
 ## Install
 
-Install the Rust binary with cargo (installs to `~/.cargo/bin` by default):
+Install Rust binaries with cargo (installs to `~/.cargo/bin` by default):
 
 ```bash
 cargo install --path . --locked
 ```
+
+This installs both:
+- `trudger` (main CLI)
+- `pi_trudge` (packaged helper used by predefined `z.ai` profile commands)
+
+`pi_trudge` uses a clean one-off invocation path by default:
+- It passes prompt content from `TRUDGER_AGENT_PROMPT` (or the value provided to `--prompt-env`).
+- It executes `pi --prompt <prompt>` without `resume`/session-reuse flags.
 
 Install the default prompt files under `~/.codex/prompts/` (used by the built-in Codex agent template). You can also install/update prompts from within `trudger wizard`:
 
