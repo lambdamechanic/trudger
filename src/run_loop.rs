@@ -1913,7 +1913,11 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("codex "))
             .collect();
-        assert_eq!(command_lines.len(), 2, "expected one solve and one review call");
+        assert_eq!(
+            command_lines.len(),
+            2,
+            "expected one solve and one review call"
+        );
         assert_eq!(command_lines[0].trim(), "codex --yolo exec --default");
         assert_eq!(command_lines[1].trim(), "codex --yolo exec --review");
         assert!(
@@ -1925,9 +1929,15 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("env TRUDGER_INVOCATION_ID="))
             .collect();
-        assert_eq!(invocation_lines.len(), 2, "expected both invocations to run");
+        assert_eq!(
+            invocation_lines.len(),
+            2,
+            "expected both invocations to run"
+        );
         assert!(
-            invocation_lines.iter().all(|line| *line == "env TRUDGER_INVOCATION_ID=shared-id"),
+            invocation_lines
+                .iter()
+                .all(|line| *line == "env TRUDGER_INVOCATION_ID=shared-id"),
             "expected shared invocation id on both invocations, got:\n{contents}"
         );
 
@@ -1969,7 +1979,11 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("codex "))
             .collect();
-        assert_eq!(command_lines.len(), 2, "expected one solve and one review call");
+        assert_eq!(
+            command_lines.len(),
+            2,
+            "expected one solve and one review call"
+        );
         assert_eq!(command_lines[0].trim(), "codex --yolo exec --default");
         assert_eq!(command_lines[1].trim(), "codex --yolo exec --review");
 
@@ -1977,7 +1991,11 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("env TRUDGER_INVOCATION_ID="))
             .collect();
-        assert_eq!(invocation_lines.len(), 2, "expected both invocations to run");
+        assert_eq!(
+            invocation_lines.len(),
+            2,
+            "expected both invocations to run"
+        );
         assert_eq!(invocation_lines[0], "env TRUDGER_INVOCATION_ID=solve-id");
         assert_eq!(invocation_lines[1], "env TRUDGER_INVOCATION_ID=review-id");
 
