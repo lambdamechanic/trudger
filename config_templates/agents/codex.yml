@@ -1,5 +1,18 @@
 id: codex
 label: Codex
 description: Use the codex CLI for solve and review.
-agent_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_PROMPT"'
-agent_review_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_REVIEW_PROMPT" "$@"'
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+  z.ai:
+    trudge: z.ai
+    trudge_review: z.ai
+invocations:
+  codex:
+    command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_AGENT_PROMPT"'
+  codex-review:
+    command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_AGENT_REVIEW_PROMPT" "$@"'
+  z.ai:
+    command: 'pi_trudge --prompt-env TRUDGER_AGENT_PROMPT'

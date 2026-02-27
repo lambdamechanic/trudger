@@ -8,11 +8,16 @@ profiles:
   codex:
     trudge: codex
     trudge_review: codex-review
+  z.ai:
+    trudge: z.ai
+    trudge_review: z.ai
 invocations:
   codex:
     command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_PROMPT"'
   codex-review:
     command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_REVIEW_PROMPT" "$@"'
+  z.ai:
+    command: 'pi_trudge --prompt-env TRUDGER_AGENT_PROMPT'
 commands:
   next_task: 'task_id=$(br ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
   task_show: 'br show "$TRUDGER_TASK_ID"'

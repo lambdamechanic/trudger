@@ -1,5 +1,18 @@
 id: pi
 label: Pi
 description: Use the pi CLI for solve and review.
-agent_command: 'pi --prompt "$TRUDGER_PROMPT"'
-agent_review_command: 'pi --prompt "$TRUDGER_REVIEW_PROMPT" "$@"'
+default_profile: pi
+profiles:
+  pi:
+    trudge: pi
+    trudge_review: pi-review
+  z.ai:
+    trudge: z.ai
+    trudge_review: z.ai
+invocations:
+  pi:
+    command: 'pi --prompt "$TRUDGER_AGENT_PROMPT"'
+  pi-review:
+    command: 'pi --prompt "$TRUDGER_AGENT_REVIEW_PROMPT" "$@"'
+  z.ai:
+    command: 'pi_trudge --prompt-env TRUDGER_AGENT_PROMPT'

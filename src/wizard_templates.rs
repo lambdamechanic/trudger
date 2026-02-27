@@ -1,12 +1,197 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub(crate) struct AgentTemplate {
     pub(crate) id: String,
     pub(crate) label: String,
     pub(crate) description: String,
+    #[serde(default)]
     pub(crate) agent_command: String,
+    #[serde(default)]
     pub(crate) agent_review_command: String,
+    #[serde(default)]
+    pub(crate) default_profile: String,
+    #[serde(default)]
+    pub(crate) profiles: HashMap<String, AgentTemplateProfile>,
+    #[serde(default)]
+    pub(crate) invocations: HashMap<String, AgentTemplateInvocation>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
+struct AgentTemplateProfile {
+    trudge: String,
+    trudge_review: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
+struct AgentTemplateInvocation {
+    command: String,
+}
+
+impl AgentTemplate {
+    fn normalize(self) -> Result<Self, String> {
+        let mut template = self;
+
+        if template.default_profile.is_empty() {
+            template.default_profile = template.id.clone();
+        }
+
+        if template.profiles.is_empty() && template.invocations.is_empty() {
+            if template.agent_command.trim().is_empty() && template.agent_review_command.trim().is_empty()
+            {
+                return Err(format!(
+                    "Embedded agent template '{}' is missing both legacy command fields and profiles/invocations.",
+                    template.id
+                ));
+            }
+
+            let solve_id = template.id.clone();
+            let review_id = format!("{}-review", template.id);
+            template
+                .profiles
+                .insert(solve_id.clone(), AgentTemplateProfile {
+                    trudge: solve_id.clone(),
+                    trudge_review: review_id.clone(),
+                });
+            template
+                .invocations
+                .insert(solve_id.clone(), AgentTemplateInvocation {
+                    command: template.agent_command.clone(),
+                });
+            template
+                .invocations
+                .insert(review_id.clone(), AgentTemplateInvocation {
+                    command: template.agent_review_command.clone(),
+                });
+        } else if template.default_profile.is_empty() {
+            template.default_profile = template.id.clone();
+        }
+
+        let default_profile = template
+            .profiles
+            .get(&template.default_profile)
+            .ok_or_else(|| {
+                format!(
+                    "Embedded agent template '{}' references missing profile '{}'.",
+                    template.id, template.default_profile
+                )
+            })?;
+
+        if template.agent_command.trim().is_empty() {
+            template.agent_command = template
+                .invocations
+                .get(&default_profile.trudge)
+                .map(|value| value.command.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "Embedded agent template '{}' is missing invocation '{}'.",
+                        template.id, default_profile.trudge
+                    )
+                })?;
+        }
+
+        if template.agent_review_command.trim().is_empty() {
+            template.agent_review_command = template
+                .invocations
+                .get(&default_profile.trudge_review)
+                .map(|value| value.command.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "Embedded agent template '{}' is missing invocation '{}'.",
+                        template.id, default_profile.trudge_review
+                    )
+                })?;
+        }
+
+        if template
+            .profiles
+            .get(&template.default_profile)
+            .and_then(|profile| {
+                template
+                    .invocations
+                    .get(&profile.trudge)
+                    .or_else(|| template.invocations.get(&profile.trudge_review))
+            })
+            .is_none()
+        {
+            return Err(format!(
+                "Embedded agent template '{}' has incomplete default profile '{}' mapping.",
+                template.id, template.default_profile
+            ));
+        }
+
+        if template.agent_command.trim().is_empty() {
+            return Err(format!(
+                "Embedded agent template '{}' has empty solve command.",
+                template.id
+            ));
+        }
+
+        if template.agent_review_command.trim().is_empty() {
+            return Err(format!(
+                "Embedded agent template '{}' has empty review command.",
+                template.id
+            ));
+        }
+
+        Ok(template)
+    }
+
+    pub(crate) fn legacy_legacy_command_fields(
+        &self,
+    ) -> (&str, &str) {
+        (&self.agent_command, &self.agent_review_command)
+    }
+
+    pub(crate) fn selected_profile_id(&self) -> &str {
+        if self.default_profile.is_empty() {
+            &self.id
+        } else {
+            &self.default_profile
+        }
+    }
+
+    pub(crate) fn selected_solve_invocation_id(&self) -> Option<&str> {
+        self.profiles
+            .get(self.selected_profile_id())
+            .map(|profile| profile.trudge.as_str())
+    }
+
+    pub(crate) fn selected_review_invocation_id(&self) -> Option<&str> {
+        self.profiles
+            .get(self.selected_profile_id())
+            .map(|profile| profile.trudge_review.as_str())
+    }
+
+    pub(crate) fn selected_solve_command(&self) -> Option<&str> {
+        self.selected_solve_invocation_id()
+            .and_then(|invocation| self.invocations.get(invocation))
+            .map(|invocation| invocation.command.as_str())
+            .or_else(|| {
+                if !self.agent_command.is_empty() {
+                    Some(self.agent_command.as_str())
+                } else {
+                    None
+                }
+            })
+    }
+
+    pub(crate) fn selected_review_command(&self) -> Option<&str> {
+        self.selected_review_invocation_id()
+            .and_then(|invocation| self.invocations.get(invocation))
+            .map(|invocation| invocation.command.as_str())
+            .or_else(|| {
+                if !self.agent_review_command.is_empty() {
+                    Some(self.agent_review_command.as_str())
+                } else {
+                    None
+                }
+            })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -84,7 +269,9 @@ fn load_wizard_templates_from_sources(
 ) -> Result<WizardTemplates, String> {
     let agents: Vec<AgentTemplate> = agents
         .iter()
-        .map(|(path, contents)| parse_template(path, contents))
+        .map(|(path, contents)| {
+            parse_template::<AgentTemplate>(path, contents).and_then(|template| template.normalize())
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     let tracking: Vec<TrackingTemplate> = tracking
@@ -330,6 +517,7 @@ hooks:
                 description: "desc".to_string(),
                 agent_command: "cmd".to_string(),
                 agent_review_command: "review".to_string(),
+                ..Default::default()
             }
         }
 
@@ -373,6 +561,7 @@ hooks:
                 description: "desc".to_string(),
                 agent_command: "cmd".to_string(),
                 agent_review_command: "review".to_string(),
+                ..Default::default()
             }
         }
 
@@ -416,6 +605,7 @@ hooks:
                 description: "desc".to_string(),
                 agent_command: "cmd".to_string(),
                 agent_review_command: "review".to_string(),
+                ..Default::default()
             },
             AgentTemplate {
                 id: "codex".to_string(),
@@ -423,6 +613,7 @@ hooks:
                 description: "desc".to_string(),
                 agent_command: "cmd".to_string(),
                 agent_review_command: "review".to_string(),
+                ..Default::default()
             },
         ];
         let tracking = vec![TrackingTemplate {
@@ -460,6 +651,7 @@ hooks:
                 description: "desc".to_string(),
                 agent_command: "cmd".to_string(),
                 agent_review_command: "review".to_string(),
+                ..Default::default()
             }
         }
 
@@ -517,6 +709,7 @@ hooks:
                 description: "desc".to_string(),
                 agent_command: "cmd".to_string(),
                 agent_review_command: "review".to_string(),
+                ..Default::default()
             }
         }
 
@@ -564,6 +757,7 @@ hooks:
                 description: "desc".to_string(),
                 agent_command: "cmd".to_string(),
                 agent_review_command: "review".to_string(),
+                ..Default::default()
             }
         }
 

@@ -1,5 +1,18 @@
 id: claude
 label: Claude
 description: Use the claude CLI for solve and review.
-agent_command: 'claude --model sonnet --prompt "$TRUDGER_PROMPT"'
-agent_review_command: 'claude --model sonnet --prompt "$TRUDGER_REVIEW_PROMPT" "$@"'
+default_profile: claude
+profiles:
+  claude:
+    trudge: claude
+    trudge_review: claude-review
+  z.ai:
+    trudge: z.ai
+    trudge_review: z.ai
+invocations:
+  claude:
+    command: 'claude --model sonnet --prompt "$TRUDGER_AGENT_PROMPT"'
+  claude-review:
+    command: 'claude --model sonnet --prompt "$TRUDGER_AGENT_REVIEW_PROMPT" "$@"'
+  z.ai:
+    command: 'pi_trudge --prompt-env TRUDGER_AGENT_PROMPT'

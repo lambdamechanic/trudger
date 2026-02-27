@@ -72,6 +72,9 @@ struct MergePrompt {
     proposed: Option<Value>,
 }
 
+const PREDEFINED_ZAI_INVOCATION_ID: &str = "z.ai";
+const PREDEFINED_ZAI_COMMAND: &str = "pi_trudge --prompt-env TRUDGER_AGENT_PROMPT";
+
 fn build_candidate_value(
     agent: &AgentTemplate,
     tracking: &TrackingTemplate,
@@ -112,14 +115,107 @@ fn build_candidate_value(
         );
     }
 
+    let selected_profile_id = agent.selected_profile_id().to_string();
+
+    let solve_invocation_id = agent
+        .selected_solve_invocation_id()
+        .unwrap_or(&selected_profile_id)
+        .to_string();
+    let review_invocation_id = agent
+        .selected_review_invocation_id()
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}-review", selected_profile_id));
+
+    let solve_command = agent
+        .selected_solve_command()
+        .ok_or_else(|| {
+            format!(
+                "Embedded agent template '{}' is missing solve command for selected profile '{}'",
+                agent.id, selected_profile_id
+            )
+        })
+        .expect("selected solve command");
+    let review_command = agent
+        .selected_review_command()
+        .ok_or_else(|| {
+            format!(
+                "Embedded agent template '{}' is missing review command for selected profile '{}'",
+                agent.id, selected_profile_id
+            )
+        })
+        .expect("selected review command");
+
+    let mut profiles = Mapping::new();
+    let mut selected_profile = Mapping::new();
+    selected_profile.insert(
+        Value::String("trudge".to_string()),
+        Value::String(solve_invocation_id.clone()),
+    );
+    selected_profile.insert(
+        Value::String("trudge_review".to_string()),
+        Value::String(review_invocation_id.clone()),
+    );
+    profiles.insert(
+        Value::String(selected_profile_id.clone()),
+        Value::Mapping(selected_profile),
+    );
+
+    let mut z_ai_profile = Mapping::new();
+    z_ai_profile.insert(
+        Value::String("trudge".to_string()),
+        Value::String(PREDEFINED_ZAI_INVOCATION_ID.to_string()),
+    );
+    z_ai_profile.insert(
+        Value::String("trudge_review".to_string()),
+        Value::String(PREDEFINED_ZAI_INVOCATION_ID.to_string()),
+    );
+    profiles.insert(
+        Value::String(PREDEFINED_ZAI_INVOCATION_ID.to_string()),
+        Value::Mapping(z_ai_profile),
+    );
+
+    let mut invocations = Mapping::new();
+    let mut selected_solve_invocation = Mapping::new();
+    selected_solve_invocation.insert(
+        Value::String("command".to_string()),
+        Value::String(solve_command.to_string()),
+    );
+    invocations.insert(
+        Value::String(solve_invocation_id.clone()),
+        Value::Mapping(selected_solve_invocation),
+    );
+
+    if review_invocation_id != solve_invocation_id {
+        let mut selected_review_invocation = Mapping::new();
+        selected_review_invocation.insert(
+            Value::String("command".to_string()),
+            Value::String(review_command.to_string()),
+        );
+        invocations.insert(
+            Value::String(review_invocation_id),
+            Value::Mapping(selected_review_invocation),
+        );
+    }
+
+    let mut z_ai_invocation = Mapping::new();
+    z_ai_invocation.insert(
+        Value::String("command".to_string()),
+        Value::String(PREDEFINED_ZAI_COMMAND.to_string()),
+    );
+    invocations.insert(
+        Value::String(PREDEFINED_ZAI_INVOCATION_ID.to_string()),
+        Value::Mapping(z_ai_invocation),
+    );
+
     let mut candidate = Mapping::new();
     candidate.insert(
-        Value::String("agent_command".to_string()),
-        Value::String(agent.agent_command.clone()),
+        Value::String("default_profile".to_string()),
+        Value::String(selected_profile_id),
     );
+    candidate.insert(Value::String("profiles".to_string()), Value::Mapping(profiles));
     candidate.insert(
-        Value::String("agent_review_command".to_string()),
-        Value::String(agent.agent_review_command.clone()),
+        Value::String("invocations".to_string()),
+        Value::Mapping(invocations),
     );
     candidate.insert(
         Value::String("commands".to_string()),
@@ -632,8 +728,9 @@ fn comment_out_yaml_lines(rendered: &str) -> String {
 
 fn extract_unknown_key_values(existing: &Mapping) -> (Mapping, Vec<String>) {
     const ALLOWED_TOP_LEVEL: &[&str] = &[
-        "agent_command",
-        "agent_review_command",
+        "default_profile",
+        "profiles",
+        "invocations",
         "commands",
         "hooks",
         "review_loop_limit",
@@ -802,9 +899,34 @@ fn get_string_value_at_path<'a>(mapping: &'a Mapping, path: &[&str]) -> Option<&
     get_mapping_value_at_path(mapping, path).and_then(|value| value.as_str())
 }
 
+fn best_matching_agent_template_command(existing: &Mapping, profile_key: &str) -> Option<String> {
+    let existing_profile = get_string_value_at_path(existing, &["default_profile"])
+        .or_else(|| {
+            let profiles = existing.get("profiles")?.as_mapping()?;
+            profiles.keys().next().and_then(Value::as_str)
+        })?;
+
+    let profiles = existing.get("profiles")?.as_mapping()?;
+    let profile = profiles
+        .get(Value::String(existing_profile.to_string()))?
+        .as_mapping()?;
+    let invocation = profile.get(profile_key)?.as_str()?;
+
+    let invocations = existing.get("invocations")?.as_mapping()?;
+    let command = invocations
+        .get(Value::String(invocation.to_string()))?
+        .as_mapping()?
+        .get("command")?
+        .as_str()?;
+
+    Some(command.to_string())
+}
+
 fn best_matching_agent_template_id(templates: &[AgentTemplate], existing: &Mapping) -> String {
     let existing_agent = get_string_value_at_path(existing, &["agent_command"]);
     let existing_review = get_string_value_at_path(existing, &["agent_review_command"]);
+    let existing_schema_agent = best_matching_agent_template_command(existing, "trudge");
+    let existing_schema_review = best_matching_agent_template_command(existing, "trudge_review");
 
     let mut best_id = templates
         .first()
@@ -814,10 +936,21 @@ fn best_matching_agent_template_id(templates: &[AgentTemplate], existing: &Mappi
 
     for template in templates {
         let mut score = 0;
-        if existing_agent.is_some_and(|value| value == template.agent_command) {
+        if existing_agent
+            .is_some_and(|value| Some(value) == template.selected_solve_command())
+            || existing_schema_agent
+                .as_deref()
+                .is_some_and(|value| Some(value) == template.selected_solve_command())
+        {
             score += 1;
         }
-        if existing_review.is_some_and(|value| value == template.agent_review_command) {
+
+        if existing_review
+            .is_some_and(|value| Some(value) == template.selected_review_command())
+            || existing_schema_review
+                .as_deref()
+                .is_some_and(|value| Some(value) == template.selected_review_command())
+        {
             score += 1;
         }
 
@@ -899,8 +1032,9 @@ fn merge_known_template_keys(
     prompt: &mut dyn FnMut(&MergePrompt) -> Result<MergeDecision, String>,
 ) -> Result<Vec<MergePrompt>, String> {
     const KNOWN_TEMPLATE_KEYS: &[&[&str]] = &[
-        &["agent_command"],
-        &["agent_review_command"],
+        &["default_profile"],
+        &["profiles"],
+        &["invocations"],
         &["commands", "next_task"],
         &["commands", "task_show"],
         &["commands", "task_status"],
@@ -1788,16 +1922,64 @@ hooks:
 
         let claude = find_agent_template(&templates.agents, "claude").expect("claude");
         let mut existing_agent = Mapping::new();
+        let mut profiles = Mapping::new();
+        let mut profile = Mapping::new();
+        profile.insert(
+            Value::String("trudge".to_string()),
+            Value::String("claude".to_string()),
+        );
+        profile.insert(
+            Value::String("trudge_review".to_string()),
+            Value::String("claude-review".to_string()),
+        );
+        profiles.insert(Value::String("claude".to_string()), Value::Mapping(profile));
+
+        let mut invocations = Mapping::new();
+        let mut solve_invocation = Mapping::new();
+        solve_invocation.insert(
+            Value::String("command".to_string()),
+            Value::String(claude.selected_solve_command().unwrap_or("claude").to_string()),
+        );
+        invocations.insert(
+            Value::String("claude".to_string()),
+            Value::Mapping(solve_invocation),
+        );
+
+        let mut review_invocation = Mapping::new();
+        review_invocation.insert(
+            Value::String("command".to_string()),
+            Value::String(claude.selected_review_command().unwrap_or("review").to_string()),
+        );
+        invocations.insert(
+            Value::String("claude-review".to_string()),
+            Value::Mapping(review_invocation),
+        );
+
         existing_agent.insert(
+            Value::String("default_profile".to_string()),
+            Value::String("claude".to_string()),
+        );
+        existing_agent.insert(Value::String("profiles".to_string()), Value::Mapping(profiles));
+        existing_agent.insert(
+            Value::String("invocations".to_string()),
+            Value::Mapping(invocations),
+        );
+        assert_eq!(
+            best_matching_agent_template_id(&templates.agents, &existing_agent),
+            "claude"
+        );
+
+        let mut legacy_existing = Mapping::new();
+        legacy_existing.insert(
             Value::String("agent_command".to_string()),
             Value::String(claude.agent_command.clone()),
         );
-        existing_agent.insert(
+        legacy_existing.insert(
             Value::String("agent_review_command".to_string()),
             Value::String(claude.agent_review_command.clone()),
         );
         assert_eq!(
-            best_matching_agent_template_id(&templates.agents, &existing_agent),
+            best_matching_agent_template_id(&templates.agents, &legacy_existing),
             "claude"
         );
 
@@ -1918,17 +2100,121 @@ hooks:
             .and_then(Value::as_mapping)
             .expect("commands");
         assert_eq!(
-            mapping
-                .get(Value::String("agent_command".to_string()))
-                .and_then(Value::as_str),
-            Some(agent.agent_command.as_str())
-        );
-        assert_eq!(
             commands
                 .get(Value::String("next_task".to_string()))
                 .and_then(Value::as_str),
             Some(tracking.commands.next_task.as_str())
         );
+        assert_eq!(
+            mapping
+                .get(Value::String("default_profile".to_string()))
+                .and_then(Value::as_str),
+            Some("claude")
+        );
+
+        let profiles = mapping
+            .get(Value::String("profiles".to_string()))
+            .and_then(Value::as_mapping)
+            .expect("profiles");
+        let claude_profile_key = Value::String("claude".to_string());
+        let zai_profile_key = Value::String("z.ai".to_string());
+        assert!(profiles.contains_key(&claude_profile_key));
+        assert!(profiles.contains_key(&zai_profile_key));
+    }
+
+    #[test]
+    fn generates_schema_for_selected_codex_agent() {
+        generates_profile_invocation_schema_for_agent("codex");
+    }
+
+    #[test]
+    fn generates_schema_for_selected_claude_agent() {
+        generates_profile_invocation_schema_for_agent("claude");
+    }
+
+    #[test]
+    fn generates_schema_for_selected_pi_agent() {
+        generates_profile_invocation_schema_for_agent("pi");
+    }
+
+    fn generates_profile_invocation_schema_for_agent(agent_id: &str) {
+        let temp = TempDir::new().expect("temp dir");
+        let config_path = temp.path().join("trudger.yml");
+
+        let templates = load_embedded_wizard_templates().expect("templates");
+        let agent = find_agent_template(&templates.agents, agent_id).expect("agent");
+
+        let mut wizard_io = io::TestWizardIo::new(vec![
+            format!("{}\n", agent_id),
+            "br-next-task\n".to_string(),
+        ]);
+        run_wizard_with_io(
+            &config_path,
+            &templates,
+            WizardMergeMode::Overwrite,
+            &mut wizard_io,
+        )
+        .expect("wizard");
+
+        let new_contents = fs::read_to_string(&config_path).expect("read config");
+        let parsed: Value = serde_yaml::from_str(&new_contents).expect("load yaml");
+        let mapping = parsed.as_mapping().expect("generated config mapping");
+
+        let default_profile = mapping
+            .get(Value::String("default_profile".to_string()))
+            .and_then(Value::as_str)
+            .expect("default_profile");
+        assert_eq!(default_profile, agent_id);
+        assert!(!mapping
+            .contains_key(Value::String("agent_command".to_string())));
+        assert!(!mapping
+            .contains_key(Value::String("agent_review_command".to_string())));
+
+        let profiles = mapping
+            .get(Value::String("profiles".to_string()))
+            .and_then(Value::as_mapping)
+            .expect("profiles");
+        let selected_profile_key = Value::String(agent_id.to_string());
+        let zai_profile_key = Value::String("z.ai".to_string());
+        assert!(profiles.contains_key(&selected_profile_key));
+        assert!(profiles.contains_key(&zai_profile_key));
+
+        let selected_profile = profiles
+            .get(Value::String(agent_id.to_string()))
+            .and_then(Value::as_mapping)
+            .expect("selected profile");
+        let solve_invocation = selected_profile
+            .get(Value::String("trudge".to_string()))
+            .and_then(Value::as_str)
+            .expect("solve invocation id");
+        let review_invocation = selected_profile
+            .get(Value::String("trudge_review".to_string()))
+            .and_then(Value::as_str)
+            .expect("review invocation id");
+
+        let invocations = mapping
+            .get(Value::String("invocations".to_string()))
+            .and_then(Value::as_mapping)
+            .expect("invocations");
+        assert!(invocations.get(Value::String(solve_invocation.to_string())).is_some());
+        assert!(invocations
+            .get(Value::String(review_invocation.to_string()))
+            .is_some());
+
+        let zai_command = invocations
+            .get(Value::String("z.ai".to_string()))
+            .and_then(Value::as_mapping)
+            .and_then(|value| value.get(Value::String("command".to_string())))
+            .and_then(Value::as_str)
+            .expect("z.ai command");
+        assert_eq!(zai_command, PREDEFINED_ZAI_COMMAND);
+
+        let agent_template_profile = agent.selected_profile_id();
+        let profile_id = profiles
+            .get(Value::String(agent_template_profile.to_string()))
+            .and_then(Value::as_mapping)
+            .is_some();
+        assert!(profile_id);
     }
 
     #[test]
@@ -1997,6 +2283,9 @@ hooks:
         let mut wizard_io = io::TestWizardIo::new(vec![
             "codex\n".to_string(),
             "br-next-task\n".to_string(),
+            "r\n".to_string(),
+            "r\n".to_string(),
+            "r\n".to_string(),
             "k\n".to_string(),
         ]);
         let _ = run_wizard_with_io(
@@ -2034,30 +2323,47 @@ hooks:
         let config_path = temp.path().join("trudger.yml");
         fs::write(&config_path, "old").expect("write existing config");
 
+        let mut bad_agent: AgentTemplate = serde_yaml::from_str(
+            r#"
+id: bad
+label: Bad
+description: bad
+default_profile: bad
+profiles:
+  bad:
+    trudge: bad
+    trudge_review: bad-review
+invocations:
+  bad:
+    command: bad
+  bad-review:
+    command: bad-review
+"#,
+        )
+        .expect("bad agent template");
+        bad_agent.agent_command = "agent".to_string();
+        bad_agent.agent_review_command = "review".to_string();
+
+        let bad_tracking = TrackingTemplate {
+            id: "trk".to_string(),
+            label: "trk".to_string(),
+            description: "trk".to_string(),
+            commands: TrackingCommands {
+                next_task: "next".to_string(),
+                task_show: "show".to_string(),
+                task_status: "status".to_string(),
+                task_update_status: "".to_string(),
+            },
+            hooks: TrackingHooks {
+                on_completed: "done".to_string(),
+                on_requires_human: "human".to_string(),
+                on_doctor_setup: None,
+            },
+        };
+
         let templates = WizardTemplates {
-            agents: vec![AgentTemplate {
-                id: "bad".to_string(),
-                label: "Bad".to_string(),
-                description: "bad".to_string(),
-                agent_command: "".to_string(),
-                agent_review_command: "review".to_string(),
-            }],
-            tracking: vec![TrackingTemplate {
-                id: "trk".to_string(),
-                label: "trk".to_string(),
-                description: "trk".to_string(),
-                commands: TrackingCommands {
-                    next_task: "next".to_string(),
-                    task_show: "show".to_string(),
-                    task_status: "status".to_string(),
-                    task_update_status: "update".to_string(),
-                },
-                hooks: TrackingHooks {
-                    on_completed: "done".to_string(),
-                    on_requires_human: "human".to_string(),
-                    on_doctor_setup: None,
-                },
-            }],
+            agents: vec![bad_agent],
+            tracking: vec![bad_tracking],
             defaults: DefaultsTemplate {
                 review_loop_limit: 1,
                 log_path: "./log".to_string(),
@@ -2072,7 +2378,7 @@ hooks:
             &mut wizard_io,
         )
         .expect_err("expected error");
-        assert!(err.contains("agent_command"));
+        assert!(err.contains("task_update_status"));
 
         let contents = fs::read_to_string(&config_path).expect("read config");
         assert_eq!(contents, "old");
@@ -2338,8 +2644,8 @@ hooks:
         let existing = Mapping::new();
         let mut candidate_mapping = Mapping::new();
         candidate_mapping.insert(
-            Value::String("agent_command".to_string()),
-            Value::String("agent".to_string()),
+            Value::String("default_profile".to_string()),
+            Value::String("codex".to_string()),
         );
         let mut candidate = Value::Mapping(candidate_mapping);
 
@@ -2353,7 +2659,7 @@ hooks:
             merge_known_template_keys(&existing, &mut candidate, &mut decider).expect("merge");
         assert!(decided);
         assert_eq!(prompts.len(), 1);
-        assert!(get_value_at_path(&candidate, &["agent_command"]).is_none());
+        assert!(get_value_at_path(&candidate, &["default_profile"]).is_none());
     }
 
     #[test]
@@ -3090,9 +3396,14 @@ hooks:
     #[test]
     fn merge_known_template_keys_errors_when_candidate_cannot_be_set() {
         let mut existing = Mapping::new();
+        let mut commands = Mapping::new();
+        commands.insert(
+            Value::String("next_task".to_string()),
+            Value::String("x".to_string()),
+        );
         existing.insert(
-            Value::String("agent_command".to_string()),
-            Value::String("agent".to_string()),
+            Value::String("commands".to_string()),
+            Value::Mapping(commands),
         );
         let mut candidate = Value::String("nope".to_string());
 
