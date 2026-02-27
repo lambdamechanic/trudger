@@ -11,7 +11,7 @@ It is slower and more serial, but if you have a large number of smaller projects
 
 - Uses `commands.next_task` to select the next task.
 - Marks the task `in_progress` via `commands.task_update_status`.
-- Runs an agent solve + review loop for that task (via `agent_command` and `agent_review_command`).
+- Runs an agent solve + review loop for that task (via profile-selected `profiles` and `invocations`).
 - On success, invokes `hooks.on_completed`.
 - If the task needs a human, invokes `hooks.on_requires_human`.
 
@@ -25,7 +25,7 @@ It is slower and more serial, but if you have a large number of smaller projects
 - Prompt files for task-processing mode only (built-in Codex template).
   - `trudger wizard` will offer to install missing prompts to `~/.codex/prompts/` (default Yes). If prompts exist but differ from the built-in defaults, it offers per-file overwrite (default No) and creates a timestamped `.bak-...` backup before overwriting. If prompt installation/update fails after you accept it, the wizard aborts without writing config.
   - For repo checkouts, `./install.sh` remains an alternative: it installs `prompts/trudge.md` and `prompts/trudge_review.md` to `~/.codex/prompts/`.
-  - If you use a different agent runner, you can ignore `~/.codex/prompts/` entirely as long as your agent command reads `TRUDGER_PROMPT`/`TRUDGER_REVIEW_PROMPT`.
+  - If you use a different agent runner, you can ignore `~/.codex/prompts/` entirely as long as your configured invocations read `TRUDGER_AGENT_PROMPT` and can branch on `TRUDGER_AGENT_PHASE` (`trudge` or `trudge_review`).
 
 ## Usage
 
@@ -68,7 +68,7 @@ Legacy migration guidance:
   - `profiles`
   - `invocations`
   - plus `commands`, `hooks`, and `review_loop_limit` as needed.
-- Replace legacy `agent_command` and `agent_review_command` top-level keys with invocation references that include `z.ai: pi_trudge --prompt-env TRUDGER_AGENT_PROMPT`.
+- Replace legacy top-level `agent_command` and `agent_review_command` keys with the `profiles`/`invocations` schema, including `z.ai: pi_trudge --prompt-env TRUDGER_AGENT_PROMPT` in the `invocations` map.
 
 Doctor mode (runs `hooks.on_doctor_setup` and validates configured commands against a temporary scratch DB):
 
@@ -100,8 +100,21 @@ Recommended bootstrap flow:
 Example:
 
 ```yaml
-agent_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_PROMPT"'
-agent_review_command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_REVIEW_PROMPT" "$@"'
+default_profile: codex
+profiles:
+  codex:
+    trudge: codex
+    trudge_review: codex-review
+  z.ai:
+    trudge: z.ai
+    trudge_review: z.ai
+invocations:
+  codex:
+    command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_AGENT_PROMPT"'
+  codex-review:
+    command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_AGENT_PROMPT"'
+  z.ai:
+    command: 'pi_trudge --prompt-env TRUDGER_AGENT_PROMPT'
 commands:
   next_task: 'task_id=$(br ready --json --label trudgeable --sort priority --limit 1 | jq -r "if type == \"array\" and length > 0 then .[0].id // \"\" else \"\" end"); if [[ -z "$task_id" ]]; then exit 1; fi; printf "%s" "$task_id"'
   task_show: 'br show "$TRUDGER_TASK_ID"'
@@ -118,9 +131,8 @@ hooks:
 
 Notes:
 - All configured commands are executed via `bash -lc`.
-- `agent_command` is used for solve; `agent_review_command` is used for review.
-  - Trudger appends `resume --last` to the review invocation; if your `agent_review_command` needs to receive extra args, include `"$@"` in the configured command string.
-- Required keys (non-empty, non-null): `agent_command`, `agent_review_command`, `review_loop_limit`, `commands.task_show`, `commands.task_status`, `commands.task_update_status`, `hooks.on_completed`, `hooks.on_requires_human`.
+- `default_profile`, `profiles`, and `invocations` define solve/review command resolution.
+- Required keys (non-empty, non-null): `default_profile`, `profiles`, `invocations`, `review_loop_limit`, `commands.task_show`, `commands.task_status`, `commands.task_update_status`, `hooks.on_completed`, `hooks.on_requires_human`.
 - `log_path` is optional; omit it or set it to an empty string to disable logging.
 - `commands.next_task` is required when no manual task ids are provided.
 - `hooks.on_doctor_setup` is required only for `trudger doctor`.
@@ -138,7 +150,8 @@ Notes:
   - In `all_logs` mode, `TRUDGER_NOTIFY_MESSAGE` includes a redacted transition message.
 - Commands and hooks receive task context via environment variables instead of positional arguments.
 - Status transitions use environment context instead of positional args: `commands.task_update_status` receives the desired status in `TRUDGER_TARGET_STATUS` (for example `in_progress`, `blocked`, `open`, `closed`).
-- Environment variables available to commands/hooks include `TRUDGER_TASK_ID` (set when a task is selected), `TRUDGER_TASK_SHOW` (set after `commands.task_show`), `TRUDGER_TASK_STATUS` (set after `commands.task_status`), `TRUDGER_TARGET_STATUS` (set only for `commands.task_update_status`), `TRUDGER_CONFIG_PATH` (always set), `TRUDGER_PROMPT` (solve prompt only; unset during review), and `TRUDGER_REVIEW_PROMPT` (review prompt only; unset during solve).
+- Environment variables available to commands/hooks include `TRUDGER_TASK_ID` (set when a task is selected), `TRUDGER_TASK_SHOW` (set after `commands.task_show`), `TRUDGER_TASK_STATUS` (set after `commands.task_status`), `TRUDGER_TARGET_STATUS` (set only for `commands.task_update_status`), and `TRUDGER_CONFIG_PATH` (always set).
+- Environment variables for invocation runtime include `TRUDGER_AGENT_PROMPT`, `TRUDGER_AGENT_PHASE` (`trudge` or `trudge_review`), `TRUDGER_PROFILE` (active profile id), and `TRUDGER_INVOCATION_ID` (resolved invocation id).
 - Oversized `TRUDGER_*` env values are truncated (at a UTF-8 boundary) to avoid `spawn` failures (E2BIG); Trudger prints a warning and logs an `env_truncate` transition when logging is enabled.
 
 Notification example:
@@ -199,8 +212,8 @@ Legacy: the historical Bash implementation and its old BATS test suite live unde
 ## Prompts
 
 The prompt sources live in `prompts/` and are installed by `./install.sh`. The wizard uses embedded prompt defaults so it can install/update prompts even when running from an installed binary.
-- Trudger does not perform prompt substitutions; prompt content is delivered via `TRUDGER_PROMPT` and `TRUDGER_REVIEW_PROMPT`.
-- Prompt install location and prompt format are agent-runner concerns. Trudger only requires that your configured `agent_command`/`agent_review_command` can consume prompt text via the env vars above.
+- Trudger does not perform prompt substitutions; prompt content is delivered via `TRUDGER_AGENT_PROMPT`.
+- Prompt install location and prompt format are agent-runner concerns. Trudger only requires that your configured invocations can consume prompt text via `TRUDGER_AGENT_PROMPT`.
 
 ## Development
 

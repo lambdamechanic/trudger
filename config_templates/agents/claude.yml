@@ -13,6 +13,6 @@ invocations:
   claude:
     command: 'claude --model sonnet --prompt "$TRUDGER_AGENT_PROMPT"'
   claude-review:
-    command: 'claude --model sonnet --prompt "$TRUDGER_AGENT_REVIEW_PROMPT" "$@"'
+    command: 'claude --model sonnet --prompt "$TRUDGER_AGENT_PROMPT"'
   z.ai:
     command: 'pi_trudge --prompt-env TRUDGER_AGENT_PROMPT'

@@ -13,6 +13,6 @@ invocations:
   pi:
     command: 'pi --prompt "$TRUDGER_AGENT_PROMPT"'
   pi-review:
-    command: 'pi --prompt "$TRUDGER_AGENT_REVIEW_PROMPT" "$@"'
+    command: 'pi --prompt "$TRUDGER_AGENT_PROMPT"'
   z.ai:
     command: 'pi_trudge --prompt-env TRUDGER_AGENT_PROMPT'
