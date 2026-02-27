@@ -11,8 +11,8 @@ profiles:
     trudge_review: z.ai
 invocations:
   codex:
-    command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_AGENT_PROMPT"'
+    command: 'codex --yolo exec --model gpt-5.3-codex-spark --reasoning medium --prompt "$TRUDGER_AGENT_PROMPT"'
   codex-review:
-    command: 'codex --yolo exec --model gpt-5.2-codex --reasoning medium --prompt "$TRUDGER_AGENT_PROMPT"'
+    command: 'codex --yolo exec --model gpt-5.3-codex-spark --reasoning medium --prompt "$TRUDGER_AGENT_PROMPT"'
   z.ai:
     command: 'pi_trudge --prompt-env TRUDGER_AGENT_PROMPT'
