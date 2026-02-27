@@ -212,7 +212,10 @@ fn build_candidate_value(
         Value::String("default_profile".to_string()),
         Value::String(selected_profile_id),
     );
-    candidate.insert(Value::String("profiles".to_string()), Value::Mapping(profiles));
+    candidate.insert(
+        Value::String("profiles".to_string()),
+        Value::Mapping(profiles),
+    );
     candidate.insert(
         Value::String("invocations".to_string()),
         Value::Mapping(invocations),
@@ -900,8 +903,8 @@ fn get_string_value_at_path<'a>(mapping: &'a Mapping, path: &[&str]) -> Option<&
 }
 
 fn best_matching_agent_template_command(existing: &Mapping, profile_key: &str) -> Option<String> {
-    let existing_profile = get_string_value_at_path(existing, &["default_profile"])
-        .or_else(|| {
+    let existing_profile =
+        get_string_value_at_path(existing, &["default_profile"]).or_else(|| {
             let profiles = existing.get("profiles")?.as_mapping()?;
             profiles.keys().next().and_then(Value::as_str)
         })?;
@@ -936,8 +939,7 @@ fn best_matching_agent_template_id(templates: &[AgentTemplate], existing: &Mappi
 
     for template in templates {
         let mut score = 0;
-        if existing_agent
-            .is_some_and(|value| Some(value) == template.selected_solve_command())
+        if existing_agent.is_some_and(|value| Some(value) == template.selected_solve_command())
             || existing_schema_agent
                 .as_deref()
                 .is_some_and(|value| Some(value) == template.selected_solve_command())
@@ -945,8 +947,7 @@ fn best_matching_agent_template_id(templates: &[AgentTemplate], existing: &Mappi
             score += 1;
         }
 
-        if existing_review
-            .is_some_and(|value| Some(value) == template.selected_review_command())
+        if existing_review.is_some_and(|value| Some(value) == template.selected_review_command())
             || existing_schema_review
                 .as_deref()
                 .is_some_and(|value| Some(value) == template.selected_review_command())
@@ -1938,7 +1939,12 @@ hooks:
         let mut solve_invocation = Mapping::new();
         solve_invocation.insert(
             Value::String("command".to_string()),
-            Value::String(claude.selected_solve_command().unwrap_or("claude").to_string()),
+            Value::String(
+                claude
+                    .selected_solve_command()
+                    .unwrap_or("claude")
+                    .to_string(),
+            ),
         );
         invocations.insert(
             Value::String("claude".to_string()),
@@ -1948,7 +1954,12 @@ hooks:
         let mut review_invocation = Mapping::new();
         review_invocation.insert(
             Value::String("command".to_string()),
-            Value::String(claude.selected_review_command().unwrap_or("review").to_string()),
+            Value::String(
+                claude
+                    .selected_review_command()
+                    .unwrap_or("review")
+                    .to_string(),
+            ),
         );
         invocations.insert(
             Value::String("claude-review".to_string()),
@@ -1959,7 +1970,10 @@ hooks:
             Value::String("default_profile".to_string()),
             Value::String("claude".to_string()),
         );
-        existing_agent.insert(Value::String("profiles".to_string()), Value::Mapping(profiles));
+        existing_agent.insert(
+            Value::String("profiles".to_string()),
+            Value::Mapping(profiles),
+        );
         existing_agent.insert(
             Value::String("invocations".to_string()),
             Value::Mapping(invocations),
@@ -2165,10 +2179,8 @@ hooks:
             .and_then(Value::as_str)
             .expect("default_profile");
         assert_eq!(default_profile, agent_id);
-        assert!(!mapping
-            .contains_key(Value::String("agent_command".to_string())));
-        assert!(!mapping
-            .contains_key(Value::String("agent_review_command".to_string())));
+        assert!(!mapping.contains_key(Value::String("agent_command".to_string())));
+        assert!(!mapping.contains_key(Value::String("agent_review_command".to_string())));
 
         let profiles = mapping
             .get(Value::String("profiles".to_string()))
@@ -2196,7 +2208,9 @@ hooks:
             .get(Value::String("invocations".to_string()))
             .and_then(Value::as_mapping)
             .expect("invocations");
-        assert!(invocations.get(Value::String(solve_invocation.to_string())).is_some());
+        assert!(invocations
+            .get(Value::String(solve_invocation.to_string()))
+            .is_some());
         assert!(invocations
             .get(Value::String(review_invocation.to_string()))
             .is_some());

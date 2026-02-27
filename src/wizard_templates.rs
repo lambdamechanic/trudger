@@ -1,8 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
 pub(crate) struct AgentTemplate {
     pub(crate) id: String,
     pub(crate) label: String,
@@ -19,16 +18,14 @@ pub(crate) struct AgentTemplate {
     pub(crate) invocations: HashMap<String, AgentTemplateInvocation>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
-struct AgentTemplateProfile {
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
+pub(crate) struct AgentTemplateProfile {
     trudge: String,
     trudge_review: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
-struct AgentTemplateInvocation {
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
+pub(crate) struct AgentTemplateInvocation {
     command: String,
 }
 
@@ -41,7 +38,8 @@ impl AgentTemplate {
         }
 
         if template.profiles.is_empty() && template.invocations.is_empty() {
-            if template.agent_command.trim().is_empty() && template.agent_review_command.trim().is_empty()
+            if template.agent_command.trim().is_empty()
+                && template.agent_review_command.trim().is_empty()
             {
                 return Err(format!(
                     "Embedded agent template '{}' is missing both legacy command fields and profiles/invocations.",
@@ -51,22 +49,25 @@ impl AgentTemplate {
 
             let solve_id = template.id.clone();
             let review_id = format!("{}-review", template.id);
-            template
-                .profiles
-                .insert(solve_id.clone(), AgentTemplateProfile {
+            template.profiles.insert(
+                solve_id.clone(),
+                AgentTemplateProfile {
                     trudge: solve_id.clone(),
                     trudge_review: review_id.clone(),
-                });
-            template
-                .invocations
-                .insert(solve_id.clone(), AgentTemplateInvocation {
+                },
+            );
+            template.invocations.insert(
+                solve_id.clone(),
+                AgentTemplateInvocation {
                     command: template.agent_command.clone(),
-                });
-            template
-                .invocations
-                .insert(review_id.clone(), AgentTemplateInvocation {
+                },
+            );
+            template.invocations.insert(
+                review_id.clone(),
+                AgentTemplateInvocation {
                     command: template.agent_review_command.clone(),
-                });
+                },
+            );
         } else if template.default_profile.is_empty() {
             template.default_profile = template.id.clone();
         }
@@ -141,12 +142,6 @@ impl AgentTemplate {
         Ok(template)
     }
 
-    pub(crate) fn legacy_legacy_command_fields(
-        &self,
-    ) -> (&str, &str) {
-        (&self.agent_command, &self.agent_review_command)
-    }
-
     pub(crate) fn selected_profile_id(&self) -> &str {
         if self.default_profile.is_empty() {
             &self.id
@@ -171,11 +166,11 @@ impl AgentTemplate {
         self.selected_solve_invocation_id()
             .and_then(|invocation| self.invocations.get(invocation))
             .map(|invocation| invocation.command.as_str())
-            .or_else(|| {
-                if !self.agent_command.is_empty() {
-                    Some(self.agent_command.as_str())
-                } else {
+            .or({
+                if self.agent_command.is_empty() {
                     None
+                } else {
+                    Some(self.agent_command.as_str())
                 }
             })
     }
@@ -184,11 +179,11 @@ impl AgentTemplate {
         self.selected_review_invocation_id()
             .and_then(|invocation| self.invocations.get(invocation))
             .map(|invocation| invocation.command.as_str())
-            .or_else(|| {
-                if !self.agent_review_command.is_empty() {
-                    Some(self.agent_review_command.as_str())
-                } else {
+            .or({
+                if self.agent_review_command.is_empty() {
                     None
+                } else {
+                    Some(self.agent_review_command.as_str())
                 }
             })
     }
@@ -270,7 +265,8 @@ fn load_wizard_templates_from_sources(
     let agents: Vec<AgentTemplate> = agents
         .iter()
         .map(|(path, contents)| {
-            parse_template::<AgentTemplate>(path, contents).and_then(|template| template.normalize())
+            parse_template::<AgentTemplate>(path, contents)
+                .and_then(|template| template.normalize())
         })
         .collect::<Result<Vec<_>, _>>()?;
 

@@ -57,7 +57,9 @@ pub(crate) fn set_agent_invocation_context(
     solve_invocation_id: String,
     review_invocation_id: String,
 ) {
-    let mut context = agent_invocation_context().lock().expect("invocation context mutex");
+    let mut context = agent_invocation_context()
+        .lock()
+        .expect("invocation context mutex");
     *context = AgentInvocationContext {
         profile: Some(profile),
         solve_invocation_id: Some(solve_invocation_id),
@@ -67,7 +69,9 @@ pub(crate) fn set_agent_invocation_context(
 
 #[cfg(test)]
 pub(crate) fn reset_agent_invocation_context() {
-    let mut context = agent_invocation_context().lock().expect("invocation context mutex");
+    let mut context = agent_invocation_context()
+        .lock()
+        .expect("invocation context mutex");
     *context = AgentInvocationContext::default();
 }
 
@@ -225,6 +229,7 @@ fn extract_task_description_from_task_show(task_show: &str) -> Option<String> {
     first_non_empty_trimmed_line(task_show)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_command_env(
     state: &RuntimeState,
     task_id: Option<&TaskId>,
@@ -297,16 +302,7 @@ fn run_config_command(
     log_label: &str,
     args: &[String],
 ) -> Result<CommandResult, String> {
-    let env = build_command_env(
-        state,
-        task_id,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    );
+    let env = build_command_env(state, task_id, None, None, None, None, None, None);
     run_shell_command_capture(
         command,
         log_label,
@@ -682,16 +678,7 @@ pub(crate) fn dispatch_notification_hook(
         return;
     }
 
-    let mut env = build_command_env(
-        state,
-        task_id,
-        None,
-        None,
-        None,
-        Some(event),
-        None,
-        None,
-    );
+    let mut env = build_command_env(state, task_id, None, None, None, Some(event), None, None);
     let notify_duration_ms = match event {
         NotificationEvent::RunStart | NotificationEvent::TaskStart => 0,
         NotificationEvent::RunEnd => state.run_started_at.elapsed().as_millis(),
