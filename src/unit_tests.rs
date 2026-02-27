@@ -4039,6 +4039,104 @@ log_path: ""
 }
 
 #[test]
+fn run_with_cli_uses_default_profile_when_profile_is_not_explicit() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    reset_test_env();
+
+    env::remove_var("TMUX");
+    let old_home = env::var_os("HOME");
+    let temp = TempDir::new().expect("temp dir");
+    env::set_var("HOME", temp.path());
+
+    let command_log = temp.path().join("command.log");
+    let task_status_state = temp.path().join("task-status-state");
+    env::set_var("COMMAND_LOG", &command_log);
+    env::set_var("TASK_STATUS_STATE", &task_status_state);
+
+    let config_path = temp.path().join("trudger.yml");
+    fs::write(
+        &config_path,
+        r#"
+default_profile: fast
+profiles:
+  fast:
+    trudge: fast-agent
+    trudge_review: fast-review
+  review:
+    trudge: review-agent
+    trudge_review: review-review
+invocations:
+  fast-agent:
+    command: "echo agent-default >> \"$COMMAND_LOG\""
+  fast-review:
+    command: "echo review-default >> \"$COMMAND_LOG\""
+  review-agent:
+    command: "echo agent-review >> \"$COMMAND_LOG\""
+  review-review:
+    command: "echo review-review >> \"$COMMAND_LOG\""
+commands:
+  task_show: "echo show >> \"$COMMAND_LOG\""
+  task_status: |
+    count="$(cat "${TASK_STATUS_STATE}" 2>/dev/null || echo 0)"
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$TASK_STATUS_STATE"
+    if [ "$count" -le 1 ]; then
+      printf 'ready\n'
+    else
+      printf 'closed\n'
+    fi
+  task_update_status: "echo update >> \"$COMMAND_LOG\""
+review_loop_limit: 2
+hooks:
+  on_completed: "true"
+  on_requires_human: "true"
+log_path: ""
+"#,
+    )
+    .expect("write config");
+
+    let prompts_dir = temp.path().join(".codex").join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    fs::write(prompts_dir.join("trudge.md"), "hello").expect("write trudge.md");
+    fs::write(prompts_dir.join("trudge_review.md"), "review").expect("write trudge_review.md");
+
+    let err = run_with_cli(Cli {
+        profile: None,
+        config: Some(config_path),
+        task: vec!["tr-1".to_string()],
+        positional: Vec::new(),
+        command: None,
+    })
+    .expect_err("expected manual task run termination");
+    assert_eq!(err.code, 0);
+
+    let log = fs::read_to_string(&command_log).expect("read command log");
+    assert!(
+        log.contains("agent-default"),
+        "expected default profile agent command to run"
+    );
+    assert!(
+        log.contains("review-default"),
+        "expected default profile review command to run"
+    );
+    assert!(
+        !log.contains("agent-review"),
+        "did not expect non-default profile agent command"
+    );
+    assert!(
+        !log.contains("review-review"),
+        "did not expect non-default profile review command"
+    );
+
+    env::remove_var("COMMAND_LOG");
+    env::remove_var("TASK_STATUS_STATE");
+    match old_home {
+        Some(value) => env::set_var("HOME", value),
+        None => env::remove_var("HOME"),
+    };
+}
+
+#[test]
 fn run_with_cli_rejects_wizard_positional_args() {
     let _guard = ENV_MUTEX.lock().unwrap();
     reset_test_env();
