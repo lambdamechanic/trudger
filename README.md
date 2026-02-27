@@ -60,6 +60,16 @@ Use a specific config file:
 trudger --config ./sample_configuration/trudgeable-with-hooks.yml
 ```
 
+Legacy migration guidance:
+
+- If you still have `~/.config/trudge.yml`, migrate it manually to the profile/invocation schema before running with the default path.
+- Create `~/.config/trudger.yml` with equivalent content using:
+  - `default_profile`
+  - `profiles`
+  - `invocations`
+  - plus `commands`, `hooks`, and `review_loop_limit` as needed.
+- Replace legacy `agent_command` and `agent_review_command` top-level keys with invocation references that include `z.ai: pi_trudge --prompt-env TRUDGER_AGENT_PROMPT`.
+
 Doctor mode (runs `hooks.on_doctor_setup` and validates configured commands against a temporary scratch DB):
 
 ```bash

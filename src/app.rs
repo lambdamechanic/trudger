@@ -49,7 +49,12 @@ fn bootstrap_config_error(default_path: &Path) -> String {
 To generate a config interactively, run:\n\
   trudger wizard\n\n\
 To generate a config at a non-default path, run:\n\
-  trudger wizard --config PATH",
+  trudger wizard --config PATH\n\n\
+If you still use a legacy ~/.config/trudge.yml file, migrate it manually to the \
+active profile/invocation schema and place it at\n\
+  ~/.config/trudger.yml\n\
+  before running without --config.\n\
+Trudger does not perform automatic migration.",
         default_path.display()
     )
 }
