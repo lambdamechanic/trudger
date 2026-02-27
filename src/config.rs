@@ -103,6 +103,7 @@ struct ParsedConfig {
     log_path: Option<PathBuf>,
 }
 
+#[allow(dead_code)]
 pub fn load_config(path: &Path) -> Result<LoadedConfig, String> {
     load_config_with_profile(path, None)
 }
