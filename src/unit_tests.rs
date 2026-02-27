@@ -1892,10 +1892,15 @@ fn checked_in_config_artifacts_reference_packaged_zai_command() {
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let artifact_paths = [
-        root.join("sample_configuration").join("trudgeable-with-hooks.yml"),
+        root.join("sample_configuration")
+            .join("trudgeable-with-hooks.yml"),
         root.join("sample_configuration").join("robot-triage.yml"),
-        root.join("config_templates").join("agents").join("claude.yml"),
-        root.join("config_templates").join("agents").join("codex.yml"),
+        root.join("config_templates")
+            .join("agents")
+            .join("claude.yml"),
+        root.join("config_templates")
+            .join("agents")
+            .join("codex.yml"),
         root.join("config_templates").join("agents").join("pi.yml"),
     ];
 
