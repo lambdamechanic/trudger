@@ -273,9 +273,8 @@ fn validate_generated_config(yaml: &str) -> Result<(), String> {
 }
 
 fn validate_generated_config_with_legacy_schema(yaml: &str) -> Result<(), String> {
-    let legacy: LegacyGeneratedConfig = serde_yaml::from_str(yaml).map_err(|err| {
-        format!("wizard generated config must be valid YAML: {}", err)
-    })?;
+    let legacy: LegacyGeneratedConfig = serde_yaml::from_str(yaml)
+        .map_err(|err| format!("wizard generated config must be valid YAML: {}", err))?;
     let config = Config {
         agent_command: legacy.agent_command,
         agent_review_command: legacy.agent_review_command,
@@ -283,7 +282,10 @@ fn validate_generated_config_with_legacy_schema(yaml: &str) -> Result<(), String
         hooks: legacy.hooks,
         review_loop_limit: ReviewLoopLimit::new(legacy.review_loop_limit)
             .map_err(|err| format!("review_loop_limit: {}", err))?,
-        log_path: legacy.log_path.filter(|value| !value.trim().is_empty()).map(PathBuf::from),
+        log_path: legacy
+            .log_path
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from),
     };
     validate_config(&config, &[])?;
     Ok(())
@@ -1398,9 +1400,7 @@ hooks:
 
         let contents = fs::read_to_string(&config_path).expect("read config");
         let parsed: Value = serde_yaml::from_str(&contents).expect("valid yaml config");
-        let config = parsed
-            .as_mapping()
-            .expect("config is mapping");
+        let config = parsed.as_mapping().expect("config is mapping");
         let review_loop_limit = config
             .get(Value::String("review_loop_limit".to_string()))
             .and_then(|value| value.as_u64())
@@ -1409,10 +1409,7 @@ hooks:
             .get(Value::String("log_path".to_string()))
             .and_then(|value| value.as_str())
             .expect("log_path exists");
-        assert_eq!(
-            review_loop_limit,
-            templates.defaults.review_loop_limit
-        );
+        assert_eq!(review_loop_limit, templates.defaults.review_loop_limit);
         assert_eq!(
             PathBuf::from(log_path),
             PathBuf::from(templates.defaults.log_path.clone())
@@ -1915,9 +1912,7 @@ hooks:
 
         let new_contents = fs::read_to_string(&config_path).expect("read config");
         let parsed: Value = serde_yaml::from_str(&new_contents).expect("load yaml");
-        let mapping = parsed
-            .as_mapping()
-            .expect("generated config mapping");
+        let mapping = parsed.as_mapping().expect("generated config mapping");
         let commands = mapping
             .get(Value::String("commands".to_string()))
             .and_then(Value::as_mapping)

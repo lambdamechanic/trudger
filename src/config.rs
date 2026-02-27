@@ -165,19 +165,16 @@ fn resolve_profile_commands(
     profile_override: Option<&str>,
 ) -> Result<(String, String), String> {
     let profile_name = profile_override.unwrap_or(config.default_profile.as_str());
-    let profile = config
-        .profiles
-        .get(profile_name)
-        .ok_or_else(|| {
-            if profile_override.is_some() {
-                format!("Unknown profile: {}", profile_name)
-            } else {
-                format!(
-                    "default_profile references missing profile: {}",
-                    config.default_profile
-                )
-            }
-        })?;
+    let profile = config.profiles.get(profile_name).ok_or_else(|| {
+        if profile_override.is_some() {
+            format!("Unknown profile: {}", profile_name)
+        } else {
+            format!(
+                "default_profile references missing profile: {}",
+                config.default_profile
+            )
+        }
+    })?;
 
     let agent_command = config
         .invocations
@@ -829,8 +826,7 @@ hooks:
   on_requires_human: "human"
 "#;
         let file = write_temp_config(config);
-        let err = load_config_with_profile(file.path(), Some("missing"))
-            .expect_err("load profile");
+        let err = load_config_with_profile(file.path(), Some("missing")).expect_err("load profile");
         assert!(err.contains("Unknown profile: missing"));
     }
 

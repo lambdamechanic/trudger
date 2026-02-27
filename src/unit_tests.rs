@@ -3905,8 +3905,14 @@ log_path: ""
     assert_eq!(err.code, 0);
 
     let log = fs::read_to_string(&command_log).expect("read command log");
-    assert!(log.contains("agent-review"), "expected review agent command to run");
-    assert!(log.contains("review-review"), "expected review review command to run");
+    assert!(
+        log.contains("agent-review"),
+        "expected review agent command to run"
+    );
+    assert!(
+        log.contains("review-review"),
+        "expected review review command to run"
+    );
     assert!(
         !log.contains("agent-default"),
         "did not expect default profile agent command"

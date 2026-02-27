@@ -181,10 +181,11 @@ where
         });
     }
 
-    let loaded = load_config_with_profile(&config_path, cli.profile.as_deref()).map_err(|message| Quit {
-        code: 1,
-        reason: message,
-    })?;
+    let loaded =
+        load_config_with_profile(&config_path, cli.profile.as_deref()).map_err(|message| Quit {
+            code: 1,
+            reason: message,
+        })?;
 
     // Capture the absolute invocation working directory once for stable notification payloads.
     let invocation_folder = env::current_dir()
